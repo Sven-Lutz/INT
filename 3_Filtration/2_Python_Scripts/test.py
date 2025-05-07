@@ -8,4 +8,4 @@ print(instrument.id)
 from Elveflow64 import *
 
 Instr_ID = c_int32()
-_initialize_device()
+
