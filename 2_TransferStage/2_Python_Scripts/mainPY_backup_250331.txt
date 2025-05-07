@@ -1,0 +1,143 @@
+###################
+###The Libraries###
+###################
+
+import Configurator
+import Experiment
+import Test
+import os
+import time
+import threading
+
+from state import pause_event, stop_event, confirmation_event  # Import the shared pause_event from state.py
+
+##########################
+###The global variables###
+##########################
+
+project = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+current_thread = None
+current_function = None
+changed_function = None
+###################
+###The functions###
+###################
+
+def run_function(func):
+    global current_thread, current_function
+    pause_event.set()  # Set the event (allow the function to run)
+    stop_event.clear()  # Clear the stop event to allow the function to run
+    current_function = func  # Set the current function being run
+
+    # Start a new thread for the function
+    current_thread = threading.Thread(target=func)
+    current_thread.start()
+    return
+
+def pause_function():
+    if pause_event.is_set():
+        print("Pausing function...")
+        pause_event.clear()  # Pause the function by clearing the event
+    else:
+        print("Resuming function...")
+        pause_event.set()  # Resume the function by setting the event
+
+    return
+
+def stop_current_function():
+    global current_thread, current_function
+    if current_thread and current_thread.is_alive():
+
+        print(f"Stopping {current_function.__name__}...")
+        stop_event.set()  # Signal the current function to stop
+
+        # Wait for the current thread to finish only after stopping the function
+        current_thread.join(2)  # Use timeout to prevent indefinite blocking
+
+        # After the thread has joined, check if it's still alive
+        if current_thread.is_alive():
+            print(f"{current_function.__name__} did not stop in time, forcefilly stopping.")
+            # Optionally, you can add a forceful termination mechanism here if necessary
+        else:
+            print(f"{current_function.__name__} stopped.")
+
+        # Reset events for the next run
+        stop_event.clear()  # Clear the stop event for future runs
+        current_function = None
+        current_thread = None
+    return
+
+def wait_for_confirmation():
+    confirmation_event.clear()
+    while not confirmation_event.is_set():
+        time.sleep(0.1)
+    return
+
+def key_callback(key, hardware):
+    """
+    def: This function gets a key and called the corresponding function
+    :param hardware: Dict, which holds the classes of the valve, pressure and set_flow controller and the writing mananger
+    :param key: String, which holds the information of the dictionary key of which the value is changed
+    :return: ---
+    """
+    global changed_function
+    print("Key pressed. Use the wheel to set the set_flow, confirm by pressing.")
+
+    keys = {"1": Experiment.Experimentator(hardware).fill,
+            "2": Experiment.Experimentator(hardware).attachment,
+            "3": Experiment.Experimentator(hardware).empty,
+            "4": Experiment.Experimentator(hardware).add,
+            "5": Experiment.Experimentator(hardware).remove}
+
+    if key in keys:                     # Volume change functionality
+        changed_function = keys[key]
+        hardware["Writing Manager"].update_yaml("temp", "Operation", changed_function.__name__)
+        "Hier muss nun in der klasse keyboard die variable current_flow gesetzt werden"
+        wait_for_confirmation()         # Wait for clicking the wheel
+        print("Flow confirmed, starting process...")
+        stop_current_function()         # Stop current function
+        run_function(keys[key])         # Run new function
+    elif key == '6':                    # Pause/Resume functionality
+        pause_function()
+
+    return
+
+def mouse_callback(current_flow, writer):
+    # This function will be called when the mouse wheel is clicked
+    global changed_function
+    confirmation_event.set()
+    print(f"Final Flow: {current_flow}")
+    writer.update_yaml("temp", changed_function.__name__, current_flow)
+    temp,_ = writer.read_yaml("temp")
+    print(temp)
+    return
+
+def main():
+    """
+    def: This function is the main function and is called if the script is started as the main script and not called by another script.
+         It allows for debugging this script without changing other scripts.
+    :return: ---
+    """
+    writer = Configurator.WritingManager(project)
+    config, _ = writer.read_yaml("both")
+    valve = Configurator.Valve()
+    OB1 = Configurator.PressureController(config)
+    BFS = Configurator.FlowController(config)
+
+    hardware = {"OB1": OB1, "BFS": BFS, "Valves": valve, "Writing Manager": writer}
+    #Experiment.Experimentator(temp)
+    keyboard = Configurator.Keyboard(writer, callback=lambda key: key_callback(key, hardware), mouse_callback=lambda current_flow: mouse_callback(current_flow, writer))
+    keyboard.start()
+
+    print("Waiting for Input...")
+    # Main loop
+    try:
+        while True:
+            pass
+    except KeyboardInterrupt:
+        keyboard.stop()  # Ensure the listener stops if interrupted
+    return
+
+if __name__ == "__main__":
+    main()

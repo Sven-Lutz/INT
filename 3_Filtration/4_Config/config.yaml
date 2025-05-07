@@ -1,0 +1,15 @@
+Attachment Volume: 60000
+D Term: 0.05
+Default Flow: 30000
+I Term: 6
+Maximum Volume: 55000
+P Term: 1.4
+PVA Waiting Time: 60
+Project Path: C:\Users\Operator\Filtration
+Small Volume: 10000
+add: 30000
+attachment: 30000
+empty: 30000
+fill: 30000
+remove: 30000
+Pressure Limit: 2000
