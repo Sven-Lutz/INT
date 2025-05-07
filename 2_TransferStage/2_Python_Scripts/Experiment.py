@@ -9,6 +9,7 @@ import random
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import rly02 as vac_pump
 
 from simple_pid import PID
 from state import pause_event, stop_event                               # Import the shared pause_event from state.py
@@ -148,6 +149,8 @@ class Experimentator:
         if operation not in ["push", "suck"]:                                               # Only pushing or sucking is allowed
             raise ValueError("Operation must be 'push' or 'suck'")                          # If this is triggered then there is a bug somewhere
 
+        vac_pump.turn_on()                                                                                              # Turns on the vacuum pump
+
         flow_setpoint = self.set_flow if operation == "push" else -self.set_flow                                        # Calculate the flow setpoint
         final_vol = self.init_vol + tot_changed_vol if operation == "push" else self.init_vol - tot_changed_vol         # Calculate the final volume
         self.temp.update({"Final Volume": final_vol})                                                                   # Update the final volume in the temp dict
@@ -235,7 +238,7 @@ class Experimentator:
         print(f"Final Volume in Vessel: {round(self.temp['Current Vessel Volume'], 3)} uL")
 
         self.valve.vent_pos()                                                                                       # Set valves to safe position
-
+        vac_pump.turn_off()
         #self.plot_changes(df)
         return
 

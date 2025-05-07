@@ -53,6 +53,18 @@ def click_relay_2():
     send_command(commands['relay_2_off'])
 
 
+def turn_on():
+    turn_relay_1_on()
+    turn_relay_2_on()
+    return
+
+
+def turn_off():
+    turn_relay_1_off()
+    turn_relay_2_off()
+    return
+
+
 def get_relay_states():
     states = send_command(commands['relay_states'], read_response=True)
     response = unpack('b', states)[0]
