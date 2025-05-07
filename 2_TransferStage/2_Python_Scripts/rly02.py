@@ -4,7 +4,7 @@ import getopt
 import sys
 from struct import *
 
-SERIAL_PATH = "COM4"
+SERIAL_PATH = "COM11"
 BAUD_RATE = 9600
 
 commands = {
