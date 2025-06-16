@@ -29,9 +29,9 @@ class Experimentator:
         self.temp, _ = self.writer.read_yaml("temp")                            # Read temp.yaml, since some variable have to be initialized from the beginning
 
 
-        self.valve = Configurator.Valve(self)
-        self.OB1 = Configurator.PressureController(self.config)
-        self.BFS = Configurator.FlowController()
+        #self.valve = Configurator.Valve(self)
+        #self.OB1 = Configurator.PressureController(self.config)
+        #self.BFS = Configurator.FlowController()
 
 
         self.init_vol = None

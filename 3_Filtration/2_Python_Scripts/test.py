@@ -1,10 +1,7 @@
+import yaml
 
-import rly02 as smartPlug
-import time
-smartPlug.turn_relay_1_on()
-smartPlug.turn_relay_2_on()
-
-time.sleep(2)
-
-smartPlug.turn_relay_1_off()
-smartPlug.turn_relay_2_off()
+with open(r"U:\Masterarbeit\X_PelliKAn\2_TransferStage\4_Config\test.yaml", 'r') as df:  # Read the default file
+    data = yaml.safe_load(df)
+print(data)
+print(data["Containers"])
+print(data["Containers"]["1 Sample"])

@@ -7,6 +7,9 @@ import time
 import datetime
 import yaml
 import os
+
+from PIL.ImageOps import expand
+
 import Configurator
 import Experiment
 import Test_func
@@ -62,6 +65,9 @@ class ParameterFrame(tk.LabelFrame):
         self.state_variable_frame = state_variable_frame
         self.main_frame = root
 
+        self.dropdown_menu = None
+        self.dropdown_var = None
+
         self.entry_frame = None
         self.entries = None
         self.entry_states = {}
@@ -71,6 +77,7 @@ class ParameterFrame(tk.LabelFrame):
         self.buttons = None
         self.button_func = None
 
+        self.add_dropdown()
         self.add_entries()
         self.add_buttons()
         return
@@ -85,6 +92,57 @@ class ParameterFrame(tk.LabelFrame):
             self.experiment.temp.update(value)                      # Update existing dictionary with new values
         else:
             raise ValueError("temp must be a dictionary or dictionary-like object")
+
+    def add_dropdown(self):
+        """
+        def: This function adds teh dropdown for the different containers in the Parameter Frame
+        :return: ---
+        """
+        self.dropdown_frame = tk.Frame(self, bg="lightblue")
+        self.dropdown_frame.pack(fill=tk.X)  # X direction to keep above entries
+
+        tk.Label(self.dropdown_frame, text="Select Mode:", bg="lightblue").pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.dropdown_var = tk.StringVar()
+        self.dropdown_var.set(self.temp["Selected Container"])  # Initial dropdown value
+
+        options = self.config["Containers"].keys()  # Replace with actual modes if needed
+        dropdown_menu = tk.OptionMenu(self.dropdown_frame, self.dropdown_var, *options)
+        dropdown_menu.config(width=20)
+        dropdown_menu.pack(side=tk.LEFT, padx=5, pady=5)
+
+        # Optionally bind an action on change:
+        self.dropdown_var.trace_add("write", self.on_dropdown_change)
+
+    def on_dropdown_change(self, *args):
+        selected = self.dropdown_var.get()
+        self.writer.update_yaml("temp", "Selected Container", selected)
+        print(f"Dropdown selected: {selected}")
+
+        container_config = self.config["Containers"].get(selected, {})
+
+        for key, entry_data in self.entries.items():
+            config_key = entry_data["config_key"]
+            param_var = entry_data["var"]
+            entry_widget = entry_data["widget"]
+            state = entry_data["state"]
+
+            # Update only if the key exists in the container config
+            if config_key in container_config:
+                new_val = container_config[config_key]
+
+                # Allow modification if currently read-only
+                if entry_widget['state'] == 'readonly':
+                    entry_widget.configure(state='normal')
+
+                param_var.set(str(new_val))
+
+                # Restore readonly if necessary
+                if state == "readonly":
+                    entry_widget.configure(state='readonly')
+        # Handle the selection logic here if needed (e.g., update UI or config)
+        return
+
 
     def add_entries(self):
         """
@@ -575,10 +633,15 @@ class MainApplication(tk.Tk):
                 entry_widget.config(state=tk.NORMAL)                        # Enable the entry widget
         return
 
+    def _disable_dropdown(self):
+        self.parameter_frame.dropdown_menu.config(state=tk.DISABLED)
+        return
+
     def disable_widgets(self):
         """
         def: This function disables all widgets.
         """
+        self._disable_dropdown()
         self._disable_entries()
         self._disable_buttons()
         self._disable_keyboard_bindings()

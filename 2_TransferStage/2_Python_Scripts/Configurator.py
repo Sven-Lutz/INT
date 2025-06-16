@@ -5,12 +5,13 @@ import time
 ###################
 
 import yaml
+import os
 import Experiment
 
 from state import pause_event, stop_event                               # Import the shared pause_event from state.py
 
 from pyfirmata import Arduino
-from Elveflow64 import *
+#from Elveflow64 import *
 
 ##########################
 ###The global variables###
@@ -29,7 +30,7 @@ class Valve:
         print("Staring valve communication...")
         self.board = Arduino('COM3')                            # Connecting to the board, this is hardcoded
         self.experiment = experiment
-        self.valve ={"V1": [10,12],                             # Valve 1 is used for venting. It is set to pin 10 in the arduino and connected with the LED at pin 12. NO-Valve
+        self.valve = {"V1": [10,12],                             # Valve 1 is used for venting. It is set to pin 10 in the arduino and connected with the LED at pin 12. NO-Valve
                      "V2": [11,13],                             # Valve 2 is used for switching between the water and waste bottles. It is set to pin 11 in the arduino and connected with the LED at pin 13
                      "V3": [9,8],                               # Valve 3 is used for blocking the set_flow line. It is set to pin 9 in the arduino and connected with the LED at pin 8. NC-Valve
                      }
@@ -233,6 +234,29 @@ class FlowController:
             print(f"ERROR: Unable to read set_flow, error code: {error}")
             return None
         return flow.value
+
+class ContainerSelector:
+    def __init__(self,config):
+        print("Starting container selector communication...")
+        self.Instr_ID = c_int32()
+        self._initialize_device()
+        print("Pressure container selector  communication successfully started\n")
+        return
+
+    def _initialize_device(self):
+        """
+        def: This funciton initializes the OB1 device and store the instrument ID.
+        """
+        error = OB1_Initialization('ASRL10::INSTR'.encode('ascii'), byref(self.Instr_ID))    #see User Guide to determine regulator types and NIMAX to determine the instrument name
+        if error != 0:
+            raise ConnectionError(f"ERROR: Unable to connect to OB1 device, error code: {error}")
+        print(f"OB1 initialized with ID: {self.Instr_ID.value}")
+        return
+
+    def _select_container(self):
+        print("Test")
+        return
+
 
 class WritingManager:
     """
