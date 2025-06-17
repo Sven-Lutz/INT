@@ -11,7 +11,7 @@ import Experiment
 from state import pause_event, stop_event                               # Import the shared pause_event from state.py
 
 from pyfirmata import Arduino
-#from Elveflow64 import *
+from Elveflow64 import *
 
 ##########################
 ###The global variables###
@@ -247,13 +247,13 @@ class ContainerSelector:
         """
         def: This funciton initializes the OB1 device and store the instrument ID.
         """
-        error = OB1_Initialization('ASRL10::INSTR'.encode('ascii'), byref(self.Instr_ID))    #see User Guide to determine regulator types and NIMAX to determine the instrument name
+        error = MUX_DRI_Initialization('ASRL10::INSTR'.encode('ascii'), byref(self.Instr_ID))    #see User Guide to determine regulator types and NIMAX to determine the instrument name
         if error != 0:
-            raise ConnectionError(f"ERROR: Unable to connect to OB1 device, error code: {error}")
-        print(f"OB1 initialized with ID: {self.Instr_ID.value}")
+            raise ConnectionError(f"ERROR: Unable to connect to MUX device, error code: {error}")
+        print(f"MUX initialized with ID: {self.Instr_ID.value}")
         return
 
-    def _select_container(self):
+    def select_container(self):
         print("Test")
         return
 
