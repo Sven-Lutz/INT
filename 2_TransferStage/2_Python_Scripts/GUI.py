@@ -54,7 +54,7 @@ class ParameterFrame(tk.LabelFrame):
     """
     def: This function is able so set the parameter used in the experiment and to trigger the experiment, it is placed on the main frame.
     """
-    def __init__(self, root, state_variable_frame, config, writer, experiment, start_callback, automatic_callback):
+    def __init__(self, root, state_variable_frame, config, writer, experiment, container, start_callback, automatic_callback):
         super().__init__(root, text="Parameters", borderwidth=2, relief="groove", bg="lightgreen")          # Set frame color and title
         
         self.start_callback = start_callback
@@ -62,6 +62,8 @@ class ParameterFrame(tk.LabelFrame):
         self.config = config
         self.writer = writer
         self.experiment = experiment
+        self.container = container
+
         self.state_variable_frame = state_variable_frame
         self.main_frame = root
 
@@ -141,7 +143,8 @@ class ParameterFrame(tk.LabelFrame):
                 if state == "readonly":
                     entry_widget.configure(state='readonly')
         # Handle the selection logic here if needed (e.g., update UI or config)
-        
+        cont = self.config["Containers"][selected]["MUX Valve"]
+        self.container.select_container(cont)
         return
 
 
@@ -503,6 +506,7 @@ class MainApplication(tk.Tk):
 
         self.project = project
         self.writer = Configurator.WritingManager(project)
+        self.container = Configurator.ContainerSelector()
         self.experiment = Experiment.Experimentator(self.writer)                                # Important, when using this code and the self.temp.update,
                                                                                                 # it is important that there is no more than one instance of Experimentator()
                                                                                                 # as otherwise the cross-linking of MainApplication.temp and Experimentator.temp is not correct
@@ -546,7 +550,7 @@ class MainApplication(tk.Tk):
         return
 
     def add_parameter_frame(self):
-        self.parameter_frame = ParameterFrame(self.main_frame, self.state_variable_frame, self.config, self.writer, self.experiment, self.handle_key_event, self.start_automatic)    # Call parameter class with callback to start_measurement
+        self.parameter_frame = ParameterFrame(self.main_frame, self.state_variable_frame, self.config, self.writer, self.experiment, self.container, self.handle_key_event, self.start_automatic)    # Call parameter class with callback to start_measurement
         self.parameter_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5)
         return
 

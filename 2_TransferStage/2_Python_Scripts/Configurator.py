@@ -239,13 +239,11 @@ class FlowController:
         return flow.value
 
 class ContainerSelector:
-    def __init__(self, config):
+    def __init__(self):
         print("Starting container selector communication...")
         self.Instr_ID = c_int32()
         self._initialize_device()
 
-        self.config = config
-        
         print("Transfer container selector communication successfully started\n")
         return
 
@@ -261,15 +259,14 @@ class ContainerSelector:
 
     def get_container(self):
         valve = c_int32(-1)
-        error = MUX_DRI_Get_Valve(self.Instr_ID.value, byref(valve))  # get the active valve. it returns 0 if valve is busy.
+        MUX_DRI_Get_Valve(self.Instr_ID.value, byref(valve))  # get the active valve. it returns 0 if valve is busy.
         print('selected channel', valve.value)
         return valve.value
 
-    def select_container(self):
-        cont = self.config["Containers"][self.config["Selected Container"]]["MUX Valve"]
-        error=MUX_DRI_Set_Valve(self.Instr_ID.value,cont,0)
+    def select_container(self, mux_valve):
+        MUX_DRI_Set_Valve(self.Instr_ID.value,mux_valve,0)
+        print(f"MUX Valve set to {mux_valve}")
         return
-
 
 
 class WritingManager:
