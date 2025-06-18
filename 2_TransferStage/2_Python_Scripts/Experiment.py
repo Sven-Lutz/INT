@@ -29,9 +29,9 @@ class Experimentator:
         self.temp, _ = self.writer.read_yaml("temp")                            # Read temp.yaml, since some variable have to be initialized from the beginning
 
 
-        #self.valve = Configurator.Valve(self)
-        #self.OB1 = Configurator.PressureController(self.config)
-        #self.BFS = Configurator.FlowController()
+        self.valve = Configurator.Valve(self)
+        self.OB1 = Configurator.PressureController(self.config)
+        self.BFS = Configurator.FlowController()
 
 
         self.init_vol = None
@@ -156,7 +156,7 @@ class Experimentator:
         self.temp.update({"Final Volume": final_vol})                                                                   # Update the final volume in the temp dict
 
         if self.temp["Bottle Volume"]*1000-tot_changed_vol<150000:                                                      # Make sure there is enough water left in the bottles
-            raise ValueError(f"VOLUME IN BOTTLE TOO SMALL: remaining volume is {self.temp['Bottle Volume']}. Refill water bottle and empty waste bottle.")
+            raise ValueError(f"VOLUME IN BOTTLE TOO SMALL: remaining volume is {self.temp['Bottle Volume']*1000-tot_changed_vol}. Refill water bottle and empty waste bottle.")
 
         if operation == "suck" and final_vol < 0:                                                                       # Make sure there is enough water left in the vessel
             raise ValueError(f"REMAINING VOLUME WILL BE NEGATIVE: Max removal is {self.init_vol} µL")
