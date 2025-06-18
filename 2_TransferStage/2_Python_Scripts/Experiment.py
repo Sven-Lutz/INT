@@ -219,8 +219,8 @@ class Experimentator:
                               "Current Vessel Volume":  self.init_vol + changed_volume,
                               "Remaining Volume":       abs(tot_changed_vol)- abs(changed_volume)})
             if operation == "push":
-                self.temp.update({"Bottle Volume":          self.temp["Bottle Volume"]-abs(delta_v/1000)})
-            print(f"Flow: {round(flow_value, 3)} µL/min\tSet Pressure: {control_value} mbar\t Current Pressure: {pressure_value} mbar\tVolume: {round(changed_volume,3)}")
+                self.temp.update({"Bottle Volume": self.temp["Bottle Volume"]-abs(delta_v/1000)})
+            #print(f"Flow: {round(flow_value, 3)} µL/min\tSet Pressure: {control_value} mbar\t Current Pressure: {pressure_value} mbar\tVolume: {round(changed_volume,3)}")
 
         df = pd.DataFrame(data)
         #df.to_json(r"C:\Users\Operator\TransferStage\5_Raw_Data\Remove_Water.json")                                # Store the experimental data
@@ -313,10 +313,11 @@ class Experimentator:
         if pause_event.is_set():                                                        # If the process is paused the valve should block the tube
             self.valve.block_pos()
             self.OB1.set_pressure(0)                                                    # The pressure is set to zero to be safe.
-                                                                                        # Remember, there is still pressure in the bottles and this is not a 'safe' state
+            vac_pump.turn_off()                                                         # Remember, there is still pressure in the bottles and this is not a 'safe' state
                                                                                         # The safe state is the venting_pos
         else:
             self.valve.open_pos()                                                       # If the process is resumed the valve should open again
+            vac_pump.turn_on()
         return
 
     def vent(self):

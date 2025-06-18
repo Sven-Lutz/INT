@@ -445,6 +445,7 @@ class StateVariableFrame(tk.LabelFrame):
         def: This function updates the entries and checkboxes in this frame during the measurement.
         :return:
         """
+        #print(self.temp)
         for label_text, details in self.entries.items():                # Update entries
             value = self.temp.get(details["config_key"], "N/A")         # Retrieve the value from self.temp using the config_key
             if isinstance(value, (int, float)):
@@ -722,7 +723,7 @@ class MainApplication(tk.Tk):
         self.current_thread.start()                                         # Start the new thread
         self.current_function = protocol_func                               # Place the protocol_func in the new thread
 
-        self.disable_widgets()                                              # Disable all widgets so no other protocol can be called
+        #self.disable_widgets()                                              # Disable all widgets so no other protocol can be called
 
         self.state_variable_frame.update_variables()                        # Start updating the state variable frame continuously
         return
