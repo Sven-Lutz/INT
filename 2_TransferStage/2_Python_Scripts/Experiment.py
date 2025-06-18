@@ -49,7 +49,7 @@ class Experimentator:
         def: This function sets some initial parameters. It is called every time an operation is performed,
              since each operation has different initial values.
         """
-        #self.temp, _ = self.writer.read_yaml("temp")                            # Read temp.yaml
+        self.temp, _ = self.writer.read_yaml("temp")                            # Read temp.yaml
         self.init_vol = self.temp["Current Vessel Volume"]                      # Get the initial volume
         self.set_flow = self.temp["Set Flow"]                                   # Get the set flow
         print(f"Current volume in vessel: {round(self.init_vol, 3)} uL")
