@@ -37,7 +37,7 @@ class Experimentator:
         self.init_vol = None
         self.set_flow = None
 
-        self.max_vol = self.config["Maximum Volume"]
+        self.max_vol = self.config["Containers"][self.temp["Selected Container"]]["Maximum Volume"]
         self.p_term = self.config["P Term"]
         self.i_term = self.config["I Term"]
         self.d_term = self.config["D Term"]

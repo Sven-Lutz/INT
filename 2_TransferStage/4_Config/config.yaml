@@ -5,20 +5,20 @@ Containers:
     MUX Valve: 1
     Maximum Volume: 180000
     Small Volume: 5000
-  10 Sample:
-    Attachment Volume: 60000
-    MUX Valve: 3
-    Maximum Volume: 1200000
-    Small Volume: 5000
   5 Sample:
     Attachment Volume: 60000
     MUX Valve: 2
     Maximum Volume: 200000
     Small Volume: 5000
+  10 Sample:
+    Attachment Volume: 60000
+    MUX Valve: 3
+    Maximum Volume: 1200000
+    Small Volume: 5000
+  
 D Term: 0.05
 Default Flow: 30000
 I Term: 6
-Maximum Volume: 180000
 P Term: 1.4
 PVA Waiting Time: 60
 Project Path: C:\Users\Operator\PelliKAn\2_TransferStage

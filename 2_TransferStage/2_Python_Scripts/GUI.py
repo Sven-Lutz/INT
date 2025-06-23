@@ -102,52 +102,49 @@ class ParameterFrame(tk.LabelFrame):
         :return: ---
         """
         self.dropdown_frame = tk.Frame(self, bg="lightblue")
-        self.dropdown_frame.pack(fill=tk.X)  # X direction to keep above entries
+        self.dropdown_frame.pack(fill=tk.X)                                                         # X direction to keep above entries
 
         tk.Label(self.dropdown_frame, text="Select Mode:", bg="lightblue").pack(side=tk.LEFT, padx=5, pady=5)
 
         self.dropdown_var = tk.StringVar()
-        self.dropdown_var.set(self.temp["Selected Container"])  # Initial dropdown value
+        self.dropdown_var.set(self.temp["Selected Container"])                                      # Initial dropdown value
 
-        options = self.config["Containers"].keys()  # Replace with actual modes if needed
+        options = self.config["Containers"].keys()                                                  # Read the options
         dropdown_menu = tk.OptionMenu(self.dropdown_frame, self.dropdown_var, *options)
         dropdown_menu.config(width=20)
         dropdown_menu.pack(side=tk.LEFT, padx=5, pady=5)
 
-        # Optionally bind an action on change:
-        self.dropdown_var.trace_add("write", self.on_dropdown_change)
+        self.dropdown_var.trace_add("write", self.on_dropdown_change)                       # Bind an action on change
+        return
 
-    def on_dropdown_change(self, *args):
+    def on_dropdown_change(self,*args):
+        """This function updates the .temp file and the entries if an option in the dropdown is selected"""
         selected = self.dropdown_var.get()
-        self.writer.update_yaml("temp", "Selected Container", selected)
-        print(f"Dropdown selected: {selected}")
+        self.writer.update_yaml("temp", "Selected Container", selected)     # update the temp file
+        #print(f"Dropdown selected: {selected}")
 
         container_config = self.config["Containers"].get(selected, {})
 
-        for key, entry_data in self.entries.items():
+        for key, entry_data in self.entries.items():                        # read the dict for the selected container
             config_key = entry_data["config_key"]
             param_var = entry_data["var"]
             entry_widget = entry_data["widget"]
             state = entry_data["state"]
 
-            # Update only if the key exists in the container config
-            if config_key in container_config:
+            if config_key in container_config:                              # update the entries
                 new_val = container_config[config_key]
 
-                # Allow modification if currently read-only
-                if entry_widget['state'] == 'readonly':
+                if entry_widget['state'] == 'readonly':                     # keep the state of the widget
                     entry_widget.configure(state='normal')
 
                 param_var.set(str(new_val))
 
-                # Restore readonly if necessary
                 if state == "readonly":
-                    entry_widget.configure(state='readonly')
-        # Handle the selection logic here if needed (e.g., update UI or config)
-        cont = self.config["Containers"][selected]["MUX Valve"]
+                    entry_widget.configure(state='readonly')                # Restore readonly if necessary
+
+        cont = self.config["Containers"][selected]["MUX Valve"]             # Read the MUX valve
         self.container.select_container(cont)
         return
-
 
     def add_entries(self):
         """
@@ -158,8 +155,8 @@ class ParameterFrame(tk.LabelFrame):
         self.entry_frame.pack(fill=tk.BOTH, expand=True)
 
         self.entries = {
-            "Maximum Volume [ul]:":         [self.config["Maximum Volume"], "Maximum Volume", "readonly"],              # Structure: {label: [initial value, config key, state]}
-            "Attachment Volume [ul]:":      [self.config["Maximum Volume"], "Attachment Volume", "normal"],
+            "Maximum Volume [ul]:":         [self.config["Containers"][self.temp["Selected Container"]]["Maximum Volume"], "Maximum Volume", "readonly"],              # Structure: {label: [initial value, config key, state]}
+            "Attachment Volume [ul]:":      [self.config["Attachment Volume"], "Attachment Volume", "normal"],
             "fill Flow [ul/min]:":          [self.config["fill"], "fill", "normal"],
             "attachment Flow [ul/min]:":    [self.config["attachment"], "attachment", "normal"],
             "empty Flow [ul/min]:":         [self.config["empty"], "empty", "normal"],
@@ -537,19 +534,15 @@ class MainApplication(tk.Tk):
             self.experiment.temp.update(value)                              # Update existing dictionary with new values
         else:
             raise ValueError("temp must be a dictionary or dictionary-like object")
+
     def check_project(self):
-        print(self.config["Project Path"])
-        print(self.project)
-        print(self.config["Project Path"] == self.project)
+        """This function checks if the project path in the .config and the actual path are the same and updates it"""
         if self.config["Project Path"] != self.project:
             self.writer.update_yaml("config", "Project Path", self.project)
             self.config.update({"Project Path": self.project})
-            print("project path needs to be updated")
-        print(self.config["Project Path"])
-        print(self.project)
-        print(self.config["Project Path"] == self.project)
         config,_ = self.writer.read_yaml("both")
-        print(config)
+        return
+
     def add_project_frame(self):
         self.project_frame = ProjectFrame(self)                             # Call project frame class
         self.project_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -687,7 +680,7 @@ class MainApplication(tk.Tk):
             step = 1000                                                                         # Step size of the set_flow in [uL/min]
             new_value = current_value - step if event.delta > 0 else current_value + step       # Change the set_flow depending on wheel turning direction
             self.parameter_frame.active_entry["var"].set(str(new_value))                        # Set new variable
-            print(f"Adjusted value: {new_value}")
+            #print(f"Adjusted value: {new_value}")
 
         except ValueError as e:
             print(f"Invalid value in active entry: {e}")
@@ -784,9 +777,9 @@ class MainApplication(tk.Tk):
         """
         def: This function stops the measurement when coming from the pause state.
         """
-        print(f"current function {self.current_function}")
+        #print(f"current function {self.current_function}")
         if self.current_thread and self.current_thread.is_alive():
-            print(f"Stopping {self.current_function.__name__}...")
+            #print(f"Stopping {self.current_function.__name__}...")
 
             stop_event.set()                                                # Signal the current function to stop
 
