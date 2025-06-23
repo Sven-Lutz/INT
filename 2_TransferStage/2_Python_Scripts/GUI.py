@@ -462,7 +462,7 @@ class StateVariableFrame(tk.LabelFrame):
 
         with open(self.yaml_file, 'w') as file:                         # Write the current state to the YAML file
             yaml.dump(self.temp, file)
-
+        print("updated .temp")
         self.progress()
         self.after(100, self.update_variables)                      # Refresh every 100ms
         return
