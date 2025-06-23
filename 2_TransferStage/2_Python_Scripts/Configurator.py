@@ -367,10 +367,10 @@ class WritingManager:
         """
         if which not in {"temp", "config"}:
             raise ValueError("Invalid file type: choose 'temp' or 'config'")
-        if type(new_value) is dict:
-            _, path = self.read_yaml(which)  # Read the metadata
+        if type(new_value) is dict:                                         # This is only excecuted if a dict is passed as input, it allows quicker updating
+            _, path = self.read_yaml(which)                                 # Read the metadata
             print("Dictionary found, updating whole file")
-            with open(path, 'w') as f:  # Write the updated YAML content back to the file
+            with open(path, 'w') as f:                                      # Write the updated YAML content back to the file
                 yaml.safe_dump(new_value, f)
                 f.close()
                 return
