@@ -9,6 +9,7 @@ import yaml
 import os
 
 from PIL.ImageOps import expand
+from fontTools.t1Lib import write
 
 import Configurator
 import Experiment
@@ -462,7 +463,6 @@ class StateVariableFrame(tk.LabelFrame):
 
         with open(self.yaml_file, 'w') as file:                         # Write the current state to the YAML file
             yaml.dump(self.temp, file)
-        print("updated .temp")
         self.progress()
         self.after(100, self.update_variables)                      # Refresh every 100ms
         return
@@ -513,6 +513,7 @@ class MainApplication(tk.Tk):
                                                                                                 # as otherwise the cross-linking of MainApplication.temp and Experimentator.temp is not correct
 
         self.config, _ = self.writer.read_yaml("both")
+        self.check_project()
         self.yaml_file = os.path.join(self.config["Project Path"],"4_Config","temp.yaml")      # For debugging reasons the file is called temp_test
 
         pause_event.clear()
@@ -536,7 +537,19 @@ class MainApplication(tk.Tk):
             self.experiment.temp.update(value)                              # Update existing dictionary with new values
         else:
             raise ValueError("temp must be a dictionary or dictionary-like object")
-
+    def check_project(self):
+        print(self.config["Project Path"])
+        print(self.project)
+        print(self.config["Project Path"] == self.project)
+        if self.config["Project Path"] != self.project:
+            self.writer.update_yaml("config", "Project Path", self.project)
+            self.config.update({"Project Path": self.project})
+            print("project path needs to be updated")
+        print(self.config["Project Path"])
+        print(self.project)
+        print(self.config["Project Path"] == self.project)
+        config,_ = self.writer.read_yaml("both")
+        print(config)
     def add_project_frame(self):
         self.project_frame = ProjectFrame(self)                             # Call project frame class
         self.project_frame.pack(fill=tk.X, padx=10, pady=5)

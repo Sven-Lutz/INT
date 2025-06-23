@@ -47,7 +47,7 @@ class Experimentator:
     def __del__(self):
         vac_pump.turn_off()
         return
-    
+
     def setup_experiment(self):
         """
         def: This function sets some initial parameters. It is called every time an operation is performed,
