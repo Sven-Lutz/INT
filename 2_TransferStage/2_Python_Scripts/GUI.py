@@ -141,7 +141,7 @@ class ParameterFrame(tk.LabelFrame):
                 if state == "readonly":
                     entry_widget.configure(state='readonly')
         # Handle the selection logic here if needed (e.g., update UI or config)
-        
+
         return
 
 
