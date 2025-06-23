@@ -6,6 +6,9 @@ import time
 
 import yaml
 import os
+
+from traitlets.config import get_config
+
 import Experiment
 
 from state import pause_event, stop_event                               # Import the shared pause_event from state.py
@@ -236,11 +239,12 @@ class FlowController:
         return flow.value
 
 class ContainerSelector:
-    def __init__(self,config):
+    def __init__(self):
         print("Starting container selector communication...")
         self.Instr_ID = c_int32()
         self._initialize_device()
-        print("Pressure container selector  communication successfully started\n")
+
+        print("Transfer container selector communication successfully started\n")
         return
 
     def _initialize_device(self):
@@ -253,8 +257,15 @@ class ContainerSelector:
         print(f"MUX initialized with ID: {self.Instr_ID.value}")
         return
 
-    def select_container(self):
-        print("Test")
+    def get_container(self):
+        valve = c_int32(-1)
+        MUX_DRI_Get_Valve(self.Instr_ID.value, byref(valve))  # get the active valve. it returns 0 if valve is busy.
+        print('selected channel', valve.value)
+        return valve.value
+
+    def select_container(self, mux_valve):
+        MUX_DRI_Set_Valve(self.Instr_ID.value,mux_valve,0)
+        print(f"MUX Valve set to {mux_valve}")
         return
 
 
@@ -372,8 +383,10 @@ def main():
     w = WritingManager(project)
 
     config, _ = w.read_yaml("both")
-    pc = PressureController(config)
-    pc.calibrate()
+    #pc = PressureController(config)
+    #pc.calibrate()
+    cs = ContainerSelector(config)
+    cs.select_container()
     return
 
 if __name__ == "__main__":
