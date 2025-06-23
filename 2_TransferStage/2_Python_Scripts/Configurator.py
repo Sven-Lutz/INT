@@ -14,7 +14,7 @@ import Experiment
 from state import pause_event, stop_event                               # Import the shared pause_event from state.py
 
 from pyfirmata import Arduino
-#from Elveflow64 import *
+from Elveflow64 import *
 
 ##########################
 ###The global variables###
@@ -367,7 +367,7 @@ class WritingManager:
         """
         if which not in {"temp", "config"}:
             raise ValueError("Invalid file type: choose 'temp' or 'config'")
-        if type(new_value) is dict:                                         # This is only excecuted if a dict is passed as input, it allows quicker updating
+        if type(new_value) is dict:                                         # This is only executed if a dict is passed as input, it allows quicker updating
             _, path = self.read_yaml(which)                                 # Read the metadata
             print("Dictionary found, updating whole file")
             with open(path, 'w') as f:                                      # Write the updated YAML content back to the file
