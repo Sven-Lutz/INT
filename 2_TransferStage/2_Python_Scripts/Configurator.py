@@ -1,3 +1,4 @@
+import random
 import time
 
 ###################
@@ -7,14 +8,13 @@ import time
 import yaml
 import os
 
-from traitlets.config import get_config
 
 import Experiment
 
 from state import pause_event, stop_event                               # Import the shared pause_event from state.py
 
 from pyfirmata import Arduino
-from Elveflow64 import *
+#from Elveflow64 import *
 
 ##########################
 ###The global variables###
@@ -39,6 +39,11 @@ class Valve:
                      }
         self.vent_pos()                                         # Set valves into the safe position
         print("Valve communication successfully started\n")
+        return
+
+    def __del__(self):
+        print("Class valve has been destroyed")
+        self.vent_pos()
         return
 
     @property
@@ -114,12 +119,17 @@ class PressureController:
     """
     def: This class connects to the OB1 pressure controller.
     """
-    def __init__(self,config):
+    def __init__(self, config):
         print("Starting pressure controller communication...")
         self.Instr_ID = c_int32()
         self._initialize_device()
         self._load_calibration(config)
         print("Pressure controller  communication successfully started\n")
+        return
+
+    def __del__(self):
+        print("Class PressureController has been destroyed")
+        self.set_pressure(0)
         return
 
     def _initialize_device(self):
@@ -357,6 +367,14 @@ class WritingManager:
         """
         if which not in {"temp", "config"}:
             raise ValueError("Invalid file type: choose 'temp' or 'config'")
+        if type(new_value) is dict:
+            _, path = self.read_yaml(which)  # Read the metadata
+            print("Dictionary found, updating whole file")
+            with open(path, 'w') as f:  # Write the updated YAML content back to the file
+                yaml.safe_dump(new_value, f)
+                f.close()
+                return
+
         if key is None:
             raise ValueError("A valid key must be provided for update.")
 
@@ -383,10 +401,12 @@ def main():
     w = WritingManager(project)
 
     config, _ = w.read_yaml("both")
-    #pc = PressureController(config)
-    #pc.calibrate()
-    cs = ContainerSelector(config)
-    cs.select_container()
+
+    print(config)
+    v = random.randint(0,10)
+    w.update_yaml("config", new_value={"Attachment Volume": v, "Default Flow": v})
+    config, _ = w.read_yaml("both")
+    print(config)
     return
 
 if __name__ == "__main__":

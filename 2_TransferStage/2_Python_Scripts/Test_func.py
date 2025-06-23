@@ -127,9 +127,20 @@ class Valve:
         return
 
 
+class Kill:
+    def __init__(self):
+        print("Initialisieren")
+
+    def test(self):
+        print("Does something")
+
+    def __del__(self):
+        print("Destroy")
+
+
 def main():
-    v = Valve()
-    v.push_pos()
+    print(random.randint(0,10))
+
 if __name__ == "__main__":
     main()
 
