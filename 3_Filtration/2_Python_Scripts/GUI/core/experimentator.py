@@ -2,7 +2,7 @@
 ###The Libraries###
 ###################
 
-import Configurator
+import configurator
 import time
 import os
 import random

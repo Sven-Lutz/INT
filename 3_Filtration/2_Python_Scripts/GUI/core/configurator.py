@@ -5,8 +5,9 @@
 import yaml
 import os
 
-import rly02
-from Elveflow64 import *
+from utils import rly02.py
+#import rly02
+#from Elveflow64 import *
 ##########################
 ###The Global Variables###
 ##########################
@@ -282,7 +283,7 @@ def main():
     :return: ---
     """
     print("###########################################################################")
-    print("Configurator.py is executed, make sure this is the script that should be run.")
+    print("configurator.py is executed, make sure this is the script that should be run.")
     print("###########################################################################")
 
     project = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

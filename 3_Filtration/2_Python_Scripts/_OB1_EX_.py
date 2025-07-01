@@ -9,8 +9,6 @@ sys.path.append('D:/dev/SDK/Python_64')#add the path of the LoadElveflow.py
 
 from ctypes import *
 
-from array import array
-
 from Elveflow64 import *
 
 
