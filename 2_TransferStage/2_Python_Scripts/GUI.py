@@ -7,6 +7,10 @@ import time
 import datetime
 import yaml
 import os
+
+from PIL.ImageOps import expand
+from fontTools.t1Lib import write
+
 import Configurator
 import Experiment
 import Test_func
@@ -51,7 +55,7 @@ class ParameterFrame(tk.LabelFrame):
     """
     def: This function is able so set the parameter used in the experiment and to trigger the experiment, it is placed on the main frame.
     """
-    def __init__(self, root, state_variable_frame, config, writer, experiment, start_callback, automatic_callback):
+    def __init__(self, root, state_variable_frame, config, writer, experiment, container, start_callback, automatic_callback):
         super().__init__(root, text="Parameters", borderwidth=2, relief="groove", bg="lightgreen")          # Set frame color and title
         
         self.start_callback = start_callback
@@ -59,8 +63,13 @@ class ParameterFrame(tk.LabelFrame):
         self.config = config
         self.writer = writer
         self.experiment = experiment
+        self.container = container
+
         self.state_variable_frame = state_variable_frame
         self.main_frame = root
+
+        self.dropdown_menu = None
+        self.dropdown_var = None
 
         self.entry_frame = None
         self.entries = None
@@ -71,6 +80,7 @@ class ParameterFrame(tk.LabelFrame):
         self.buttons = None
         self.button_func = None
 
+        self.add_dropdown()
         self.add_entries()
         self.add_buttons()
         return
@@ -86,6 +96,56 @@ class ParameterFrame(tk.LabelFrame):
         else:
             raise ValueError("temp must be a dictionary or dictionary-like object")
 
+    def add_dropdown(self):
+        """
+        def: This function adds teh dropdown for the different containers in the Parameter Frame
+        :return: ---
+        """
+        self.dropdown_frame = tk.Frame(self, bg="lightblue")
+        self.dropdown_frame.pack(fill=tk.X)                                                         # X direction to keep above entries
+
+        tk.Label(self.dropdown_frame, text="Select Mode:", bg="lightblue").pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.dropdown_var = tk.StringVar()
+        self.dropdown_var.set(self.temp["Selected Container"])                                      # Initial dropdown value
+
+        options = self.config["Containers"].keys()                                                  # Read the options
+        dropdown_menu = tk.OptionMenu(self.dropdown_frame, self.dropdown_var, *options)
+        dropdown_menu.config(width=20)
+        dropdown_menu.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.dropdown_var.trace_add("write", self.on_dropdown_change)                       # Bind an action on change
+        return
+
+    def on_dropdown_change(self,*args):
+        """This function updates the .temp file and the entries if an option in the dropdown is selected"""
+        selected = self.dropdown_var.get()
+        self.writer.update_yaml("temp", "Selected Container", selected)     # update the temp file
+        #print(f"Dropdown selected: {selected}")
+
+        container_config = self.config["Containers"].get(selected, {})
+
+        for key, entry_data in self.entries.items():                        # read the dict for the selected container
+            config_key = entry_data["config_key"]
+            param_var = entry_data["var"]
+            entry_widget = entry_data["widget"]
+            state = entry_data["state"]
+
+            if config_key in container_config:                              # update the entries
+                new_val = container_config[config_key]
+
+                if entry_widget['state'] == 'readonly':                     # keep the state of the widget
+                    entry_widget.configure(state='normal')
+
+                param_var.set(str(new_val))
+
+                if state == "readonly":
+                    entry_widget.configure(state='readonly')                # Restore readonly if necessary
+
+        cont = self.config["Containers"][selected]["MUX Valve"]             # Read the MUX valve
+        self.container.select_container(cont)
+        return
+
     def add_entries(self):
         """
         def: This function adds all the entries in the Parameter Frame
@@ -95,8 +155,8 @@ class ParameterFrame(tk.LabelFrame):
         self.entry_frame.pack(fill=tk.BOTH, expand=True)
 
         self.entries = {
-            "Maximum Volume [ul]:":         [self.config["Maximum Volume"], "Maximum Volume", "readonly"],              # Structure: {label: [initial value, config key, state]}
-            "Attachment Volume [ul]:":      [self.config["Maximum Volume"], "Attachment Volume", "normal"],
+            "Maximum Volume [ul]:":         [self.config["Containers"][self.temp["Selected Container"]]["Maximum Volume"], "Maximum Volume", "readonly"],              # Structure: {label: [initial value, config key, state]}
+            "Attachment Volume [ul]:":      [self.config["Attachment Volume"], "Attachment Volume", "normal"],
             "fill Flow [ul/min]:":          [self.config["fill"], "fill", "normal"],
             "attachment Flow [ul/min]:":    [self.config["attachment"], "attachment", "normal"],
             "empty Flow [ul/min]:":         [self.config["empty"], "empty", "normal"],
@@ -383,6 +443,7 @@ class StateVariableFrame(tk.LabelFrame):
         def: This function updates the entries and checkboxes in this frame during the measurement.
         :return:
         """
+        #print(self.temp)
         for label_text, details in self.entries.items():                # Update entries
             value = self.temp.get(details["config_key"], "N/A")         # Retrieve the value from self.temp using the config_key
             if isinstance(value, (int, float)):
@@ -399,7 +460,6 @@ class StateVariableFrame(tk.LabelFrame):
 
         with open(self.yaml_file, 'w') as file:                         # Write the current state to the YAML file
             yaml.dump(self.temp, file)
-
         self.progress()
         self.after(100, self.update_variables)                      # Refresh every 100ms
         return
@@ -444,11 +504,13 @@ class MainApplication(tk.Tk):
 
         self.project = project
         self.writer = Configurator.WritingManager(project)
+        self.container = Configurator.ContainerSelector()
         self.experiment = Experiment.Experimentator(self.writer)                                # Important, when using this code and the self.temp.update,
                                                                                                 # it is important that there is no more than one instance of Experimentator()
                                                                                                 # as otherwise the cross-linking of MainApplication.temp and Experimentator.temp is not correct
 
         self.config, _ = self.writer.read_yaml("both")
+        self.check_project()
         self.yaml_file = os.path.join(self.config["Project Path"],"4_Config","temp.yaml")      # For debugging reasons the file is called temp_test
 
         pause_event.clear()
@@ -473,6 +535,14 @@ class MainApplication(tk.Tk):
         else:
             raise ValueError("temp must be a dictionary or dictionary-like object")
 
+    def check_project(self):
+        """This function checks if the project path in the .config and the actual path are the same and updates it"""
+        if self.config["Project Path"] != self.project:
+            self.writer.update_yaml("config", "Project Path", self.project)
+            self.config.update({"Project Path": self.project})
+        config,_ = self.writer.read_yaml("both")
+        return
+
     def add_project_frame(self):
         self.project_frame = ProjectFrame(self)                             # Call project frame class
         self.project_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -487,7 +557,7 @@ class MainApplication(tk.Tk):
         return
 
     def add_parameter_frame(self):
-        self.parameter_frame = ParameterFrame(self.main_frame, self.state_variable_frame, self.config, self.writer, self.experiment, self.handle_key_event, self.start_automatic)    # Call parameter class with callback to start_measurement
+        self.parameter_frame = ParameterFrame(self.main_frame, self.state_variable_frame, self.config, self.writer, self.experiment, self.container, self.handle_key_event, self.start_automatic)    # Call parameter class with callback to start_measurement
         self.parameter_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5)
         return
 
@@ -575,10 +645,15 @@ class MainApplication(tk.Tk):
                 entry_widget.config(state=tk.NORMAL)                        # Enable the entry widget
         return
 
+    def _disable_dropdown(self):
+        self.parameter_frame.dropdown_menu.config(state=tk.DISABLED)
+        return
+
     def disable_widgets(self):
         """
         def: This function disables all widgets.
         """
+        self._disable_dropdown()
         self._disable_entries()
         self._disable_buttons()
         self._disable_keyboard_bindings()
@@ -605,7 +680,7 @@ class MainApplication(tk.Tk):
             step = 1000                                                                         # Step size of the set_flow in [uL/min]
             new_value = current_value - step if event.delta > 0 else current_value + step       # Change the set_flow depending on wheel turning direction
             self.parameter_frame.active_entry["var"].set(str(new_value))                        # Set new variable
-            print(f"Adjusted value: {new_value}")
+            #print(f"Adjusted value: {new_value}")
 
         except ValueError as e:
             print(f"Invalid value in active entry: {e}")
@@ -654,7 +729,7 @@ class MainApplication(tk.Tk):
         self.current_thread.start()                                         # Start the new thread
         self.current_function = protocol_func                               # Place the protocol_func in the new thread
 
-        self.disable_widgets()                                              # Disable all widgets so no other protocol can be called
+        #self.disable_widgets()                                              # Disable all widgets so no other protocol can be called
 
         self.state_variable_frame.update_variables()                        # Start updating the state variable frame continuously
         return
@@ -702,9 +777,9 @@ class MainApplication(tk.Tk):
         """
         def: This function stops the measurement when coming from the pause state.
         """
-        print(f"current function {self.current_function}")
+        #print(f"current function {self.current_function}")
         if self.current_thread and self.current_thread.is_alive():
-            print(f"Stopping {self.current_function.__name__}...")
+            #print(f"Stopping {self.current_function.__name__}...")
 
             stop_event.set()                                                # Signal the current function to stop
 
