@@ -1,15 +1,30 @@
 Attachment Volume: 60000
+Containers:
+  1 Sample:
+    Attachment Volume: 60000
+    MUX Valve: 1
+    Maximum Volume: 180000
+    Small Volume: 5000
+  5 Sample:
+    Attachment Volume: 60000
+    MUX Valve: 2
+    Maximum Volume: 200000
+    Small Volume: 5000
+  10 Sample:
+    Attachment Volume: 60000
+    MUX Valve: 3
+    Maximum Volume: 1200000
+    Small Volume: 5000
+  
 D Term: 0.05
 Default Flow: 30000
 I Term: 6
-Maximum Volume: 55000
 P Term: 1.4
 PVA Waiting Time: 60
-Project Path: C:\Users\Operator\TransferStage
-Small Volume: '1000'
+Project Path: C:\Users\Operator\PelliKAn\2_TransferStage
+Small Volume: 5000
 add: 30000
 attachment: 30000
 empty: 30000
 fill: 30000
 remove: 30000
-

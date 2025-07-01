@@ -9,6 +9,7 @@ import random
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import rly02 as vac_pump
 
 from simple_pid import PID
 from state import pause_event, stop_event                               # Import the shared pause_event from state.py
@@ -36,11 +37,15 @@ class Experimentator:
         self.init_vol = None
         self.set_flow = None
 
-        self.max_vol = self.config["Maximum Volume"]
+        self.max_vol = self.config["Containers"][self.temp["Selected Container"]]["Maximum Volume"]
         self.p_term = self.config["P Term"]
         self.i_term = self.config["I Term"]
         self.d_term = self.config["D Term"]
 
+        return
+
+    def __del__(self):
+        vac_pump.turn_off()
         return
 
     def setup_experiment(self):
@@ -48,7 +53,7 @@ class Experimentator:
         def: This function sets some initial parameters. It is called every time an operation is performed,
              since each operation has different initial values.
         """
-        #self.temp, _ = self.writer.read_yaml("temp")                            # Read temp.yaml
+        self.temp, _ = self.writer.read_yaml("temp")                            # Read temp.yaml
         self.init_vol = self.temp["Current Vessel Volume"]                      # Get the initial volume
         self.set_flow = self.temp["Set Flow"]                                   # Get the set flow
         print(f"Current volume in vessel: {round(self.init_vol, 3)} uL")
@@ -148,12 +153,14 @@ class Experimentator:
         if operation not in ["push", "suck"]:                                               # Only pushing or sucking is allowed
             raise ValueError("Operation must be 'push' or 'suck'")                          # If this is triggered then there is a bug somewhere
 
+        vac_pump.turn_on()                                                                                              # Turns on the vacuum pump
+
         flow_setpoint = self.set_flow if operation == "push" else -self.set_flow                                        # Calculate the flow setpoint
         final_vol = self.init_vol + tot_changed_vol if operation == "push" else self.init_vol - tot_changed_vol         # Calculate the final volume
         self.temp.update({"Final Volume": final_vol})                                                                   # Update the final volume in the temp dict
 
         if self.temp["Bottle Volume"]*1000-tot_changed_vol<150000:                                                      # Make sure there is enough water left in the bottles
-            raise ValueError(f"VOLUME IN BOTTLE TOO SMALL: remaining volume is {self.temp['Bottle Volume']}. Refill water bottle and empty waste bottle.")
+            raise ValueError(f"VOLUME IN BOTTLE TOO SMALL: remaining volume is {self.temp['Bottle Volume']*1000-tot_changed_vol}. Refill water bottle and empty waste bottle.")
 
         if operation == "suck" and final_vol < 0:                                                                       # Make sure there is enough water left in the vessel
             raise ValueError(f"REMAINING VOLUME WILL BE NEGATIVE: Max removal is {self.init_vol} µL")
@@ -216,8 +223,8 @@ class Experimentator:
                               "Current Vessel Volume":  self.init_vol + changed_volume,
                               "Remaining Volume":       abs(tot_changed_vol)- abs(changed_volume)})
             if operation == "push":
-                self.temp.update({"Bottle Volume":          self.temp["Bottle Volume"]-abs(delta_v/1000)})
-            print(f"Flow: {round(flow_value, 3)} µL/min\tSet Pressure: {control_value} mbar\t Current Pressure: {pressure_value} mbar\tVolume: {round(changed_volume,3)}")
+                self.temp.update({"Bottle Volume": self.temp["Bottle Volume"]-abs(delta_v/1000)})
+            #print(f"Flow: {round(flow_value, 3)} µL/min\tSet Pressure: {control_value} mbar\t Current Pressure: {pressure_value} mbar\tVolume: {round(changed_volume,3)}")
 
         df = pd.DataFrame(data)
         #df.to_json(r"C:\Users\Operator\TransferStage\5_Raw_Data\Remove_Water.json")                                # Store the experimental data
@@ -235,7 +242,7 @@ class Experimentator:
         print(f"Final Volume in Vessel: {round(self.temp['Current Vessel Volume'], 3)} uL")
 
         self.valve.vent_pos()                                                                                       # Set valves to safe position
-
+        vac_pump.turn_off()
         #self.plot_changes(df)
         return
 
@@ -310,10 +317,11 @@ class Experimentator:
         if pause_event.is_set():                                                        # If the process is paused the valve should block the tube
             self.valve.block_pos()
             self.OB1.set_pressure(0)                                                    # The pressure is set to zero to be safe.
-                                                                                        # Remember, there is still pressure in the bottles and this is not a 'safe' state
+            vac_pump.turn_off()                                                         # Remember, there is still pressure in the bottles and this is not a 'safe' state
                                                                                         # The safe state is the venting_pos
         else:
             self.valve.open_pos()                                                       # If the process is resumed the valve should open again
+            vac_pump.turn_on()
         return
 
     def vent(self):

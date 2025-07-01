@@ -4,7 +4,7 @@ import getopt
 import sys
 from struct import *
 
-SERIAL_PATH = "COM4"
+SERIAL_PATH = "COM11"
 BAUD_RATE = 9600
 
 commands = {
@@ -51,6 +51,18 @@ def click_relay_2():
     send_command(commands['relay_2_on'])
     time.sleep(1)
     send_command(commands['relay_2_off'])
+
+
+def turn_on():
+    turn_relay_1_on()
+    turn_relay_2_on()
+    return
+
+
+def turn_off():
+    turn_relay_1_off()
+    turn_relay_2_off()
+    return
 
 
 def get_relay_states():

@@ -1,12 +1,9 @@
-Attachment Volume: 60000
+Project Path: C:\Users\Operator\TransferStage
+P Term: 1.4
+I Term: 6
 D Term: 0.05
 Default Flow: 30000
-I Term: 6
-Maximum Volume: 180000
-P Term: 1.4
 PVA Waiting Time: 60
-Project Path: C:\Users\Operator\TransferStage
-Small Volume: 5000
 add: 30000
 attachment: 30000
 empty: 30000
@@ -14,17 +11,23 @@ fill: 30000
 remove: 30000
 Containers:
   1 Sample:
-    MUX Valve: 1
     Attachment Volume: 60000
     Maximum Volume: 180000
     Small Volume: 5000
   5 Sample:
-    MUX Valve: 2
     Attachment Volume: 60000
     Maximum Volume: 200000
     Small Volume: 5000
   10 Sample:
-    MUX Valve: 3
     Attachment Volume: 60000
-    Maximum Volume: 1200000
+    Maximum Volume: 250000
     Small Volume: 5000
+
+
+
+
+
+
+
+
+
