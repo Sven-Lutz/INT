@@ -1,24 +1,49 @@
+###################
+###The Libraries###
+###################
+
+import os
+import logging
+
 try:
     from  Elveflow64 import *
 except ImportError:
     Elveflow64 = None
-    print("Warning: Elveflow64 library not found. PressureController will not work.")
+
+##########################
+###The Global Variables###
+##########################
+
+logger = logging.getLogger(__name__)
+
+#################
+###The Classes###
+#################
 
 class PressureController:
     """
     def: This class connects to the OB1 pressure controller.
     """
     def __init__(self, config):
-        print("Starting pressure controller communication...")
         if Elveflow64 is None:
+            logger.error("Elveflow64 library not available.")
             raise RuntimeError("Elveflow64 library not available.")
-        
-        self.Instr_ID = c_int32()
-        self._initialize_device()
+
+        logger.info("Starting pressure controller communication...")
+
         self.config_path = os.path.join(config["Project Path"], "4_Config")  # Set the config path
-        self.pressure_limit = config["Pressure Limit"]
-        self._load_calibration(config)
-        print("Pressure controller  communication successfully started\n")
+        self.pressure_limit = config.get("Pressure Limit", None)
+
+        self.Instr_ID = c_int32()
+
+        try:
+            self._initialize_device()
+            self._load_calibration(config)
+        except Exception as e:
+            logger.error(f"Failed to initialize pressure controller: {e}")
+            raise
+
+        logger.info("Pressure controller communication successfully started")
         return
 
     def _initialize_device(self):
