@@ -5,10 +5,20 @@
 import os
 import logging
 
+from ctypes import c_int32, c_double, byref
+
 try:
-    from  Elveflow64 import *
+    from Elveflow64 import (
+        OB1_Initialization,
+        OB1_Set_Press,
+        OB1_Get_Press,
+        OB1_Calib,
+        Elveflow_Calibration_Load,
+        Elveflow_Calibration_Save
+    )
 except ImportError:
-    Elveflow64 = None
+    OB1_Initialization = OB1_Set_Press = OB1_Get_Press = OB1_Calib = None
+    Elveflow_Calibration_Load = Elveflow_Calibration_Save = None
 
 ##########################
 ###The Global Variables###
@@ -24,16 +34,18 @@ class PressureController:
     """
     def: This class connects to the OB1 pressure controller.
     """
-    def __init__(self, config):
-        if Elveflow64 is None:
+    def __init__(self, config: dict):
+        if OB1_Initialization is None:
             logger.error("Elveflow64 library not available.")
             raise RuntimeError("Elveflow64 library not available.")
 
         logger.info("Starting pressure controller communication...")
 
         self.config_path = os.path.join(config["Project Path"], "4_Config")  # Set the config path
+        self.Calib_path = os.path.join(self.config_path, "Calib_latest.txt")
         self.pressure_limit = config.get("Pressure Limit", None)
 
+        self.Calib = (c_double * 1000)()
         self.Instr_ID = c_int32()
 
         try:
@@ -48,74 +60,85 @@ class PressureController:
 
     def _initialize_device(self):
         """
-        def: This funciton initializes the OB1 device and store the instrument ID.
+        def: This function initializes the OB1 device and store the instrument ID.
         """
+        logger.debug("Calling OB1_Initialization...")
         error = OB1_Initialization('ASRL4::INSTR'.encode('ascii'), 5, 0, 0, 0, byref(self.Instr_ID))    #see User Guide to determine regulator types and NIMAX to determine the instrument name
         if error != 0:
+            logger.error(f"Error:Unable to connect to OB1 device. Error code: {error}")
             raise ConnectionError(f"ERROR: Unable to connect to OB1 device, error code: {error}")
-        print(f"OB1 initialized with ID: {self.Instr_ID.value}")
+        logger.debug(f"OB1 initialized with ID: {self.Instr_ID.value}")
         return
 
-    def _load_calibration(self, config):
+    def _load_calibration(self):
         """
         def: This function loads the calibration file path and initialize calibration array.
-             The calibration_path is hardcoded in the script
+             The calibration_path is hardcoded in the script.
         """
-        self.config_path = os.path.join(config["Project Path"], "4_Config")              # Set the config path
-        self.Calib = (c_double * 1000)()                                            # Calibration array with 1000 elements
-        self.Calib_path = os.path.join(self.config_path, "Calib_latest.txt")             # Set the calibration path
-        error = Elveflow_Calibration_Load(self.Calib_path.encode('ascii'), byref(self.Calib), 1000)     # Load the calibration
+        logger.debug(f"Loading calibration from {self.Calib_path}")
+        error = Elveflow_Calibration_Load(self.Calib_path.encode('ascii'), byref(self.Calib), 1000)
         if error != 0:
-            print(f"WARNING: Calibration file could not be loaded, error code: {error}")
-
+            logger.warning(f"Calibration file could not be loaded. Error code: {error}")
         return
 
     def calibrate(self):
         """
         def: This function performs calibration and save it to the calibration file.
         """
-        print("Starting Calibration")
-        self.Calib = (c_double * 1000)()
-        self.Calib_path = os.path.join(self.config_path, "Calib_latest.txt")  # Set the calibration path
+        logger.info("Starting OB1 calibration...")
         OB1_Calib(self.Instr_ID.value, self.Calib, 1000)
-        print("Calibration finished now its being stored")
+
+        logger.info("Calibration completed. Saving to file...")
         error = Elveflow_Calibration_Save(self.Calib_path.encode('ascii'), byref(self.Calib), 1000)     # This creates a new calib file, make sure to conduct the calibration properly
         print("Saving finished")
         if error == 0:
-            print(f"Calibration successfully saved to {self.Calib_path}")
+            logger.info(f"Calibration saved to {self.Calib_path}")
         else:
-            print(f"ERROR: Calibration save failed, error code: {error}")
+            logger.error(f"Failed to save calibration. Error code: {error}")
         return
 
-    def set_pressure(self, p=0, ch=1):
+    def set_pressure(self, pressure: float = 0, channel: int = 1):
         """
-        def: This function sets the pressure at the pressure controller.
-        :param p: Integer, which is the pressure value
+        def: This function sets the pressure on a given channel at the pressure controller.
+        :param pressure: Float, which is the pressure value
+        :param channel: Integer, which is the channel number
         :return: ---
         """
 
-        if p < 0 or p > self.pressure_limit:                                                               # Check if pressure is out of bounds
-            raise ValueError("ERROR: PRESSURE OUT OF RANGE, choose within -1 to 6 bars.")
+        if pressure < 0 or pressure > self.pressure_limit:                                                               # Check if pressure is out of bounds
+            logger.error("Error: pressure out of range")
+            raise ValueError(f"ERROR: PRESSURE OUT OF RANGE, choose within 0 to {self.pressure_limit} bars.")
 
-        set_channel = c_int32(int(1))                                                                # Convert channel (ch) to c_int32, this has to be done, as the pressure controller is programmed in C
-        set_pressure = c_double(float(p))                                                       # Converto pressure to c_double
-        print(set_pressure)
-        print(self.Instr_ID)
-        print(set_channel)
+        set_channel = c_int32(channel)                                                                # Convert channel (ch) to c_int32, this has to be done, as the pressure controller is programmed in C
+        set_pressure = c_double(pressure)                                                       # Converto pressure to c_double
+
+        logger.debug(f"Setting pressure: {pressure} on channel {channel}")
+
         error = OB1_Set_Press(self.Instr_ID.value, set_channel, set_pressure, byref(self.Calib), 1000)
 
         if error != 0:
-            print(f"ERROR: Pressure could not be set, error code: {error}")
+            logger.error(f"Failed to set pressure. Error code: {error}")
+            raise IOError(f"ERROR: Pressure could not be set, error code: {error}")
         return
 
-    def get_pressure(self, ch=None):
+    def get_pressure(self, channel: int = 1) -> float | None:
         """
         def: This function reads the pressure of the controller
+        :param channel: Integer which is the channel number
+        :return: float if successful, none if error
         """
-        set_channel = c_int32(ch)                                        # Convert channel (ch) to c_int32, this has to be done, as the pressure controller is programmed in C
+        set_channel = c_int32(channel)                                        # Convert channel (ch) to c_int32, this has to be done, as the pressure controller is programmed in C
         get_pressure = c_double()                                       # Set pressure variable to a c_double
         error = OB1_Get_Press(self.Instr_ID.value, set_channel, 1, byref(self.Calib), byref(get_pressure), 1000)  # Acquire_data=1 -> read all the analog values
         if error != 0:
-            print(f"ERROR: Unable to retrieve pressure, error code: {error}")
+            logger.error(f"Failed to retrieve pressure. Error code: {error}")
             return None
+        logger.debug(f"Read pressure: {get_pressure.value} from channel {channel}")
         return get_pressure.value
+
+    def close(self):
+        """
+        Placeholder for cleanup logic if needed.
+        """
+        logger.info("Closing pressure controller (not implemented).")
+        return
