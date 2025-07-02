@@ -1,4 +1,4 @@
-from ..hardware.drivers.valves import ValveController
+from hardware.drivers.valves import ValveController
 
 def main():
     valve_ctrl = ValveController()

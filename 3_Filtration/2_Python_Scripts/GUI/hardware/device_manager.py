@@ -1,22 +1,47 @@
-from .drivers.pressure_controller import PressureController
-from .drivers.flow_sensor import FlowSensor
-from .drivers.valves import ValveController
+from drivers.pressure_controller import PressureController
+from drivers.flow_sensor import FlowSensor
+from drivers.valves import ValveController
+
+from utils.config_manager import ConfigManager
 
 class DeviceManager:
     def __init__(self, config):
-        self.pressure_controller = PressureController()
-        self.flow_sensor = FlowSensor(config["flow_port"])
-        self.valve_controller = ValveController(config["valve_port"])
+        cfg_mgr = ConfigManager()
+        valve_config = cfg_mgr.load_config("valves")
+        pressure_config = cfg_mgr.load_config("pressure_controller")
+
+        self.pressure_controller = PressureController(pressure_config)
+        self.flow_sensor = FlowSensor()
+        self.valve_controller = ValveController(valve_config)
 
     def set_pressure(self, value):
         self.pressure_controller.set_pressure(value)
+        return
 
     def read_flow(self):
         return self.flow_sensor.read_flow()
 
-    def open_valve(self, valve_id):
-        self.valve_controller.open_valve(valve_id)
+    def filtration(self):
+        self.valve_controller.filtration()
+        return
 
-    def close_valve(self, valve_id):
-        self.valve_controller.close_valve(valve_id)
+    def filling_solution(self):
+        self.valve_controller.filling_solution()
+        return
+
+    def venting(self):
+        self.valve_controller.venting()
+        return
+
+    def all_shut(self):
+        self.valve_controller.all_shut()
+        return
+
+    def all_open(self):
+        self.valve_controller.all_open()
+        return
+
+    def disconnect(self):
+        self.valve_controller.venting()
+        return
 

@@ -7,7 +7,6 @@ import logging
 
 from ctypes import c_int32, c_double, byref
 
-from utils.config_manager import ConfigManager
 try:
     from hardware.drivers.Elveflow64 import (
         OB1_Initialization,
@@ -35,13 +34,12 @@ class PressureController:
     """
     def: This class connects to the OB1 pressure controller.
     """
-    def __init__(self):
+    def __init__(self, config):
         if OB1_Initialization is None:
             logger.error("Elveflow64 library not available.")
             raise RuntimeError("Elveflow64 library not available.")
 
         logger.info("Starting pressure controller communication...")
-        config = ConfigManager().load_config("pressure_controller")
 
         self.config_path = os.path.join(config["Project Path"], "4_Config")  # Set the config path
         self.Calib_path = os.path.join(self.config_path, "Calib_latest.txt")
