@@ -4,7 +4,7 @@ from .drivers.valves import ValveController
 
 class DeviceManager:
     def __init__(self, config):
-        self.pressure_controller = PressureController(config["pressure_port"])
+        self.pressure_controller = PressureController()
         self.flow_sensor = FlowSensor(config["flow_port"])
         self.valve_controller = ValveController(config["valve_port"])
 
