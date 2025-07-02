@@ -21,11 +21,11 @@ class DeviceManager:
     def read_flow(self):
         return self.flow_sensor.read_flow()
 
-    def filtration(self):
+    def valves_filtration(self):
         self.valve_controller.filtration()
         return
 
-    def filling_solution(self):
+    def valves_filling_solution(self):
         self.valve_controller.filling_solution()
         return
 
@@ -33,15 +33,15 @@ class DeviceManager:
         self.valve_controller.venting()
         return
 
-    def all_shut(self):
+    def all_valves_shut(self):
         self.valve_controller.all_shut()
         return
 
-    def all_open(self):
+    def all_valves_open(self):
         self.valve_controller.all_open()
         return
 
-    def disconnect(self):
+    def disconnect_valves(self):
         self.valve_controller.venting()
         return
 

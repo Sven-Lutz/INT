@@ -42,7 +42,7 @@ class PressureController:
         logger.info("Starting pressure controller communication...")
 
         self.config_path = os.path.join(config["Project Path"], "4_Config")  # Set the config path
-        self.Calib_path = os.path.join(self.config_path, "Calib_latest.txt")
+        self.Calib_path = os.path.join(self.config_path, "OB1_Calib_latest.txt")
         self.pressure_limit = config.get("Pressure Limit", None)
 
         self.Calib = (c_double * 1000)()
@@ -50,7 +50,7 @@ class PressureController:
 
         try:
             self._initialize_device()
-            self._load_calibration(config)
+            self._load_calibration()
         except Exception as e:
             logger.error(f"Failed to initialize pressure controller: {e}")
             raise
