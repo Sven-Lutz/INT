@@ -31,3 +31,9 @@ class ValveController:
         rly02.turn_relay_1_on()
         rly02.turn_relay_2_on()
         return
+
+def main():
+    rly02.turn_relay_1_on()
+    rly02.turn_relay_2_off()
+if __name__ =="__main__":
+    main()
