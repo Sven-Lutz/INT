@@ -10,7 +10,7 @@ class DeviceManager:
         valve_config = cfg_mgr.load_config("valves")
         pressure_config = cfg_mgr.load_config("pressure_controller")
 
-        self.pressure_controller = PressureController(pressure_config)
+        #self.pressure_controller = PressureController(pressure_config)
         #self.flow_sensor = FlowSensor()
         self.valve_controller = ValveController(valve_config)
 

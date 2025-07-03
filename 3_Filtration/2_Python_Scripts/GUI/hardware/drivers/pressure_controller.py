@@ -44,6 +44,9 @@ class PressureController:
         self.config_path = os.path.join(config["Project Path"], "4_Config")  # Set the config path
         self.Calib_path = os.path.join(self.config_path, "OB1_Calib_latest.txt")
         self.pressure_limit = config.get("Pressure Limit", None)
+        if self.pressure_limit is None:
+            logger.error("Pressure Limit not found")
+            raise LookupError("Pressure Limit not Found")
 
         self.Calib = (c_double * 1000)()
         self.Instr_ID = c_int32()
