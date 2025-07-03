@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QProgressBar, QLabel
 
 class RightFrame(QFrame):
-    def __init__(self):
+    def __init__(self, config):
         super().__init__()
         layout = QVBoxLayout(self)
 

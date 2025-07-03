@@ -25,10 +25,9 @@ def main():
 
     logger.info("Starting application...")
     dvm = DeviceManager()
-
-    dvm.set_pressure(pressure=200, channel=1)
-
-    time.sleep(1)
-    dvm.get_pressure(channel=1)
+    dvm.valves_filtration()
+    dvm.set_pressure(pressure=25, channel=1)
+    #time.sleep(1)
+    #dvm.get_pressure(channel=1)
 if __name__ == "__main__":
     main()
