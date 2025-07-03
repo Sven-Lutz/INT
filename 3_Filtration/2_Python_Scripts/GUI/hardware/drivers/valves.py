@@ -19,32 +19,32 @@ class ValveController:
 
     def filtration(self):
         logger.debug("Setting valves to filtration mode.")
-        self.relais.turn_relay_1_off()
-        self.relais.turn_relay_2_on()
+        self.relais.turn_relay_1_on()
+        self.relais.turn_relay_2_off()
         return
 
     def filling_solution(self):
         logger.debug("Setting valves to filling mode.")
-        self.relais.turn_relay_1_on()
-        self.relais.turn_relay_2_off()
+        self.relais.turn_relay_1_off()
+        self.relais.turn_relay_2_on()
         return
 
     def venting(self):
         logger.debug("Setting valves to venting mode.")
-        self.relais.turn_relay_1_on()
-        self.relais.turn_relay_2_off()
+        self.relais.turn_relay_1_off()
+        self.relais.turn_relay_2_on()
         return
 
     def all_shut(self):
         logger.debug("Turning all valves off.")
-        self.relais.turn_relay_1_off()
-        self.relais.turn_relay_2_off()
+        self.relais.turn_relay_1_on()
+        self.relais.turn_relay_2_on()
         return
 
     def all_open(self):
         logger.debug("Turning all valves on.")
-        self.relais.turn_relay_1_on()
-        self.relais.turn_relay_2_on()
+        self.relais.turn_relay_1_off()
+        self.relais.turn_relay_2_off()
         return
 
     def disconnect(self):

@@ -1,0 +1,9 @@
+2025-07-03 10:46:35,510 - __main__ - INFO - Starting application...
+2025-07-03 10:46:35,512 - hardware.drivers.pressure_controller - INFO - Starting pressure controller communication...
+2025-07-03 10:46:35,512 - hardware.drivers.pressure_controller - DEBUG - Calling OB1_Initialization...
+2025-07-03 10:46:36,076 - hardware.drivers.pressure_controller - DEBUG - OB1 initialized with ID: 0
+2025-07-03 10:46:36,077 - hardware.drivers.pressure_controller - DEBUG - Loading calibration from C:\Users\Operator\PelliKAn\3_Filtration\4_Config\OB1_Calib_latest.txt
+2025-07-03 10:46:36,077 - hardware.drivers.pressure_controller - INFO - Pressure controller communication successfully started
+2025-07-03 10:46:36,078 - hardware.drivers.valves - INFO - ValveController initialized.
+2025-07-03 10:46:36,078 - hardware.drivers.pressure_controller - DEBUG - Setting pressure: 200 on channel 1
+2025-07-03 10:46:37,090 - hardware.drivers.pressure_controller - DEBUG - Read pressure: 0.0 from channel 1

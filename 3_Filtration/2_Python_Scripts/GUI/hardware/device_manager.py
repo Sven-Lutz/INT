@@ -1,25 +1,28 @@
-from drivers.pressure_controller import PressureController
-from drivers.flow_sensor import FlowSensor
-from drivers.valves import ValveController
+from hardware.drivers.pressure_controller import PressureController
+from hardware.drivers.flow_sensor import FlowSensor
+from hardware.drivers.valves import ValveController
 
 from utils.config_manager import ConfigManager
 
 class DeviceManager:
-    def __init__(self, config):
+    def __init__(self):
         cfg_mgr = ConfigManager()
         valve_config = cfg_mgr.load_config("valves")
         pressure_config = cfg_mgr.load_config("pressure_controller")
 
         self.pressure_controller = PressureController(pressure_config)
-        self.flow_sensor = FlowSensor()
+        #self.flow_sensor = FlowSensor()
         self.valve_controller = ValveController(valve_config)
 
-    def set_pressure(self, value):
-        self.pressure_controller.set_pressure(value)
+    def set_pressure(self, pressure, channel):
+        self.pressure_controller.set_pressure(pressure, channel)
         return
 
-    def read_flow(self):
-        return self.flow_sensor.read_flow()
+    def get_pressure(self, channel):
+        self.pressure_controller.get_pressure(channel)
+        return
+    #def read_flow(self):
+        #return self.flow_sensor.read_flow()
 
     def valves_filtration(self):
         self.valve_controller.filtration()
