@@ -26,6 +26,8 @@ def main():
     logger.info("Starting application...")
     dvm = DeviceManager()
     dvm.all_valves_shut()
+    #dvm.valves_filling_solution()
+    #dvm.valves_filtration()
     #dvm.set_pressure(pressure=300, channel=1)
     #time.sleep(1)
     #dvm.get_pressure(channel=1)
