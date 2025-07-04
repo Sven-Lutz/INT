@@ -1,0 +1,3 @@
+2025-07-03 14:22:53,889 - __main__ - INFO - Starting application...
+2025-07-03 14:22:53,890 - hardware.drivers.valves - INFO - ValveController initialized.
+2025-07-03 14:22:53,890 - hardware.drivers.valves - DEBUG - Turning all valves off.

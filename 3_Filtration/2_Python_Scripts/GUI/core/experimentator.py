@@ -2,7 +2,7 @@
 ###The Libraries###
 ###################
 
-import Configurator
+import configurator
 import time
 import os
 import random
@@ -28,7 +28,7 @@ class Experimentator:
 
 
         self.valve = Configurator.Valve(self)
-        self.OB1 = Configurator.PressureController(self.config)
+        self.OB1 = Configurator.PressureController()
         self.BFS = Configurator.FlowSensor()
 
 
