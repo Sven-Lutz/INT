@@ -7,22 +7,37 @@ PORT = "COM5"
 
 flow = propar.instrument(PORT)
 
-print(flow.id)
+#print(flow.id)
+"""
 params = [{'proc_nr':  33, 'parm_nr': 0, 'parm_type': propar.PP_TYPE_FLOAT}]
+values = flow.read_parameters(params)
+print(values)
+"""
+
+params = {"Unknown (Maybe also Flow)": {'proc_nr':  33, 'parm_nr': 0, 'parm_type': propar.PP_TYPE_FLOAT},
+           "Volumne Flow": {'proc_nr':  33, 'parm_nr': 6, 'parm_type': propar.PP_TYPE_FLOAT},
+           "Normal Flow": {'proc_nr':  33, 'parm_nr': 0, 'parm_type': propar.PP_TYPE_FLOAT},
+           "Totalizer Value": {'proc_nr':  33, 'parm_nr': 0, 'parm_type': propar.PP_TYPE_FLOAT}}
 
 # Note that this uses the read_parameters function.
-values = flow.read_parameters(params)
+for param,val in params.items():
+    #print(param)
+    #print(val)
+    values = flow.read_parameters([val])
+    print(f"{param}: {values[0]["data"]}")
+    #print(values[0]["data"])
+#for p in params:
 
-# Display the values returned by the read_parameters function. A single 'value' includes
-# the original fields of the parameters supplied to the request, with the data stored in
-# the value['data'] field.
-for value in values:
-  print(value)
+    #values = flow.read_parameters(p)
+
+    #for value in values:
+        #print(value)
+
 
 value = flow.db.get_all_parameters()
 
-for sublist in value:
-    print(sublist)
+#for sublist in value:
+    #print(sublist)
 
 #{'dde_nr': 152, 'proc_nr': 33, 'parm_nr': 6, 'parm_type': 65, 'parm_name': 'Volume flow'}
 #{'dde_nr': 151, 'proc_nr': 33, 'parm_nr': 5, 'parm_type': 65, 'parm_name': 'Normal volume flow'}
