@@ -53,7 +53,9 @@ class Experimentator:
         def: This function sets some initial parameters. It is called every time an operation is performed,
              since each operation has different initial values.
         """
+        print("Experiment is being set up")
         self.temp, _ = self.writer.read_yaml("temp")                            # Read temp.yaml
+        print(self.temp)
         self.init_vol = self.temp["Current Vessel Volume"]                      # Get the initial volume
         self.set_flow = self.temp["Set Flow"]                                   # Get the set flow
         print(f"Current volume in vessel: {round(self.init_vol, 3)} uL")
@@ -159,8 +161,8 @@ class Experimentator:
         final_vol = self.init_vol + tot_changed_vol if operation == "push" else self.init_vol - tot_changed_vol         # Calculate the final volume
         self.temp.update({"Final Volume": final_vol})                                                                   # Update the final volume in the temp dict
 
-        if self.temp["Bottle Volume"]*1000-tot_changed_vol<150000:                                                      # Make sure there is enough water left in the bottles
-            raise ValueError(f"VOLUME IN BOTTLE TOO SMALL: remaining volume is {self.temp['Bottle Volume']*1000-tot_changed_vol}. Refill water bottle and empty waste bottle.")
+        if operation == "push" and self.temp["Bottle Volume"]*1000-tot_changed_vol<150000:                                                      # Make sure there is enough water left in the bottles
+            raise ValueError(f"VOLUME IN BOTTLE TOO SMALL: bottle volume is {self.temp['Bottle Volume']*1000}, total volume will be {tot_changed_vol}, remaining volume is {self.temp['Bottle Volume']*1000-tot_changed_vol}. Refill water bottle and empty waste bottle.")
 
         if operation == "suck" and final_vol < 0:                                                                       # Make sure there is enough water left in the vessel
             raise ValueError(f"REMAINING VOLUME WILL BE NEGATIVE: Max removal is {self.init_vol} µL")
@@ -263,6 +265,7 @@ class Experimentator:
         def: This function will fill the vessel completely.
         """
         self.setup_experiment()
+        self.max_vol = self.config["Containers"][self.temp["Selected Container"]]["Maximum Volume"]
         fillable_vol = self.max_vol-self.init_vol                       # Calculate the fillable volume
         self.change_amount("push", fillable_vol)               # Fill the vessel completely
         print("SUCCESS: Vessel completely filled")
@@ -285,6 +288,8 @@ class Experimentator:
         def: This function removes the water of the vessel completely.
         """
         self.setup_experiment()
+        print(self.temp)
+        print(type(self.temp))
         fillable_vol = self.init_vol-self.temp["Safety Volume"]                                               # Calculate fillable volume and reduce it by a security margin to avoid bubbles
         self.change_amount("suck", fillable_vol)                               # Empty vessel
         print("SUCCESS: Vessel completely emptied")
@@ -342,9 +347,11 @@ class Experimentator:
         while time.time() - start_time < waiting_time_sec:
             delta = time.time() - start_time
             self.temp.update({"Remaining PVA Time": waiting_time_sec - delta})  # Update the temp
+            print(self.temp.get("Remaining PVA Time"))
             time.sleep(0.1)
 
         self.temp.update({"Remaining PVA Time": 0})  # Set the remaining time to zero, the loop may not excaclty go to zero
+        print(self.temp["Remaining PVA Time"])
         return
 
 def main():

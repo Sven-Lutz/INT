@@ -156,7 +156,7 @@ class ParameterFrame(tk.LabelFrame):
 
         self.entries = {
             "Maximum Volume [ul]:":         [self.config["Containers"][self.temp["Selected Container"]]["Maximum Volume"], "Maximum Volume", "readonly"],              # Structure: {label: [initial value, config key, state]}
-            "Attachment Volume [ul]:":      [self.config["Attachment Volume"], "Attachment Volume", "normal"],
+            "Attachment Volume [ul]:":      [self.config["Containers"][self.temp["Selected Container"]]["Attachment Volume"], "Attachment Volume", "normal"],
             "fill Flow [ul/min]:":          [self.config["fill"], "fill", "normal"],
             "attachment Flow [ul/min]:":    [self.config["attachment"], "attachment", "normal"],
             "empty Flow [ul/min]:":         [self.config["empty"], "empty", "normal"],
@@ -443,7 +443,6 @@ class StateVariableFrame(tk.LabelFrame):
         def: This function updates the entries and checkboxes in this frame during the measurement.
         :return:
         """
-        #print(self.temp)
         for label_text, details in self.entries.items():                # Update entries
             value = self.temp.get(details["config_key"], "N/A")         # Retrieve the value from self.temp using the config_key
             if isinstance(value, (int, float)):

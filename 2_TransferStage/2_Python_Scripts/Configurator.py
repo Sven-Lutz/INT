@@ -1,5 +1,4 @@
 import random
-import time
 
 ###################
 ###The Libraries###
@@ -7,11 +6,6 @@ import time
 
 import yaml
 import os
-
-
-import Experiment
-
-from state import pause_event, stop_event                               # Import the shared pause_event from state.py
 
 from pyfirmata import Arduino
 from Elveflow64 import *
@@ -355,6 +349,9 @@ class WritingManager:
         path = self._get_file_path(filename)                # Set the filename
         with open(path, 'r') as f:
             data = yaml.safe_load(f)                        # load the yaml
+            f.close()
+            if data is None:
+                raise ImportError("ERROR: File is corrupted")
         return data, path                                   # return the data and its path
 
     def update_yaml(self, which=None, key=None, new_value=None):
