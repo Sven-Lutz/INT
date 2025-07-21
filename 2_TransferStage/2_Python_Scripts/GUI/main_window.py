@@ -18,6 +18,7 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         self._init_config()                                     # Load configuration settings
         self._init_ui()                                         # Set up the user interface
         self._init_signals_and_devices()                        # Initialize signals and hardware devices
+
         return
 
     def _init_config(self):                                     # Private method to load configuration
@@ -25,14 +26,9 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         self.config = cfg_manager.general_config                # Load the "general" configuration section
         return
 
-    def _init_signals_and_devices(self):
-        self.experiment_manager = ExperimentManager
-        SignalBinder().bind_signals(self.ui["parameter_frame"], self.experiment_manager)
-
-        return
-
     def _init_ui(self):                                                             # Private method to build the UI
         self.ui = UiBuilder.build_main_layout(self, self.config)       # Build and return UI components
+
         #self.top = ui["top"]                                                        # Assign top UI element
         #self.left = ui["left"]                                                      # Assign left UI panel
         #self.right = ui["right"]                                                    # Assign right UI panel
@@ -40,4 +36,10 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
 
         #self.stacked_layout = ui["stacked_layout"]
         #self.main_view = ui["main_view"]
+        return
+
+    def _init_signals_and_devices(self):
+        self.experiment_manager = ExperimentManager()
+        binder = SignalBinder()
+        binder.bind_signals(self.ui["parameter_frame"], self.experiment_manager)
         return

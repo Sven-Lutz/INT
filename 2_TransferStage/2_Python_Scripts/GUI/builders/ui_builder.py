@@ -17,14 +17,12 @@ class UiBuilder:
         layout = QVBoxLayout(central_widget)
 
         project_frame = UiBuilder.build_project_frame(config)
-        state_variable_frame = UiBuilder.build_state_variable_frame(config)
         parameter_frame = UiBuilder.build_parameter_frame(config)
+        state_variable_frame = UiBuilder.build_state_variable_frame(config)
 
         splitter = QSplitter(Qt.Horizontal)
-        left = ParameterFrame(config)
-        right = StateVariableFrame(config)
-        splitter.addWidget(left)
-        splitter.addWidget(right)
+        splitter.addWidget(parameter_frame)
+        splitter.addWidget(state_variable_frame)
 
         layout.addWidget(project_frame)
         layout.addWidget(splitter)

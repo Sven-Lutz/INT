@@ -18,9 +18,9 @@ class ParameterFrame(QFrame):
         self.measurement_label = QLabel("Measurement: 0.0")
         self.experiment_select = QComboBox()
         self.experiment_select.addItems(["add", "remove", "fill", "empty", "automatic"])
+        self.experiment_select.setFixedWidth(120)
 
         layout.addWidget(label)
-        layout.addWidget(self.status_label)
         layout.addWidget(self.experiment_select)
         layout.addWidget(self.start_button)
         layout.addWidget(self.stop_button)

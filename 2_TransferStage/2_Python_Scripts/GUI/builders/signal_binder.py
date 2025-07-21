@@ -1,5 +1,5 @@
 import logging
-from core.signals import UISignals, ExperimentSignals, DataSignals
+from core.signals import ui_signals, experiment_signals, data_signals
 
 logger = logging.getLogger(__name__)
 
@@ -13,16 +13,54 @@ def get_callable_name(callable_obj):
 
 class SignalBinder:
     def bind_signals(self, ui, experiment_manager):
+        """
+        def on_start_clicked():
+            print("Start button clicked (print test)")
+            logger.info("Start button clicked")
+            # Emit signal with selected experiment string
+            ui_signals.start_clicked.emit(ui.selected_experiment())
+            return
+
+        def log_start_signal(*args, **kwargs):
+            logger.info(f"UISignals.start_clicked emitted with args: {args}, kwargs: {kwargs}")
+            return
+
+        def on_stop_clicked():
+            logger.info("Stop button clicked")
+            ui_signals.stop_clicked.emit()
+            return
+
+        def log_stop_signal(*args, **kwargs):
+            logger.info(f"UISignals.stop_clicked emitted with args: {args}, kwargs: {kwargs}")
+            return
+
+        # Connect UI buttons to emit signals and log clicks
+        ui.start_button.clicked.connect(on_start_clicked)
+        ui.stop_button.clicked.connect(on_stop_clicked)
+
+        # Connect signals to log their emission
+        ui_signals.start_clicked.connect(log_start_signal)
+        ui_signals.stop_clicked.connect(log_stop_signal)
+
+        # Connect signals to experiment manager methods
+        ui_signals.start_clicked.connect(experiment_manager.start_experiment)
+        ui_signals.stop_clicked.connect(experiment_signals.stop_experiment)
+
+        return
+        """
+        logger.debug(type(ui))
+        logger.debug(type(experiment_manager))
         # Map signals to their slots
+        logger.debug(ui.selected_experiment())
         bindings = {
-            ui.start_button.clicked: lambda: UISignals.start_clicked.emit(ui.selected_experiment()),
-            ui.stop_button.clicked: UISignals.stop_clicked,
+            ui.start_button.clicked: lambda: (logger.debug("Start button clicked"), ui_signals.start_clicked.emit(ui.selected_experiment())),
+            ui.stop_button.clicked: lambda: (logger.debug("Stop button clicked"), ui_signals.stop_clicked.emit()),
 
-            #UISignals.start_clicked: experiment_manager.start_experiment,
-            #UISignals.stop_clicked: ExperimentSignals.stop_experiment,
+            ui_signals.start_clicked: experiment_manager.start_experiment,
+            ui_signals.stop_clicked: experiment_signals.stop_experiment,
 
-            #DataSignals.update_status: ui.set_status,
-            #DataSignals.update_measurement: ui.set_measurement,
+            data_signals.update_status: ui.set_status,
+            data_signals.update_measurement: ui.set_measurement,
         }
 
         for signal, slot in bindings.items():
@@ -35,3 +73,4 @@ class SignalBinder:
                 sig_name = type(signal).__name__
                 slot_name = get_callable_name(slot)
                 logger.error(f"Failed to connect signal '{sig_name}' to slot '{slot_name}': {e}")
+

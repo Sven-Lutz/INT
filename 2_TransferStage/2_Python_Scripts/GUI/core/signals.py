@@ -14,6 +14,7 @@ class ExperimentSignals(QObject):
     pause_signal = Signal()
     experiment_done = Signal()
     stop_experiment = Signal()
+
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
 
@@ -31,7 +32,7 @@ class HardwareSignals(QObject):
         super().__init__()                                      # Call base class constructor
 
 class DataSignals(QObject):
-    update_status = Signal()
+    update_status = Signal(str)
     update_measurement = Signal()
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
