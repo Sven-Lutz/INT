@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QProgressBar, QLabel
+from PySide6.QtCore import Qt
 
 class StateVariableFrame(QFrame):
     def __init__(self, initial_state):
@@ -9,6 +10,12 @@ class StateVariableFrame(QFrame):
 
 
     def _build_ui(self, state):
+
+        label = QLabel("State Variables")
+        label.setStyleSheet("font-size: 18px; font-weight: bold; padding: 5px; background-color: lightyellow;")
+        label.setAlignment(Qt.AlignTop)
+        self.layout.addWidget(label)
+
         for key, value in state.items():
             label = QLabel(f"{key}: {value}")
             self.layout.addWidget(label)

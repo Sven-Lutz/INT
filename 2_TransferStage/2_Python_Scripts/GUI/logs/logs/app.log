@@ -1,0 +1,5 @@
+2025-07-21 12:37:55,690 - __main__ - INFO - Starting application...
+2025-07-21 12:37:55,713 - utils.config_manager - INFO - loading general.yaml
+2025-07-21 12:37:55,726 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot '<lambda>'
+2025-07-21 12:37:55,726 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot 'Signal'
+2025-07-21 12:38:01,831 - __main__ - INFO - Application exited with code 0

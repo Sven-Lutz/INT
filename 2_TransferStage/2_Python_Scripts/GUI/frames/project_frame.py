@@ -6,8 +6,12 @@ class ProjectFrame(QFrame):
         super().__init__()
 
         layout = QHBoxLayout(self)
+
         self.path_display = QLineEdit(config["Project Path"])
         self.path_display.setReadOnly(True)
+
         layout.addWidget(self.path_display)
+
         self.setSizePolicy(Qtw.QSizePolicy.Preferred, Qtw.QSizePolicy.Maximum)
         self.setStyleSheet("background-color: lightgreen;")
+        return

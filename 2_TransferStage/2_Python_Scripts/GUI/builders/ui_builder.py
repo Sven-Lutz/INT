@@ -1,8 +1,5 @@
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QPushButton, QSplitter, QStackedLayout, QSizePolicy
 
-from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QPushButton, QSplitter,
-    QStackedLayout, QSizePolicy
-)
 from PySide6.QtCore import Qt
 
 from frames.project_frame import ProjectFrame
@@ -20,15 +17,23 @@ class UiBuilder:
         layout = QVBoxLayout(central_widget)
 
         project_frame = UiBuilder.build_project_frame(config)
-
-
         state_variable_frame = UiBuilder.build_state_variable_frame(config)
+        parameter_frame = UiBuilder.build_parameter_frame(config)
+
+        splitter = QSplitter(Qt.Horizontal)
+        left = ParameterFrame(config)
+        right = StateVariableFrame(config)
+        splitter.addWidget(left)
+        splitter.addWidget(right)
 
         layout.addWidget(project_frame)
-        layout.addWidget(state_variable_frame)
+        layout.addWidget(splitter)
+
         return {
-            "top": project_frame
-        }
+            "project_frame": project_frame,
+            "state_variable_frame": state_variable_frame,
+            "parameter_frame": parameter_frame,
+            }
 
     @staticmethod
     def build_project_frame(config):
@@ -36,3 +41,6 @@ class UiBuilder:
     @staticmethod
     def build_state_variable_frame(config):
         return StateVariableFrame(config)
+    @staticmethod
+    def build_parameter_frame(config):
+        return ParameterFrame(config)
