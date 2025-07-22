@@ -28,8 +28,6 @@ class ConfigManager:
         self._load_general_config()
 
     def _load_general_config(self):
-
-
         general_path = os.path.join(self.config_dir, "general.yaml")
         if os.path.exists(general_path):
             logger.info("loading general.yaml")
@@ -38,6 +36,8 @@ class ConfigManager:
         else:
             logger.info("loading empty general.yaml")
             self.general_config = {}
+        self._configs["general"] = self.general_config
+        return
 
     def load_config(self, name):
         if name in self._configs:
@@ -62,3 +62,32 @@ class ConfigManager:
     def get_all_configs(self):
         # Return all loaded configs (only those actually loaded)
         return dict(self._configs)
+
+    def update_config(self, name, key, value, save=False):
+        if name not in self._configs:
+            logger.error(f"Config '{name}' not loaded. Cannot update.")
+            return
+
+        config = self._configs[name]
+        config[key] = value
+        logger.info(f"Updated '{key}' in config '{name}' to: {value}")
+
+        if save:
+            self.save_config(name)
+        return
+
+    def save_config(self, name):
+        if name not in self._configs:
+            logger.error(f"Cannot save. Config '{name}' not loaded.")
+            return
+
+        path = os.path.join(self.config_dir, f"{name}.yaml")
+        to_save = self._configs[name]
+
+        try:
+            with open(path, "w") as f:
+                yaml.safe_dump(to_save, f)
+            logger.info(f"Saved config '{name}' to disk.")
+        except Exception as e:
+            logger.error(f"Failed to save config '{name}': {e}")
+        return

@@ -1,3 +1,175 @@
 2025-07-22 11:28:51,492 - __main__ - INFO - Starting application...
 2025-07-22 11:28:51,518 - utils.config_manager - INFO - loading general.yaml
 2025-07-22 11:28:56,103 - __main__ - INFO - Application exited with code 0
+2025-07-22 12:50:03,627 - __main__ - INFO - Starting application...
+2025-07-22 12:50:03,687 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 12:50:12,654 - __main__ - INFO - Application exited with code 0
+2025-07-22 12:50:47,297 - __main__ - INFO - Starting application...
+2025-07-22 12:50:47,323 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 12:51:06,674 - __main__ - INFO - Application exited with code 0
+2025-07-22 12:51:41,306 - __main__ - INFO - Starting application...
+2025-07-22 12:51:41,331 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 12:51:54,787 - __main__ - INFO - Application exited with code 0
+2025-07-22 12:53:54,414 - __main__ - INFO - Starting application...
+2025-07-22 12:53:54,456 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 12:53:57,981 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:03:39,516 - __main__ - INFO - Starting application...
+2025-07-22 13:03:39,578 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:03:39,712 - builders.ui_builder - ERROR - Failed to load ui/widgets.ui
+2025-07-22 13:03:46,583 - __main__ - INFO - Starting application...
+2025-07-22 13:03:46,609 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:04:33,458 - __main__ - INFO - Starting application...
+2025-07-22 13:04:33,486 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:04:51,367 - __main__ - INFO - Starting application...
+2025-07-22 13:04:51,394 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:05:01,852 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:05:15,658 - __main__ - INFO - Starting application...
+2025-07-22 13:05:15,685 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:05:21,325 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:17:21,688 - __main__ - INFO - Starting application...
+2025-07-22 13:17:21,720 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:17:33,987 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:18:22,597 - __main__ - INFO - Starting application...
+2025-07-22 13:18:22,625 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:19:27,843 - __main__ - INFO - Starting application...
+2025-07-22 13:19:27,872 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:20:04,806 - __main__ - INFO - Starting application...
+2025-07-22 13:20:04,835 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:20:22,544 - __main__ - INFO - Starting application...
+2025-07-22 13:20:22,573 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:20:39,160 - __main__ - INFO - Starting application...
+2025-07-22 13:20:39,189 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:20:45,567 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:21:08,436 - __main__ - INFO - Starting application...
+2025-07-22 13:21:08,465 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:21:08,532 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:21:11,640 - builders.signal_binder - INFO - Container selected: 5 Sample, maximum volume set to 10000
+2025-07-22 13:21:15,040 - builders.signal_binder - INFO - Container selected: 10 Sample, maximum volume set to 10000
+2025-07-22 13:21:16,350 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:21:28,985 - __main__ - INFO - Starting application...
+2025-07-22 13:21:29,012 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:21:29,080 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:21:31,257 - builders.signal_binder - INFO - Container selected: 5 Sample, maximum volume set to 100000
+2025-07-22 13:21:32,536 - builders.signal_binder - INFO - Container selected: 10 Sample, maximum volume set to 1000000
+2025-07-22 13:21:35,073 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:21:36,353 - builders.signal_binder - INFO - Container selected: 5 Sample, maximum volume set to 100000
+2025-07-22 13:21:37,705 - builders.signal_binder - INFO - Container selected: 10 Sample, maximum volume set to 1000000
+2025-07-22 13:21:44,576 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:23:17,136 - __main__ - INFO - Starting application...
+2025-07-22 13:23:17,161 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:23:17,218 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:23:51,123 - __main__ - INFO - Starting application...
+2025-07-22 13:23:51,149 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:23:51,211 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:24:23,592 - __main__ - INFO - Starting application...
+2025-07-22 13:24:23,618 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:24:23,674 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:24:41,314 - __main__ - INFO - Starting application...
+2025-07-22 13:24:41,339 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:24:41,396 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:25:02,666 - __main__ - INFO - Starting application...
+2025-07-22 13:25:02,692 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:25:02,750 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:25:08,116 - __main__ - INFO - Starting application...
+2025-07-22 13:25:08,140 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:25:08,197 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:25:14,303 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:27:36,198 - __main__ - INFO - Starting application...
+2025-07-22 13:27:36,224 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:27:36,291 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:29:41,806 - __main__ - INFO - Starting application...
+2025-07-22 13:29:41,831 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:29:41,901 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:29:59,673 - __main__ - INFO - Starting application...
+2025-07-22 13:29:59,698 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:29:59,756 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:30:23,828 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:30:26,127 - __main__ - INFO - Starting application...
+2025-07-22 13:30:26,151 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:30:26,208 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:30:29,304 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:31:34,182 - __main__ - INFO - Starting application...
+2025-07-22 13:31:34,210 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:31:34,269 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:33:34,374 - __main__ - INFO - Starting application...
+2025-07-22 13:33:34,399 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:33:34,478 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:33:54,834 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:34:58,337 - __main__ - INFO - Starting application...
+2025-07-22 13:34:58,360 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:34:58,418 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:35:16,051 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:41:36,811 - __main__ - INFO - Starting application...
+2025-07-22 13:41:36,839 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:41:36,920 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:41:52,953 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:42:24,570 - __main__ - INFO - Starting application...
+2025-07-22 13:42:24,596 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:42:24,654 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:42:27,202 - builders.signal_binder - INFO - Config update requested: PVA Waiting Time = 10
+2025-07-22 13:42:48,242 - builders.signal_binder - INFO - Config update requested: PVA Waiting Time = 1000
+2025-07-22 13:42:51,649 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:53:23,787 - __main__ - INFO - Starting application...
+2025-07-22 13:53:23,813 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:53:23,895 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:53:51,895 - __main__ - INFO - Starting application...
+2025-07-22 13:53:51,921 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:53:51,983 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:55:58,423 - __main__ - INFO - Starting application...
+2025-07-22 13:55:58,455 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:55:58,511 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:56:06,436 - builders.signal_binder - INFO - Config update requested: PVA Waiting Time = 10
+2025-07-22 13:56:19,300 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:57:42,822 - __main__ - INFO - Starting application...
+2025-07-22 13:57:42,851 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:57:42,906 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:57:47,360 - builders.signal_binder - INFO - Config update requested: PVA Waiting Time = 10
+2025-07-22 13:57:49,318 - __main__ - INFO - Application exited with code 0
+2025-07-22 13:57:56,545 - __main__ - INFO - Starting application...
+2025-07-22 13:57:56,570 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 13:57:56,627 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 13:57:59,008 - builders.signal_binder - INFO - Config update requested: PVA Waiting Time = 10
+2025-07-22 13:58:00,733 - __main__ - INFO - Application exited with code 0
+2025-07-22 14:00:32,303 - __main__ - INFO - Starting application...
+2025-07-22 14:00:32,330 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 14:00:32,414 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 14:00:34,746 - utils.config_manager - ERROR - Config 'general' not loaded. Cannot update.
+2025-07-22 14:00:34,747 - builders.signal_binder - INFO - Config update requested: PVA Waiting Time = 10
+2025-07-22 14:00:59,843 - __main__ - INFO - Application exited with code 0
+2025-07-22 14:01:14,149 - __main__ - INFO - Starting application...
+2025-07-22 14:01:14,175 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 14:01:14,233 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 14:01:17,051 - utils.config_manager - ERROR - Config 'general.yaml' not loaded. Cannot update.
+2025-07-22 14:01:17,052 - builders.signal_binder - INFO - Config update requested: PVA Waiting Time = 10
+2025-07-22 14:01:22,649 - __main__ - INFO - Application exited with code 0
+2025-07-22 14:03:01,818 - __main__ - INFO - Starting application...
+2025-07-22 14:03:01,843 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 14:03:01,900 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 14:03:04,525 - utils.config_manager - ERROR - Config 'general' not loaded. Cannot update.
+2025-07-22 14:03:04,526 - builders.signal_binder - INFO - Config update requested: PVA Waiting Time = 10
+2025-07-22 14:03:22,532 - __main__ - INFO - Application exited with code 0
+2025-07-22 14:03:24,743 - __main__ - INFO - Starting application...
+2025-07-22 14:03:24,767 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 14:03:24,825 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 14:03:27,342 - utils.config_manager - ERROR - Config 'general' not loaded. Cannot update.
+2025-07-22 14:03:27,343 - builders.signal_binder - INFO - Config update requested: PVA Waiting Time = 10
+2025-07-22 14:03:29,630 - __main__ - INFO - Application exited with code 0
+2025-07-22 14:05:10,653 - __main__ - INFO - Starting application...
+2025-07-22 14:05:10,680 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 14:05:10,744 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 14:05:14,255 - utils.config_manager - INFO - Updated 'PVA Waiting Time' in config 'general' to: 10
+2025-07-22 14:05:14,263 - utils.config_manager - INFO - Saved config 'general' to disk.
+2025-07-22 14:05:14,263 - builders.signal_binder - INFO - Config update requested: PVA Waiting Time = 10
+2025-07-22 14:05:34,208 - __main__ - INFO - Application exited with code 0
+2025-07-22 14:06:10,742 - __main__ - INFO - Starting application...
+2025-07-22 14:06:10,769 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 14:06:10,842 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 14:06:15,440 - utils.config_manager - INFO - Updated 'PVA Waiting Time' in config 'general' to: 60
+2025-07-22 14:06:15,449 - utils.config_manager - INFO - Saved config 'general' to disk.
+2025-07-22 14:06:15,450 - builders.signal_binder - INFO - Config update requested: PVA Waiting Time = 60
+2025-07-22 14:06:29,521 - builders.signal_binder - INFO - Container selected: 10 Sample, maximum volume set to 1000000
+2025-07-22 14:06:39,378 - __main__ - INFO - Application exited with code 0
+2025-07-22 14:06:51,970 - __main__ - INFO - Starting application...
+2025-07-22 14:06:51,994 - utils.config_manager - INFO - loading general.yaml
+2025-07-22 14:06:52,057 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-22 14:06:58,313 - __main__ - INFO - Application exited with code 0

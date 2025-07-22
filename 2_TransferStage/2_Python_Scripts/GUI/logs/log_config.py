@@ -12,8 +12,7 @@ def configure_logging():
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
 
-    # Avoid duplicate handlers
-    if root_logger.handlers:
+    if root_logger.handlers:                                # avoid duplicate handlers
         return
 
     formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")

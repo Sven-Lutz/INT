@@ -12,65 +12,36 @@ def get_callable_name(callable_obj):
         return str(callable_obj)
 
 class SignalBinder:
-    def bind_signals(self, ui, experiment_manager):
-        """
-        def on_start_clicked():
-            print("Start button clicked (print test)")
-            logger.info("Start button clicked")
-            # Emit signal with selected experiment string
-            ui_signals.start_clicked.emit(ui.selected_experiment())
-            return
-
-        def log_start_signal(*args, **kwargs):
-            logger.info(f"UISignals.start_clicked emitted with args: {args}, kwargs: {kwargs}")
-            return
-
-        def on_stop_clicked():
-            logger.info("Stop button clicked")
-            ui_signals.stop_clicked.emit()
-            return
-
-        def log_stop_signal(*args, **kwargs):
-            logger.info(f"UISignals.stop_clicked emitted with args: {args}, kwargs: {kwargs}")
-            return
-
-        # Connect UI buttons to emit signals and log clicks
-        ui.start_button.clicked.connect(on_start_clicked)
-        ui.stop_button.clicked.connect(on_stop_clicked)
-
-        # Connect signals to log their emission
-        ui_signals.start_clicked.connect(log_start_signal)
-        ui_signals.stop_clicked.connect(log_stop_signal)
-
-        # Connect signals to experiment manager methods
-        ui_signals.start_clicked.connect(experiment_manager.start_experiment)
-        ui_signals.stop_clicked.connect(experiment_signals.stop_experiment)
-
+    def __init__(self, ui, experiment_manager, config):
+        self.ui = ui
+        self.config = config
+        self.experiment_manager = experiment_manager
         return
-        """
-        logger.debug(type(ui))
-        logger.debug(type(experiment_manager))
-        # Map signals to their slots
-        logger.debug(ui.selected_experiment())
-        bindings = {
-            ui.start_button.clicked: lambda: (logger.debug("Start button clicked"), ui_signals.start_clicked.emit(ui.selected_experiment())),
-            ui.stop_button.clicked: lambda: (logger.debug("Stop button clicked"), ui_signals.stop_clicked.emit()),
 
-            ui_signals.start_clicked: experiment_manager.start_experiment,
-            ui_signals.stop_clicked: experiment_signals.stop_experiment,
+    def bind_signals(self):
+        self._bind_ui_to_signals()
+        return
 
-            data_signals.update_status: ui.set_status,
-            data_signals.update_measurement: ui.set_measurement,
-        }
+    def _bind_ui_to_signals(self):
+        self.ui.containerComboBox.currentTextChanged.connect(self._oncontainer_changed)
+        self.ui.soakTimeLineEdit.editingFinished.connect(self._on_soak_time_changed)
+        return
 
-        for signal, slot in bindings.items():
-            try:
-                signal.connect(slot)
-                sig_name = type(signal).__name__
-                slot_name = get_callable_name(slot)
-                logger.info(f"Connected signal '{sig_name}' to slot '{slot_name}'")
-            except Exception as e:
-                sig_name = type(signal).__name__
-                slot_name = get_callable_name(slot)
-                logger.error(f"Failed to connect signal '{sig_name}' to slot '{slot_name}': {e}")
+
+    def _oncontainer_changed(self,container_name):
+        volume = self.config["Containers"].get(container_name, None).get("Maximum Volume", None)
+        self.ui.maxVolLineEdit.setText(str(volume))
+
+        logger.info(f"Container selected: {container_name}, maximum volume set to {volume}")
+        ui_signals.container_changed.emit(container_name)
+
+    def _on_soak_time_changed(self):
+        try:
+            value = int(self.ui.soakTimeLineEdit.text())
+            ui_signals.config_changed.emit("general", "PVA Waiting Time", value, True)
+            logger.info(f"Config update requested: PVA Waiting Time = {value}")
+        except ValueError:
+            logger.error("Invalid value entered for PVA Waiting Time")
+
+
 

@@ -19,9 +19,11 @@ class ExperimentSignals(QObject):
         super().__init__()                                      # Call base class constructor
 
 class UISignals(QObject):
-    start_clicked = Signal(str)
+    """start_clicked = Signal(str)
     stop_clicked = Signal()
-    pause_clicked = Signal()
+    pause_clicked = Signal()"""
+    container_changed = Signal(str)
+    config_changed = Signal(str, str, object, bool)                # str and object are representing key, new_value
 
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor

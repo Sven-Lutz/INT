@@ -3,16 +3,18 @@ Containers:
     MUX Valve: 1
     Maximum Volume: 10000
     Small Volume: 5000
-  5 Sample:
-    MUX Valve: 2
-    Maximum Volume: 10000
-    Small Volume: 5000
   10 Sample:
     MUX Valve: 3
-    Maximum Volume: 10000
+    Maximum Volume: 1000000
+    Small Volume: 5000
+  5 Sample:
+    MUX Valve: 2
+    Maximum Volume: 100000
     Small Volume: 5000
 D Term: 0.05
+Default Container: 1 Sample
 I Term: 6
+Operations: add remove fill empty automatic
 P Term: 1.4
-PVA Waiting Time: 1
+PVA Waiting Time: 60
 Project Path: C:\Users\Operator\PelliKAn\2_TransferStage

@@ -51,12 +51,12 @@
              <string>Maximum Volume</string>
             </property>
             <property name="buddy">
-             <cstring>lineEdit</cstring>
+             <cstring>maxVolLineEdit</cstring>
             </property>
            </widget>
           </item>
           <item row="1" column="1">
-           <widget class="QLineEdit" name="lineEdit">
+           <widget class="QLineEdit" name="maxVolLineEdit">
             <property name="readOnly">
              <bool>true</bool>
             </property>
@@ -68,12 +68,12 @@
              <string>Soaking Time</string>
             </property>
             <property name="buddy">
-             <cstring>lineEdit_2</cstring>
+             <cstring>soakTimeLineEdit</cstring>
             </property>
            </widget>
           </item>
           <item row="2" column="1">
-           <widget class="QLineEdit" name="lineEdit_2">
+           <widget class="QLineEdit" name="soakTimeLineEdit">
             <property name="readOnly">
              <bool>false</bool>
             </property>
@@ -87,23 +87,7 @@
            </widget>
           </item>
           <item row="0" column="1">
-           <widget class="QComboBox" name="comboBox">
-            <item>
-             <property name="text">
-              <string>1 Sample</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>5 Samples</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>10 Samples</string>
-             </property>
-            </item>
-           </widget>
+           <widget class="QComboBox" name="containerComboBox"/>
           </item>
           <item row="0" column="0">
            <widget class="QLabel" name="label_8">
@@ -144,25 +128,32 @@
          </layout>
         </item>
         <item>
-         <layout class="QHBoxLayout" name="horizontalLayout_4">
-          <item>
+         <layout class="QGridLayout" name="gridLayout_3">
+          <item row="0" column="0">
            <widget class="QPushButton" name="pushButton">
             <property name="text">
              <string>Start</string>
             </property>
            </widget>
           </item>
-          <item>
+          <item row="0" column="1">
            <widget class="QPushButton" name="pushButton_2">
             <property name="text">
              <string>Pause</string>
             </property>
            </widget>
           </item>
-          <item>
+          <item row="0" column="2">
            <widget class="QPushButton" name="pushButton_3">
             <property name="text">
              <string>Stop</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QPushButton" name="pushButton_4">
+            <property name="text">
+             <string>Flush</string>
             </property>
            </widget>
           </item>
@@ -243,7 +234,7 @@
               <string>Current Volume</string>
              </property>
              <property name="buddy">
-              <cstring>lineEdit</cstring>
+              <cstring>maxVolLineEdit</cstring>
              </property>
             </widget>
            </item>
@@ -260,7 +251,7 @@
               <string>Volume to be changed</string>
              </property>
              <property name="buddy">
-              <cstring>lineEdit</cstring>
+              <cstring>maxVolLineEdit</cstring>
              </property>
             </widget>
            </item>
@@ -277,7 +268,7 @@
               <string>Final Volume </string>
              </property>
              <property name="buddy">
-              <cstring>lineEdit_2</cstring>
+              <cstring>soakTimeLineEdit</cstring>
              </property>
             </widget>
            </item>
@@ -308,7 +299,7 @@
               <string>Measured Flow</string>
              </property>
              <property name="buddy">
-              <cstring>lineEdit_2</cstring>
+              <cstring>soakTimeLineEdit</cstring>
              </property>
             </widget>
            </item>
@@ -339,7 +330,7 @@
               <string>Applied Pressure</string>
              </property>
              <property name="buddy">
-              <cstring>lineEdit</cstring>
+              <cstring>maxVolLineEdit</cstring>
              </property>
             </widget>
            </item>
@@ -356,7 +347,7 @@
               <string>Bottle Volume</string>
              </property>
              <property name="buddy">
-              <cstring>lineEdit</cstring>
+              <cstring>maxVolLineEdit</cstring>
              </property>
             </widget>
            </item>
@@ -401,6 +392,9 @@
              <property name="text">
               <string>Liquid</string>
              </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
+             </property>
             </widget>
            </item>
            <item row="1" column="2">
@@ -428,6 +422,9 @@
             <widget class="QLabel" name="label_15">
              <property name="text">
               <string>Venting</string>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
              </property>
             </widget>
            </item>
@@ -461,6 +458,9 @@
             <widget class="QLabel" name="label_16">
              <property name="text">
               <string>Container</string>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
              </property>
             </widget>
            </item>
