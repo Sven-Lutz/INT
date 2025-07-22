@@ -26,10 +26,11 @@ class MainWindow(QMainWindow):
         # Use findChild to access toggleSwitch inside the loaded UI
         toggle = self.ui.findChild(ToggleSwitch, "toggleSwitch")
         if toggle:
-            print("✅ ToggleSwitch found!", toggle.size())
+            print("ToggleSwitch found!", toggle.size())
             toggle.setStyleSheet("background: pink;")  # make it visible
         else:
-            print("❌ ToggleSwitch not found")
+            print("ToggleSwitch not found")
+
 
     def toggle_changed(self, checked):
         print("Toggle switched:", "ON" if checked else "OFF")

@@ -15,6 +15,9 @@ def main():
     exit_code = app.exec()
 
     logger.info("Application exited with code %d", exit_code)
+    # Flush logs before exit
+    for handler in logging.getLogger().handlers:
+        handler.flush()
     sys.exit(exit_code)
 
 if __name__ == "__main__":
