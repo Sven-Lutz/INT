@@ -1,7 +1,10 @@
+import logging
+
 from PySide6.QtCore import QObject, Signal, QTimer
 
 from operations.dummy_operations.dummy_run import DummyOperation
 
+logger = logging.getLogger(__name__)                            # Create a logger for this module
 
 class BaseOperation(QObject):
     finished = Signal()
@@ -10,6 +13,12 @@ class BaseOperation(QObject):
         super().__init__()
 
     def start(self):
+        raise NotImplementedError
+
+    def pause(self):
+        raise NotImplementedError
+
+    def resume(self):
         raise NotImplementedError
 
     def stop(self):
@@ -22,16 +31,16 @@ class AddOperation(BaseOperation):
         self.dummy.finished.connect(self._done)  # <-- critical line
 
     def start(self):
-        print("AddOperation started")
+        logger.info("AddOperation started")
         self.dummy.start()
 
     def stop(self):
-        print("AddOperation stopped")
+        logger.info("AddOperation stopped")
         self.dummy.stop()
         self.finished.emit()  # Emit manually if interrupted
 
     def _done(self):
-        print("AddOperation finished")
+        logger.info("AddOperation finished")
         self.finished.emit()  # <-- notify OperationManager
 
 class RemoveOperation(BaseOperation):
@@ -41,17 +50,17 @@ class RemoveOperation(BaseOperation):
         self.dummy.finished.connect(self._done)  # <-- critical line
 
     def start(self):
-        print("RemoveOperation started")
+        logger.info("RemoveOperation started")
         self.dummy.start()
         #self.timer.start(3000)  # simulate a 3-second Operation
 
     def stop(self):
-        print("RemoveOperation stopped")
+        logger.info("RemoveOperation stopped")
         self.dummy.stop()
         self.finished.emit()
 
     def _done(self):
-        print("RemoveOperation finished")
+        logger.info("RemoveOperation finished")
         self.finished.emit()  # <-- notify OperationManager
 
 class FillOperation(BaseOperation):
@@ -61,17 +70,17 @@ class FillOperation(BaseOperation):
         self.dummy.finished.connect(self._done)  # <-- critical line
 
     def start(self):
-        print("FillOperation started")
+        logger.info("FillOperation started")
         self.dummy.start()
         #self.timer.start(3000)  # simulate a 3-second Operation
 
     def stop(self):
-        print("FillOperation stopped")
+        logger.info("FillOperation stopped")
         self.dummy.stop()
         self.finished.emit()
 
     def _done(self):
-        print("FillOperation finished")
+        logger.info("FillOperation finished")
         self.finished.emit()  # <-- notify OperationManager
 
 class EmptyOperation(BaseOperation):
@@ -81,17 +90,17 @@ class EmptyOperation(BaseOperation):
         self.dummy.finished.connect(self._done)  # <-- critical line
 
     def start(self):
-        print("EmptyOperation started")
+        logger.info("EmptyOperation started")
         self.dummy.start()
         #self.timer.start(3000)  # simulate a 3-second Operation
 
     def stop(self):
-        print("EmptyOperation stopped")
+        logger.info("EmptyOperation stopped")
         self.dummy.stop()
         self.finished.emit()
 
     def _done(self):
-        print("EmptyOperation finished")
+        logger.info("EmptyOperation finished")
         self.finished.emit()  # <-- notify OperationManager
 
 class AutomaticOperation(BaseOperation):
@@ -101,15 +110,15 @@ class AutomaticOperation(BaseOperation):
         self.dummy.finished.connect(self._done)  # <-- critical line
 
     def start(self):
-        print("AutomaticOperation started")
+        logger.info("AutomaticOperation started")
         self.dummy.start()
         #self.timer.start(3000)  # simulate a 3-second Operation
 
     def stop(self):
-        print("AutomaticOperation stopped")
+        logger.info("AutomaticOperation stopped")
         self.dummy.stop()
         self.finished.emit()
 
     def _done(self):
-        print("AutomaticOperation finished")
+        logger.info("AutomaticOperation finished")
         self.finished.emit()  # <-- notify OperationManager

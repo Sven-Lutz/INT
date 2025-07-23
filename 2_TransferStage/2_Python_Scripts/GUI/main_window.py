@@ -1,13 +1,12 @@
 import logging                                                  # Import logging to record app events
 import PySide6.QtWidgets as Qtw                                 # Import Qt widgets with an alias for convenience
-from PySide6.QtWidgets import QWidget, QLineEdit
 
 from utils.config_manager import ConfigManager                  # Import configuration manager for loading settings
 
 from builders.signal_binder import SignalBinder
 from builders.ui_builder import UiBuilder
 
-from core.signals import ui_signals
+from core.signals import ui_signals, data_signals
 from core.operation_manager import OperationManager
 
 
@@ -30,11 +29,11 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         self.operation_manager = OperationManager()
         return
 
-    def _init_ui_defaults(self):                                                             # Private method to build the UI
+    def _init_ui_defaults(self):                                                                                # Private method to build the UI
         self.ui = UiBuilder.load_ui("widgets.ui", self)
         self.setCentralWidget(self.ui)
 
-        self.binder = SignalBinder(self.ui, operation_manager=self.operation_manager, config=self.config)     # Start signal bining
+        self.binder = SignalBinder(self.ui, operation_manager=self.operation_manager, config=self.config)       # Start signal binding
         self.binder.bind_signals()
 
 
@@ -59,11 +58,14 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         if index >= 0:
             self.ui.operationComboBox.setCurrentIndex(index)
 
+        self.ui.stopPushButton.setEnabled(False)
+        self.ui.pausePushButton.setEnabled(False)
+
         return
 
     def _init_signals_and_devices(self):
         ui_signals.config_changed.connect(ConfigManager().update_config)                        # Connect to signals to Configmanager
-
+        data_signals.set_stop_enabled.connect(self.ui.stopPushButton.setEnabled)
         return
 
     def _update_volume_field(self, container_name):

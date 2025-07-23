@@ -6,25 +6,21 @@ class AllSignals(QObject):
         super().__init__()                                      # Call base class constructor
 
 class OperationSignals(QObject):
-    add_signal = Signal()
-    remove_signal = Signal()
-    fill_signal = Signal()
-    empty_signal = Signal()
-    automatic_signal = Signal()
-    pause_signal = Signal()
     operation_done = Signal()
-    stop_operation = Signal()
+    operation_failed = Signal(str)
 
-    def __init__(self):                                         # Constructor
-        super().__init__()                                      # Call base class constructor
+    def __init__(self):
+        super().__init__()
 
 class UISignals(QObject):
-    """
-    stop_clicked = Signal()
-    pause_clicked = Signal()"""
     container_changed = Signal(str)
     config_changed = Signal(str, str, object, bool)                # str and object are representing key, new_value
+
     start_operation = Signal(str)
+    pause_operation = Signal()
+    resume_operation = Signal()
+    stop_operation = Signal()
+
 
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
@@ -37,6 +33,7 @@ class HardwareSignals(QObject):
 class DataSignals(QObject):
     update_status = Signal(str)
     update_measurement = Signal()
+    set_stop_enabled = Signal(bool)
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
 
