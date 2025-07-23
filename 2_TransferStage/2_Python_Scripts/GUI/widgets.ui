@@ -97,40 +97,14 @@
            </widget>
           </item>
           <item row="3" column="1">
-           <widget class="QComboBox" name="comboBox_2">
-            <item>
-             <property name="text">
-              <string>add</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>remove</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>fill</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>empty</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>automatic</string>
-             </property>
-            </item>
-           </widget>
+           <widget class="QComboBox" name="operationComboBox"/>
           </item>
          </layout>
         </item>
         <item>
          <layout class="QGridLayout" name="gridLayout_3">
           <item row="0" column="0">
-           <widget class="QPushButton" name="pushButton">
+           <widget class="QPushButton" name="startPushButton">
             <property name="text">
              <string>Start</string>
             </property>

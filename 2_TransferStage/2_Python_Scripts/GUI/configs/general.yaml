@@ -12,9 +12,15 @@ Containers:
     Maximum Volume: 100000
     Small Volume: 5000
 D Term: 0.05
-Default Container: 1 Sample
 I Term: 6
-Operations: add remove fill empty automatic
+Operations:
+- add
+- remove
+- fill
+- empty
+- automatic
 P Term: 1.4
-PVA Waiting Time: 60
+PVA Waiting Time: 1
 Project Path: C:\Users\Operator\PelliKAn\2_TransferStage
+Selected Container: 10 Sample
+Selected Operation: add

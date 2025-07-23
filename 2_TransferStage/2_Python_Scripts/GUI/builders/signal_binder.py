@@ -1,5 +1,5 @@
 import logging
-from core.signals import ui_signals, experiment_signals, data_signals
+from core.signals import ui_signals, data_signals
 
 logger = logging.getLogger(__name__)
 
@@ -12,10 +12,10 @@ def get_callable_name(callable_obj):
         return str(callable_obj)
 
 class SignalBinder:
-    def __init__(self, ui, experiment_manager, config):
+    def __init__(self, ui, operation_manager, config):
         self.ui = ui
         self.config = config
-        self.experiment_manager = experiment_manager
+        self.operation_manager = operation_manager
         return
 
     def bind_signals(self):
@@ -23,17 +23,19 @@ class SignalBinder:
         return
 
     def _bind_ui_to_signals(self):
-        self.ui.containerComboBox.currentTextChanged.connect(self._oncontainer_changed)
+        self.ui.containerComboBox.currentTextChanged.connect(self._on_container_changed)
         self.ui.soakTimeLineEdit.editingFinished.connect(self._on_soak_time_changed)
+        self.ui.startPushButton.clicked.connect(self._emit_start_operation)
         return
 
-
-    def _oncontainer_changed(self,container_name):
+    def _on_container_changed(self,container_name):
         volume = self.config["Containers"].get(container_name, None).get("Maximum Volume", None)
         self.ui.maxVolLineEdit.setText(str(volume))
 
         logger.info(f"Container selected: {container_name}, maximum volume set to {volume}")
         ui_signals.container_changed.emit(container_name)
+        ui_signals.config_changed.emit("general", "Selected Container", container_name, True)
+        return
 
     def _on_soak_time_changed(self):
         try:
@@ -42,6 +44,15 @@ class SignalBinder:
             logger.info(f"Config update requested: PVA Waiting Time = {value}")
         except ValueError:
             logger.error("Invalid value entered for PVA Waiting Time")
+
+    def _on_operation_changed(self,operation_name):
+        logger.info(f"Operation selected: {operation_name}")
+        ui_signals.config_changed.emit("general", "Selected Operation", operation_name, True)
+        return
+
+    def _emit_start_operation(self):
+        selected_operation = self.ui.operationComboBox.currentText()
+        ui_signals.start_operation.emit(selected_operation)
 
 
 
