@@ -8,8 +8,9 @@ from operations.operations import FillOperation, EmptyOperation, AddOperation, R
 logger = logging.getLogger(__name__)
 
 class OperationManager(QObject):
-    def __init__(self):
+    def __init__(self, device_manager):
         super().__init__()
+        self.device_manager = device_manager
         self.operation = None                                                   # start with no operation
         self.paused = False
         self._connected = False
@@ -38,7 +39,7 @@ class OperationManager(QObject):
             data_signals.update_status.emit(f"Unknown operation: {operation_type}")
             return
 
-        self.operation = operation_class()
+        self.operation = operation_class(self.device_manager)
         if not self._connected:
             self.operation.finished.connect(self.on_operation_done)
             self._connected = True

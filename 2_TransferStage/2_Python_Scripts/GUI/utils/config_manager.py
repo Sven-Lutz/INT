@@ -49,7 +49,7 @@ class ConfigManager:
             return self._configs[name]
 
         path = os.path.join(self.config_dir, f"{name}.yaml")                                                    # path of name.yaml
-        default_path = os.path.join(self.config_dir, f"{name}_default.yaml")                                    # path of name_default.yaml
+        default_path = os.path.join(self.config_dir, "defaults", f"{name}_default.yaml")                                    # path of name_default.yaml
         if not os.path.exists(path):                                                                            # check if default needs to be loaded
             if os.path.exists(default_path):                                                                    # check if default can be loaded
                 logger.warning(f"{name}.yaml not found. Falling back to {name}_default.yaml.")

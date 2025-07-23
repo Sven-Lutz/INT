@@ -1,5 +1,5 @@
 import logging
-from core.signals import ui_signals, operation_signals, data_signals
+from core.signals import ui_signals, operation_signals, data_signals, hardware_signals
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,10 @@ class SignalBinder:
         self.ui.containerComboBox.currentTextChanged.connect(self._on_container_changed)
         self.ui.soakTimeLineEdit.editingFinished.connect(self._on_soak_time_changed)
         self.ui.startPushButton.clicked.connect(self._emit_start_operation)
+
+        hardware_signals.liquid_valve_changed.connect(self.ui.liquidToggleSwitch.setChecked)
+        hardware_signals.container_valve_changed.connect(self.ui.containerToggleSwitch.setChecked)
+        hardware_signals.venting_valve_changed.connect(self.ui.ventingToggleSwitch.setChecked)
         #self.ui.stopPushButton.clicked.connect(lambda: ui_signals.stop_operation.emit())
         #self.ui.pausePushButton.clicked.connect(lambda: operation_signals.pause_operation.emit())
         return

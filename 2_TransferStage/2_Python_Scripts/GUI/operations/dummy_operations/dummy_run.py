@@ -23,6 +23,4 @@ class DummyOperation(QObject):
 
     def _complete(self):
         logger.info("Dummy operation complete")
-        if not hasattr(self, "_already_emitted"):
-            self._already_emitted = True
-            self.finished.emit()
+        self.finished.emit()

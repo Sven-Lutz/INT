@@ -1,4 +1,5 @@
 import logging
+import time
 
 from PySide6.QtCore import QObject, Signal, QTimer
 
@@ -9,11 +10,17 @@ logger = logging.getLogger(__name__)                            # Create a logge
 class BaseOperation(QObject):
     finished = Signal()
 
-    def __init__(self):
+
+    def __init__(self, device_manager):
         super().__init__()
+        self.device_manager = device_manager
+        self.dummy = DummyOperation()
+        self.dummy.finished.connect(self._done)
+        return
 
     def start(self):
-        raise NotImplementedError
+        self.dummy.start()
+        return
 
     def pause(self):
         raise NotImplementedError
@@ -21,104 +28,112 @@ class BaseOperation(QObject):
     def resume(self):
         raise NotImplementedError
 
+    def _done(self):
+        self.device_manager.safe_state()
+        self.finished.emit()
+        return
+
     def stop(self):
-        raise NotImplementedError
+        self.device_manager.safe_state()
+        self.finished.emit()
+
+        return
 
 class AddOperation(BaseOperation):
-    def __init__(self):
-        super().__init__()
-        self.dummy = DummyOperation()
-        self.dummy.finished.connect(self._done)  # <-- critical line
+    def __init__(self, device_manager):
+        super().__init__(device_manager)
 
     def start(self):
+        self.device_manager.filling()
+        super().start()
         logger.info("AddOperation started")
-        self.dummy.start()
+
 
     def stop(self):
+        super().stop()
         logger.info("AddOperation stopped")
-        self.dummy.stop()
-        self.finished.emit()  # Emit manually if interrupted
+        return
+
 
     def _done(self):
+        super()._done()
         logger.info("AddOperation finished")
-        self.finished.emit()  # <-- notify OperationManager
 
 class RemoveOperation(BaseOperation):
-    def __init__(self):
-        super().__init__()
-        self.dummy = DummyOperation()
-        self.dummy.finished.connect(self._done)  # <-- critical line
+    def __init__(self, device_manager):
+        super().__init__(device_manager)
 
     def start(self):
         logger.info("RemoveOperation started")
-        self.dummy.start()
-        #self.timer.start(3000)  # simulate a 3-second Operation
+        super().start()
+        self.device_manager.removing()
+        return
 
     def stop(self):
+        super().stop()
         logger.info("RemoveOperation stopped")
-        self.dummy.stop()
-        self.finished.emit()
+
 
     def _done(self):
+        super()._done()
         logger.info("RemoveOperation finished")
-        self.finished.emit()  # <-- notify OperationManager
+
 
 class FillOperation(BaseOperation):
-    def __init__(self):
-        super().__init__()
-        self.dummy = DummyOperation()
-        self.dummy.finished.connect(self._done)  # <-- critical line
+    def __init__(self, device_manager):
+        super().__init__(device_manager)
 
     def start(self):
         logger.info("FillOperation started")
-        self.dummy.start()
-        #self.timer.start(3000)  # simulate a 3-second Operation
+        super().start()
+        self.device_manager.filling()
+
 
     def stop(self):
+        super().stop()
         logger.info("FillOperation stopped")
-        self.dummy.stop()
-        self.finished.emit()
+
 
     def _done(self):
+        super()._done()
         logger.info("FillOperation finished")
-        self.finished.emit()  # <-- notify OperationManager
+
 
 class EmptyOperation(BaseOperation):
-    def __init__(self):
-        super().__init__()
-        self.dummy = DummyOperation()
-        self.dummy.finished.connect(self._done)  # <-- critical line
+    def __init__(self, device_manager):
+        super().__init__(device_manager)
 
     def start(self):
+        self.device_manager.removing()
+        super().start()
         logger.info("EmptyOperation started")
-        self.dummy.start()
-        #self.timer.start(3000)  # simulate a 3-second Operation
+
 
     def stop(self):
+        super().stop()
         logger.info("EmptyOperation stopped")
-        self.dummy.stop()
-        self.finished.emit()
+
 
     def _done(self):
+        super()._done()
         logger.info("EmptyOperation finished")
-        self.finished.emit()  # <-- notify OperationManager
+
 
 class AutomaticOperation(BaseOperation):
-    def __init__(self):
-        super().__init__()
-        self.dummy = DummyOperation()
-        self.dummy.finished.connect(self._done)  # <-- critical line
+    def __init__(self, device_manager):
+        super().__init__(device_manager)
 
     def start(self):
+        self.device_manager.filling()
+        super().start()
         logger.info("AutomaticOperation started")
-        self.dummy.start()
-        #self.timer.start(3000)  # simulate a 3-second Operation
+        return
 
     def stop(self):
+        super().stop()
         logger.info("AutomaticOperation stopped")
-        self.dummy.stop()
-        self.finished.emit()
+
 
     def _done(self):
+        super()._done()
         logger.info("AutomaticOperation finished")
-        self.finished.emit()  # <-- notify OperationManager

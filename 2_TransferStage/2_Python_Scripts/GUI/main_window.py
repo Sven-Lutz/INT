@@ -6,8 +6,10 @@ from utils.config_manager import ConfigManager                  # Import configu
 from builders.signal_binder import SignalBinder
 from builders.ui_builder import UiBuilder
 
-from core.signals import ui_signals, data_signals
+from core.signals import ui_signals, data_signals, hardware_signals
 from core.operation_manager import OperationManager
+
+from hardware.device_manager import DeviceManager
 
 
 logger = logging.getLogger(__name__)                            # Create a logger for this module
@@ -17,8 +19,9 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         super().__init__()                                      # Call the base class constructor
 
         self._init_config()                                     # Load configuration settings
+        self._init_devices()
         self._init_ui_defaults()                                         # Set up the user interface
-        self._init_signals_and_devices()                        # Initialize signals and hardware devices
+        self._init_signals()  # Initialize signals and hardware devices
 
         return
 
@@ -26,7 +29,6 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         cfg_manager = ConfigManager()                           # Create a ConfigManager instance
         self.config = cfg_manager.general_config                # Load the "general" configuration section
 
-        self.operation_manager = OperationManager()
         return
 
     def _init_ui_defaults(self):                                                                                # Private method to build the UI
@@ -61,21 +63,28 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         self.ui.startPushButton.setEnabled(True)
         self.ui.stopPushButton.setEnabled(False)
         self.ui.pausePushButton.setEnabled(False)
-
-
         return
 
-    def _init_signals_and_devices(self):
+    def _init_devices(self):
+        self.device_manager = DeviceManager()
+        self.operation_manager = OperationManager(self.device_manager)
+
+    def _init_signals(self):
+
         ui_signals.config_changed.connect(ConfigManager().update_config)                        # Connect to signals to Configmanager
 
         data_signals.set_start_enabled.connect(self.ui.startPushButton.setEnabled)
         data_signals.set_stop_enabled.connect(self.ui.stopPushButton.setEnabled)
         data_signals.set_pause_enabled.connect(self.ui.pausePushButton.setEnabled)
+
         return
 
     def _update_volume_field(self, container_name):
         volume = self.config["Containers"].get(container_name, {}).get("Maximum Volume", "")
         self.ui.maxVolLineEdit.setText(str(volume))
+        return
+
+
 
 
 

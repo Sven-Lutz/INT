@@ -21,7 +21,9 @@ class UISignals(QObject):
         super().__init__()                                      # Call base class constructor
 
 class HardwareSignals(QObject):
-
+    liquid_valve_changed = Signal(bool)
+    container_valve_changed = Signal(bool)
+    venting_valve_changed = Signal(bool)
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
 
