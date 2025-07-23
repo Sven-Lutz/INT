@@ -28,15 +28,8 @@ class ConfigManager:
         self._load_general_config()
 
     def _load_general_config(self):
-        general_path = os.path.join(self.config_dir, "general.yaml")
-        if os.path.exists(general_path):
-            logger.info("loading general.yaml")
-            with open(general_path, "r") as f:
-                self.general_config = yaml.safe_load(f)
-        else:
-            logger.info("loading empty general.yaml")
-            self.general_config = {}
-        self._configs["general"] = self.general_config
+        self.load_config("general")
+        self.general_config = self._configs["general"]
         return
 
     def load_config(self, name):
@@ -44,17 +37,31 @@ class ConfigManager:
             return self._configs[name]
 
         path = os.path.join(self.config_dir, f"{name}.yaml")
+        default_path = os.path.join(self.config_dir, f"{name}_default.yaml")
         if not os.path.exists(path):
-            logger.error(f"Config file {name}.yaml not found in {self.config_dir}")
-            raise FileNotFoundError(f"Config file {name}.yaml not found in {self.config_dir}")
+            if os.path.exists(default_path):
+                logger.warning(f"{name}.yaml not found. Falling back to {name}_default.yaml.")
+                with open(default_path, "r") as f:
+                    default_cfg = yaml.safe_load(f) or {}
+
+                # Save default as actual config
+                with open(path, "w") as f:
+                    yaml.safe_dump(default_cfg, f)
+                logger.info(f"Saved fallback default config as {name}.yaml.")
+            else:
+                logger.error(f"Neither {name}.yaml nor {name}_default.yaml found in {self.config_dir}")
+                raise FileNotFoundError(f"Missing both config and default for '{name}'")
 
         with open(path, "r") as f:
             logger.info(f"loading {name}.yaml")
             specific_cfg = yaml.safe_load(f) or {}
 
-        # Merge general config into specific config, without modifying originals
-        merged_cfg = copy.deepcopy(self.general_config)
-        merged_cfg.update(specific_cfg)
+        if name is not "general":
+            # Merge general config into specific config, without modifying originals
+            merged_cfg = copy.deepcopy(self.general_config)
+            merged_cfg.update(specific_cfg)
+        else:
+            merged_cfg = specific_cfg
 
         self._configs[name] = merged_cfg
         return merged_cfg

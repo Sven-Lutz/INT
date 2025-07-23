@@ -58,14 +58,19 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         if index >= 0:
             self.ui.operationComboBox.setCurrentIndex(index)
 
+        self.ui.startPushButton.setEnabled(True)
         self.ui.stopPushButton.setEnabled(False)
         self.ui.pausePushButton.setEnabled(False)
+
 
         return
 
     def _init_signals_and_devices(self):
         ui_signals.config_changed.connect(ConfigManager().update_config)                        # Connect to signals to Configmanager
+
+        data_signals.set_start_enabled.connect(self.ui.startPushButton.setEnabled)
         data_signals.set_stop_enabled.connect(self.ui.stopPushButton.setEnabled)
+        data_signals.set_pause_enabled.connect(self.ui.pausePushButton.setEnabled)
         return
 
     def _update_volume_field(self, container_name):

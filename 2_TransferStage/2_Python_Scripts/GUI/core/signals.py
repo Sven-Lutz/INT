@@ -33,7 +33,10 @@ class HardwareSignals(QObject):
 class DataSignals(QObject):
     update_status = Signal(str)
     update_measurement = Signal()
+
+    set_start_enabled = Signal(bool)
     set_stop_enabled = Signal(bool)
+    set_pause_enabled = Signal(bool)
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
 

@@ -47,7 +47,9 @@ class OperationManager(QObject):
 
         self.operation.start()
 
+        data_signals.set_start_enabled.emit(not self.is_busy())
         data_signals.set_stop_enabled.emit(self.is_busy())
+        data_signals.set_pause_enabled.emit(self.is_busy())
 
         return
 
@@ -65,7 +67,10 @@ class OperationManager(QObject):
             self.operation = None
             self.paused = False
             data_signals.update_status.emit("Stopped")
+
+            data_signals.set_start_enabled.emit(not self.is_busy())
             data_signals.set_stop_enabled.emit(self.is_busy())
+            data_signals.set_pause_enabled.emit(self.is_busy())
 
         else:
             logger.warning("OperationManager: no active operation to stop")
@@ -81,7 +86,9 @@ class OperationManager(QObject):
             self.operation = None
             self._connected = False
 
+            data_signals.set_start_enabled.emit(not self.is_busy())
             data_signals.set_stop_enabled.emit(self.is_busy())
+            data_signals.set_pause_enabled.emit(self.is_busy())
         except Exception as e:
             logger.error(f"Error in on_operation_done: {e}")
         return
