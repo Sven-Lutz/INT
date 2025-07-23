@@ -1,10 +1,5 @@
 from PySide6.QtCore import QObject, Signal
 
-class AllSignals(QObject):
-
-    def __init__(self):                                         # Constructor
-        super().__init__()                                      # Call base class constructor
-
 class OperationSignals(QObject):
     operation_done = Signal()
     operation_failed = Signal(str)

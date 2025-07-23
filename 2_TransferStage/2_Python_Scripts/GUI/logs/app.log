@@ -1,10 +1,4 @@
-2025-07-23 12:41:38,014 - __main__ - INFO - Starting application...
-2025-07-23 12:41:38,055 - utils.config_manager - INFO - loading general.yaml
-2025-07-23 12:41:38,115 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
-2025-07-23 12:41:39,836 - operations.operations - INFO - AddOperation started
-2025-07-23 12:41:39,838 - operations.dummy_operations.dummy_run - INFO - Dummy operation started
-2025-07-23 12:41:40,852 - operations.dummy_operations.dummy_run - INFO - Dummy operation complete
-2025-07-23 12:41:40,854 - operations.operations - INFO - AddOperation finished
-2025-07-23 12:41:40,855 - core.operation_manager - INFO - Operation done
-2025-07-23 12:41:40,856 - core.operation_manager - INFO - Operation: True
-2025-07-23 12:41:45,052 - __main__ - INFO - Application exited with code 0
+2025-07-23 13:19:54,088 - __main__ - INFO - Starting application...
+2025-07-23 13:19:54,117 - utils.config_manager - INFO - loading general.yaml
+2025-07-23 13:19:54,177 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-23 13:19:57,386 - __main__ - INFO - Application exited with code 0
