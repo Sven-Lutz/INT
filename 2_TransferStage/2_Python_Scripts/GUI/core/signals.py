@@ -15,6 +15,7 @@ class UISignals(QObject):
     pause_operation = Signal()
     resume_operation = Signal()
     stop_operation = Signal()
+    flush_operation = Signal()
 
 
     def __init__(self):                                         # Constructor
@@ -34,6 +35,8 @@ class DataSignals(QObject):
     set_start_enabled = Signal(bool)
     set_stop_enabled = Signal(bool)
     set_pause_enabled = Signal(bool)
+
+    set_flush_enabled = Signal(bool)
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
 

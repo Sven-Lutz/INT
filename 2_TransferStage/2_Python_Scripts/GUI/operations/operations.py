@@ -16,6 +16,7 @@ class BaseOperation(QObject):
         self.device_manager = device_manager
         self.dummy = DummyOperation()
         self.dummy.finished.connect(self._done)
+        self._should_pause = False
         return
 
     def start(self):
@@ -23,10 +24,16 @@ class BaseOperation(QObject):
         return
 
     def pause(self):
-        raise NotImplementedError
+        self._should_pause = True
+        self.device_manager.shut_container()
+        self.dummy.pause()
+        return
 
     def resume(self):
-        raise NotImplementedError
+        self._should_pause = False
+        self.device_manager.open_container()
+        self.dummy.resume()
+        return
 
     def _done(self):
         self.device_manager.safe_state()
@@ -36,7 +43,6 @@ class BaseOperation(QObject):
     def stop(self):
         self.device_manager.safe_state()
         self.finished.emit()
-
         return
 
 class AddOperation(BaseOperation):
@@ -137,3 +143,33 @@ class AutomaticOperation(BaseOperation):
     def _done(self):
         super()._done()
         logger.info("AutomaticOperation finished")
+
+
+class FlushOperation(BaseOperation):
+    def __init__(self, device_manager):
+        super().__init__(device_manager)
+        self._timer = QTimer()
+        self._timer.timeout.connect(self.flush_step)
+        self._running = False
+
+    def start(self):
+        logger.info("FlushOperation started")
+        self._running = True
+        self._timer.start(100)  # adjust flush frequency (ms)
+        self.device_manager.filling()
+
+    def flush_step(self):
+        if not self._running:
+            return
+        self.device_manager.filling()  # implement this in your device manager
+        logger.debug("Flush step executed")
+
+    def stop(self):
+        logger.info("FlushOperation stopping")
+        self._running = False
+        self._timer.stop()
+        super().stop()
+
+    def _done(self):
+        super()._done()
+        logger.info("FlushOperation finished")

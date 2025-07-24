@@ -1,4 +1,6 @@
 import logging
+from PySide6.QtCore import QTimer
+
 from core.signals import ui_signals, operation_signals, data_signals, hardware_signals
 
 logger = logging.getLogger(__name__)
@@ -16,6 +18,9 @@ class SignalBinder:
         self.ui = ui
         self.config = config
         self.operation_manager = operation_manager
+
+        self._blink_state = False
+        self._pause_button_blinking()
         return
 
     def bind_signals(self):
@@ -26,12 +31,16 @@ class SignalBinder:
         self.ui.containerComboBox.currentTextChanged.connect(self._on_container_changed)
         self.ui.soakTimeLineEdit.editingFinished.connect(self._on_soak_time_changed)
         self.ui.startPushButton.clicked.connect(self._emit_start_operation)
+        self.ui.stopPushButton.clicked.connect(ui_signals.stop_operation.emit)
+        self.ui.pausePushButton.clicked.connect(self._handle_pause_clicked)
+
+        self.ui.flushPushButton.pressed.connect(self.operation_manager.start_flush)
+        self.ui.flushPushButton.released.connect(self.operation_manager.stop_flush)
 
         hardware_signals.liquid_valve_changed.connect(self.ui.liquidToggleSwitch.setChecked)
         hardware_signals.container_valve_changed.connect(self.ui.containerToggleSwitch.setChecked)
         hardware_signals.venting_valve_changed.connect(self.ui.ventingToggleSwitch.setChecked)
-        #self.ui.stopPushButton.clicked.connect(lambda: ui_signals.stop_operation.emit())
-        #self.ui.pausePushButton.clicked.connect(lambda: operation_signals.pause_operation.emit())
+
         return
 
     def _on_container_changed(self,container_name):
@@ -50,6 +59,7 @@ class SignalBinder:
             logger.info(f"Config update requested: PVA Waiting Time = {value}")
         except ValueError:
             logger.error("Invalid value entered for PVA Waiting Time")
+        return
 
     def _on_operation_changed(self,operation_name):
         logger.info(f"Operation selected: {operation_name}")
@@ -59,6 +69,43 @@ class SignalBinder:
     def _emit_start_operation(self):
         selected_operation = self.ui.operationComboBox.currentText()
         ui_signals.start_operation.emit(selected_operation)
+        return
+
+    def _pause_button_blinking(self):
+        self._blink_timer = QTimer(self.ui)
+        self._blink_timer.setInterval(800)
+        self._blink_timer.timeout.connect(self._toggle_pause_blink)
+        self._blink_state = False
+        return
+
+    def _toggle_pause_blink(self):
+        if self._blink_state:
+            self.ui.pausePushButton.setStyleSheet("background-color: none;")
+        else:
+            self.ui.pausePushButton.setStyleSheet("background-color: orange; color: black; font-weight: bold;")
+        self._blink_state = not self._blink_state
+        return
+
+    def reset_pause_button(self, enabled: bool):
+        self.ui.pausePushButton.setEnabled(enabled)
+        if not enabled:
+            self.ui.pausePushButton.setText("Pause")
+            self._blink_timer.stop()
+            self.ui.pausePushButton.setStyleSheet("")
+            self._blink_state = False
+        return
+
+    def _handle_pause_clicked(self):
+        if self.operation_manager.paused:
+            ui_signals.resume_operation.emit()
+            self.ui.pausePushButton.setText("Pause")
+            self._blink_timer.stop()
+            self.ui.pausePushButton.setStyleSheet("")  # reset style
+        else:
+            ui_signals.pause_operation.emit()
+            self.ui.pausePushButton.setText("Resume")
+            self._blink_timer.start()
+        return
 
 
 

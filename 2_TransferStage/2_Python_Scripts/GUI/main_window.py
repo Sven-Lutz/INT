@@ -1,7 +1,9 @@
-import logging                                                  # Import logging to record app events
-import PySide6.QtWidgets as Qtw                                 # Import Qt widgets with an alias for convenience
+import logging
 
-from utils.config_manager import ConfigManager                  # Import configuration manager for loading settings
+import PySide6.QtWidgets as Qtw
+
+
+from utils.config_manager import ConfigManager
 
 from builders.signal_binder import SignalBinder
 from builders.ui_builder import UiBuilder
@@ -20,8 +22,8 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
 
         self._init_config()                                     # Load configuration settings
         self._init_devices()
-        self._init_ui_defaults()                                         # Set up the user interface
-        self._init_signals()  # Initialize signals and hardware devices
+        self._init_ui_defaults()                                # Set up the user interface
+        self._init_signals()                                    # Initialize signals and hardware devices
 
         return
 
@@ -63,6 +65,9 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         self.ui.startPushButton.setEnabled(True)
         self.ui.stopPushButton.setEnabled(False)
         self.ui.pausePushButton.setEnabled(False)
+
+        self.ui.flushPushButton.setEnabled(True)
+
         return
 
     def _init_devices(self):
@@ -76,6 +81,9 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         data_signals.set_start_enabled.connect(self.ui.startPushButton.setEnabled)
         data_signals.set_stop_enabled.connect(self.ui.stopPushButton.setEnabled)
         data_signals.set_pause_enabled.connect(self.ui.pausePushButton.setEnabled)
+        data_signals.set_pause_enabled.connect(self.binder.reset_pause_button)
+
+        data_signals.set_flush_enabled.connect(self.ui.flushPushButton.setEnabled)
 
         return
 
@@ -83,12 +91,3 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         volume = self.config["Containers"].get(container_name, {}).get("Maximum Volume", "")
         self.ui.maxVolLineEdit.setText(str(volume))
         return
-
-
-
-
-
-
-
-
-

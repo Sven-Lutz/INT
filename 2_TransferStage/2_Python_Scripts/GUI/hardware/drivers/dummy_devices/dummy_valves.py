@@ -57,7 +57,7 @@ class Valve:
         #self.board.digital[pin_led].write(state)
 
         self.state[name] = state
-        logger.info(f"{name}: {'OPEN' if state else 'CLOSED'} | Valve states: {self.state}")
+        logger.debug(f"{name}: {'OPEN' if state else 'CLOSED'} | Valve states: {self.state}")
         return
 
     def vent_pos(self):

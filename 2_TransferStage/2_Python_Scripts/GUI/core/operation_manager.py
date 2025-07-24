@@ -3,7 +3,7 @@ import logging
 from PySide6.QtCore import QObject
 from core.signals import ui_signals, operation_signals, data_signals
 
-from operations.operations import FillOperation, EmptyOperation, AddOperation, RemoveOperation, AutomaticOperation
+from operations.operations import FillOperation, EmptyOperation, AddOperation, RemoveOperation, AutomaticOperation, FlushOperation
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +16,10 @@ class OperationManager(QObject):
         self._connected = False
 
         ui_signals.start_operation.connect(self.start_operation)  # <-- connect to UI start signal
-
+        ui_signals.pause_operation.connect(self.pause_operation)
+        ui_signals.resume_operation.connect(self.resume_operation)
         ui_signals.stop_operation.connect(self.stop_operation)
+
         operation_signals.operation_done.connect(self.on_operation_done)
 
         self._operation_map = {
@@ -52,6 +54,8 @@ class OperationManager(QObject):
         data_signals.set_stop_enabled.emit(self.is_busy())
         data_signals.set_pause_enabled.emit(self.is_busy())
 
+        data_signals.set_flush_enabled.emit(not self.is_busy())
+
         return
 
     def pause_operation(self):
@@ -61,17 +65,27 @@ class OperationManager(QObject):
             data_signals.update_status.emit("Paused")
         return
 
+    def resume_operation(self):
+        if self.operation and hasattr(self.operation, 'resume'):
+            self.paused = False
+            self.operation.resume()
+            data_signals.update_status.emit("Resumed")
+
     def stop_operation(self):
         logger.info("Stopping operation")
         if self.operation:
             self.operation.stop()
             self.operation = None
             self.paused = False
+
+            data_signals.set_pause_enabled.emit(False)
             data_signals.update_status.emit("Stopped")
 
             data_signals.set_start_enabled.emit(not self.is_busy())
             data_signals.set_stop_enabled.emit(self.is_busy())
             data_signals.set_pause_enabled.emit(self.is_busy())
+
+            data_signals.set_flush_enabled.emit(not self.is_busy())
 
         else:
             logger.warning("OperationManager: no active operation to stop")
@@ -96,3 +110,27 @@ class OperationManager(QObject):
 
     def is_busy(self) -> bool:
         return self.operation is not None
+
+    def start_flush(self):
+        if self.is_busy():
+            logger.info("Flush ignored: operation already running.")
+            return
+
+        self.operation = FlushOperation(self.device_manager)
+
+        if not self._connected:
+            self.operation.finished.connect(self.on_operation_done)
+            self._connected = True
+
+        self.operation.start()
+        data_signals.update_status.emit("Flushing...")
+        return
+
+    def stop_flush(self):
+        if isinstance(self.operation, FlushOperation):
+            self.operation.stop()
+            self.operation = None
+            self._connected = False
+            data_signals.update_status.emit("Flush stopped")
+            data_signals.set_flush_enabled.emit(True)
+        return
