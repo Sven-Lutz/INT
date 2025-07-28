@@ -1,7 +1,7 @@
 import time
 import logging
 
-from pyfirmata import Arduino
+from pyfirmata2 import Arduino
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,6 @@ class Valve:
         logger.info("Staring valve communication")
         port = config.get("COM Port",None)
         self.valves = config.get("Valves", {})
-
         if not self.valves:
             raise ValueError("Valve configuration is empty or missing 'valves' key.")
 
@@ -89,3 +88,5 @@ class Valve:
         """Open container valve for flow."""
         self._switch_valve("Container", 1)
         return
+
+

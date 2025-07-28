@@ -51,12 +51,16 @@ class AddOperation(BaseOperation):
 
     def start(self):
         self.device_manager.filling()
+
+        self.device_manager.set_pressure(2000)
         super().start()
+        print(f"Flow Sensor: {self.device_manager.get_flow()}")
         logger.info("AddOperation started")
 
 
     def stop(self):
         super().stop()
+        print(f"Flow Sensor: {self.device_manager.get_flow()}")
         logger.info("AddOperation stopped")
         return
 
@@ -64,6 +68,7 @@ class AddOperation(BaseOperation):
     def _done(self):
         super()._done()
         logger.info("AddOperation finished")
+        print(f"Flow Sensor: {self.device_manager.get_flow()}")
 
 class RemoveOperation(BaseOperation):
     def __init__(self, device_manager):

@@ -1,7 +1,8 @@
 import logging
 
-from hardware.drivers.dummy_devices.dummy_valves import Valve
+from hardware.drivers.valves import Valve
 from hardware.drivers.pressure_controller import PressureController
+from hardware.drivers.flow_sensor import FlowSensor
 
 from core.signals import hardware_signals
 
@@ -14,9 +15,11 @@ class DeviceManager:
         cfg = ConfigManager().load_config("valves")
         self.valve = Valve(cfg)
 
-        cfg = ConfigManager.load_config("pressure_controller")
-        print(cfg)
-        #self.pressure_ctl = PressureController(cfg)
+        cfg = ConfigManager().load_config("pressure_controller")
+        self.pressure_ctrl = PressureController(cfg)
+
+        cfg = ConfigManager().load_config("flow_sensor")
+        self.flow_sns = FlowSensor(cfg)
         #self.pump = PumpController(config["pump"])
         return
 
@@ -58,7 +61,19 @@ class DeviceManager:
 
     def safe_state(self):
         self.valve.vent_pos()
+        self.pressure_ctrl.set_pressure(0)
         self._update_signals()
+        return
+
+    def set_pressure(self,p):
+        self.pressure_ctrl.set_pressure(p)
+        return
+
+    def get_pressure(self):
+        return self.pressure_ctrl.get_pressure()
+
+    def get_flow(self):
+        return self.flow_sns.get_flow()
 
     def _update_signals(self):
         hardware_signals.liquid_valve_changed.emit(self.valve.state["Liquid"])  # send a snapshot

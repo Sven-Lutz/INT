@@ -12,7 +12,6 @@ class PressureController:
     def __init__(self, config: dict):
         logger.info("Starting pressure controller communication...")
         self.config = config
-
         self.Instr_ID = c_int32()
         self._initialize_device()
         self._load_calibration()
@@ -73,16 +72,17 @@ class PressureController:
         :param p: Integer, which is the pressure value
         :return: ---
         """
-        if p < -1000 or p > 6000:                                                               # Check if pressure is out of bounds
-            logger.error("ERROR: PRESSURE OUT OF RANGE, choose within -1 to 6 bars.")
-            raise ValueError("ERROR: PRESSURE OUT OF RANGE, choose within -1 to 6 bars.")
+        limits = self.config.get("Pressure Limits")
+        if p < limits[0] or p > limits[1]:                                                               # Check if pressure is out of bounds
+            logger.error(f"ERROR: PRESSURE OUT OF RANGE, choose within {limits[0]} to {limits[1]} mbar.")
+            raise ValueError(f"ERROR: PRESSURE OUT OF RANGE, choose within {limits[0]} to {limits[1]} mbar.")
 
         set_channel = c_int32(1)                                                                # Convert channel (1) to c_int32, this has to be done, as the pressure controller is programmed in C
         set_pressure = c_double(float(p))                                                       # Converto pressure to c_double
         error = OB1_Set_Press(self.Instr_ID.value, set_channel, set_pressure, byref(self.Calib), 1000)
 
         if error != 0:
-            print(f"ERROR: Pressure could not be set, error code: {error}")
+            logger.error(f"ERROR: Pressure could not be set, error code: {error}")
         return
 
     def get_pressure(self):

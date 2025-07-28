@@ -123,7 +123,7 @@ def main():
     config, _ = writer.read_yaml("both")
     valve = Configurator.Valve()
     OB1 = Configurator.PressureController(config)
-    BFS = Configurator.FlowController(config)
+    BFS = Configurator.FlowSensor(config)
 
     hardware = {"OB1": OB1, "BFS": BFS, "Valves": valve, "Writing Manager": writer}
     #Experiment.Experimentator(temp)
