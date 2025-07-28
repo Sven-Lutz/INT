@@ -3,6 +3,7 @@ import logging
 from hardware.drivers.valves import Valve
 from hardware.drivers.pressure_controller import PressureController
 from hardware.drivers.flow_sensor import FlowSensor
+from hardware.drivers.vacuum_pump import VacuumPump
 
 from core.signals import hardware_signals
 
@@ -19,8 +20,10 @@ class DeviceManager:
         self.pressure_ctrl = PressureController(cfg)
 
         cfg = ConfigManager().load_config("flow_sensor")
-        self.flow_sns = FlowSensor(cfg)
-        #self.pump = PumpController(config["pump"])
+        self.flow_snsr = FlowSensor(cfg)
+
+        cfg = ConfigManager().load_config("vacuum_pump")
+        self.pump = VacuumPump(cfg)
         return
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -60,8 +63,10 @@ class DeviceManager:
         return
 
     def safe_state(self):
-        self.valve.vent_pos()
         self.pressure_ctrl.set_pressure(0)
+        self.pump.stop()
+        self.valve.vent_pos()
+
         self._update_signals()
         return
 
@@ -73,10 +78,21 @@ class DeviceManager:
         return self.pressure_ctrl.get_pressure()
 
     def get_flow(self):
-        return self.flow_sns.get_flow()
+        return self.flow_snsr.get_flow()
+
+    def start_pump(self):
+        hardware_signals.pump_changed.emit(True)
+        self.pump.start()
+        return
+
+    def stop_pump(self):
+        hardware_signals.pump_changed.emit(False)
+        self.pump.stop()
+        return
 
     def _update_signals(self):
         hardware_signals.liquid_valve_changed.emit(self.valve.state["Liquid"])  # send a snapshot
         hardware_signals.container_valve_changed.emit(self.valve.state["Container"])  # send a snapshot
         hardware_signals.venting_valve_changed.emit(not self.valve.state["Venting"])  # send a snapshot
+        return
 

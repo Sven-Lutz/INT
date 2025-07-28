@@ -43,7 +43,7 @@ class OperationManager(QObject):
 
         self.operation = operation_class(self.device_manager)
         if not self._connected:
-            self.operation.finished.connect(self.on_operation_done)
+            operation_signals.operation_done.connect(self.on_operation_done)
             self._connected = True
 
         data_signals.update_status.emit(f"Running: {operation_type}")
@@ -121,7 +121,7 @@ class OperationManager(QObject):
         self.operation = FlushOperation(self.device_manager)
 
         if not self._connected:
-            self.operation.finished.connect(self.on_operation_done)
+            operation_signals.operation_done.connect(self.on_operation_done)
             self._connected = True
 
         self.operation.start()

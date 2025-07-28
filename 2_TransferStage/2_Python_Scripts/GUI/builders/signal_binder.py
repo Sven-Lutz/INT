@@ -41,13 +41,18 @@ class SignalBinder:
         hardware_signals.container_valve_changed.connect(self.ui.containerToggleSwitch.setChecked)
         hardware_signals.venting_valve_changed.connect(self.ui.ventingToggleSwitch.setChecked)
 
+        hardware_signals.pump_changed.connect(self.ui.pumpToggleSwitch.setChecked)
+
+        data_signals.flow_updated.connect(self._update_flow_display)
+        data_signals.pressure_updated.connect(self._update_pressure_display)
+        data_signals.volume_updated.connect(self._update_volume_display)
         return
 
     def _on_container_changed(self,container_name):
-        volume = self.config["Containers"].get(container_name, None).get("Maximum Volume", None)
-        self.ui.maxVolLineEdit.setText(str(volume))
+        max_volume = self.config["Containers"].get(container_name, None).get("Maximum Volume", None)
+        self.ui.maxVolLineEdit.setText(str(max_volume))
 
-        logger.info(f"Container selected: {container_name}, maximum volume set to {volume}")
+        logger.info(f"Container selected: {container_name}, maximum max_volume set to {max_volume}")
         ui_signals.container_changed.emit(container_name)
         ui_signals.config_changed.emit("general", "Selected Container", container_name, True)
         return
@@ -105,6 +110,27 @@ class SignalBinder:
             ui_signals.pause_operation.emit()
             self.ui.pausePushButton.setText("Resume")
             self._blink_timer.start()
+        return
+
+    def _update_flow_display(self, flow):
+        self.ui.measFlowLineEdit.setText(f"{flow:.2f} uL/min")
+        return
+
+    def _update_pressure_display(self, pressure):
+        self.ui.appliedPressLineEdit.setText(f"{pressure:.1f} mbar")
+        return
+
+    def _update_volume_display(self, volume):
+        self.ui.tbcVolLineEdit.setText(f"{volume:.2f} mL")
+
+    def _clear_pid_display_fields(self):
+        self.ui.flowLineEdit.clear()
+        self.ui.pressureLineEdit.clear()
+        self.ui.tbcVolLineEdit.clear()
+        return
+
+    def _update_container_volume_display(self, container_vol):
+        self.ui.containerVolLineEdit.setText(f"{container_vol:.2f} mL")
         return
 
 

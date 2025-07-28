@@ -7,7 +7,7 @@ import random
 import yaml
 import os
 
-from pyfirmata import Arduino
+from pyfirmata2 import Arduino
 from Elveflow64 import *
 
 ##########################

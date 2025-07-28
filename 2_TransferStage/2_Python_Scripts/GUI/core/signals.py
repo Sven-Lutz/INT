@@ -25,6 +25,8 @@ class HardwareSignals(QObject):
     liquid_valve_changed = Signal(bool)
     container_valve_changed = Signal(bool)
     venting_valve_changed = Signal(bool)
+
+    pump_changed = Signal(bool)
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
 
@@ -37,6 +39,14 @@ class DataSignals(QObject):
     set_pause_enabled = Signal(bool)
 
     set_flush_enabled = Signal(bool)
+
+
+
+    flow_updated = Signal(float)
+    pressure_updated = Signal(float)
+    volume_updated = Signal(float)
+    container_volume_updated = Signal(float)
+
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
 

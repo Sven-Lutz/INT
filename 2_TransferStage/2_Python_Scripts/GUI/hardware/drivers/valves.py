@@ -11,9 +11,9 @@ class Valve:
     def: Class to control valves connected via an Arduino. Configuration is loaded through ConfigManager from valve.yaml.
     """
 
-    def __init__(self, config:dict ):
+    def __init__(self, config:dict):
         logger.info("Staring valve communication")
-        port = config.get("COM Port",None)
+        port = config.get("COM Port", None)
         self.valves = config.get("Valves", {})
         if not self.valves:
             raise ValueError("Valve configuration is empty or missing 'valves' key.")
