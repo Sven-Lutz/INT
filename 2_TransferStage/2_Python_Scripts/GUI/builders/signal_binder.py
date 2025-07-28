@@ -1,5 +1,7 @@
 import logging
-from core.signals import ui_signals, experiment_signals, data_signals
+from PySide6.QtCore import QTimer
+
+from core.signals import ui_signals, operation_signals, data_signals, hardware_signals
 
 logger = logging.getLogger(__name__)
 
@@ -12,65 +14,98 @@ def get_callable_name(callable_obj):
         return str(callable_obj)
 
 class SignalBinder:
-    def bind_signals(self, ui, experiment_manager):
-        """
-        def on_start_clicked():
-            print("Start button clicked (print test)")
-            logger.info("Start button clicked")
-            # Emit signal with selected experiment string
-            ui_signals.start_clicked.emit(ui.selected_experiment())
-            return
+    def __init__(self, ui, operation_manager, config):
+        self.ui = ui
+        self.config = config
+        self.operation_manager = operation_manager
 
-        def log_start_signal(*args, **kwargs):
-            logger.info(f"UISignals.start_clicked emitted with args: {args}, kwargs: {kwargs}")
-            return
+        self._blink_state = False
+        self._pause_button_blinking()
+        return
 
-        def on_stop_clicked():
-            logger.info("Stop button clicked")
-            ui_signals.stop_clicked.emit()
-            return
+    def bind_signals(self):
+        self._bind_ui_to_signals()
+        return
 
-        def log_stop_signal(*args, **kwargs):
-            logger.info(f"UISignals.stop_clicked emitted with args: {args}, kwargs: {kwargs}")
-            return
+    def _bind_ui_to_signals(self):
+        self.ui.containerComboBox.currentTextChanged.connect(self._on_container_changed)
+        self.ui.soakTimeLineEdit.editingFinished.connect(self._on_soak_time_changed)
+        self.ui.startPushButton.clicked.connect(self._emit_start_operation)
+        self.ui.stopPushButton.clicked.connect(ui_signals.stop_operation.emit)
+        self.ui.pausePushButton.clicked.connect(self._handle_pause_clicked)
 
-        # Connect UI buttons to emit signals and log clicks
-        ui.start_button.clicked.connect(on_start_clicked)
-        ui.stop_button.clicked.connect(on_stop_clicked)
+        self.ui.flushPushButton.pressed.connect(self.operation_manager.start_flush)
+        self.ui.flushPushButton.released.connect(self.operation_manager.stop_flush)
 
-        # Connect signals to log their emission
-        ui_signals.start_clicked.connect(log_start_signal)
-        ui_signals.stop_clicked.connect(log_stop_signal)
-
-        # Connect signals to experiment manager methods
-        ui_signals.start_clicked.connect(experiment_manager.start_experiment)
-        ui_signals.stop_clicked.connect(experiment_signals.stop_experiment)
+        hardware_signals.liquid_valve_changed.connect(self.ui.liquidToggleSwitch.setChecked)
+        hardware_signals.container_valve_changed.connect(self.ui.containerToggleSwitch.setChecked)
+        hardware_signals.venting_valve_changed.connect(self.ui.ventingToggleSwitch.setChecked)
 
         return
-        """
-        logger.debug(type(ui))
-        logger.debug(type(experiment_manager))
-        # Map signals to their slots
-        logger.debug(ui.selected_experiment())
-        bindings = {
-            ui.start_button.clicked: lambda: (logger.debug("Start button clicked"), ui_signals.start_clicked.emit(ui.selected_experiment())),
-            ui.stop_button.clicked: lambda: (logger.debug("Stop button clicked"), ui_signals.stop_clicked.emit()),
 
-            ui_signals.start_clicked: experiment_manager.start_experiment,
-            ui_signals.stop_clicked: experiment_signals.stop_experiment,
+    def _on_container_changed(self,container_name):
+        volume = self.config["Containers"].get(container_name, None).get("Maximum Volume", None)
+        self.ui.maxVolLineEdit.setText(str(volume))
 
-            data_signals.update_status: ui.set_status,
-            data_signals.update_measurement: ui.set_measurement,
-        }
+        logger.info(f"Container selected: {container_name}, maximum volume set to {volume}")
+        ui_signals.container_changed.emit(container_name)
+        ui_signals.config_changed.emit("general", "Selected Container", container_name, True)
+        return
 
-        for signal, slot in bindings.items():
-            try:
-                signal.connect(slot)
-                sig_name = type(signal).__name__
-                slot_name = get_callable_name(slot)
-                logger.info(f"Connected signal '{sig_name}' to slot '{slot_name}'")
-            except Exception as e:
-                sig_name = type(signal).__name__
-                slot_name = get_callable_name(slot)
-                logger.error(f"Failed to connect signal '{sig_name}' to slot '{slot_name}': {e}")
+    def _on_soak_time_changed(self):
+        try:
+            value = int(self.ui.soakTimeLineEdit.text())
+            ui_signals.config_changed.emit("general", "PVA Waiting Time", value, True)
+            logger.info(f"Config update requested: PVA Waiting Time = {value}")
+        except ValueError:
+            logger.error("Invalid value entered for PVA Waiting Time")
+        return
+
+    def _on_operation_changed(self,operation_name):
+        logger.info(f"Operation selected: {operation_name}")
+        ui_signals.config_changed.emit("general", "Selected Operation", operation_name, True)
+        return
+
+    def _emit_start_operation(self):
+        selected_operation = self.ui.operationComboBox.currentText()
+        ui_signals.start_operation.emit(selected_operation)
+        return
+
+    def _pause_button_blinking(self):
+        self._blink_timer = QTimer(self.ui)
+        self._blink_timer.setInterval(800)
+        self._blink_timer.timeout.connect(self._toggle_pause_blink)
+        self._blink_state = False
+        return
+
+    def _toggle_pause_blink(self):
+        if self._blink_state:
+            self.ui.pausePushButton.setStyleSheet("background-color: none;")
+        else:
+            self.ui.pausePushButton.setStyleSheet("background-color: orange; color: black; font-weight: bold;")
+        self._blink_state = not self._blink_state
+        return
+
+    def reset_pause_button(self, enabled: bool):
+        self.ui.pausePushButton.setEnabled(enabled)
+        if not enabled:
+            self.ui.pausePushButton.setText("Pause")
+            self._blink_timer.stop()
+            self.ui.pausePushButton.setStyleSheet("")
+            self._blink_state = False
+        return
+
+    def _handle_pause_clicked(self):
+        if self.operation_manager.paused:
+            ui_signals.resume_operation.emit()
+            self.ui.pausePushButton.setText("Pause")
+            self._blink_timer.stop()
+            self.ui.pausePushButton.setStyleSheet("")  # reset style
+        else:
+            ui_signals.pause_operation.emit()
+            self.ui.pausePushButton.setText("Resume")
+            self._blink_timer.start()
+        return
+
+
 

@@ -1,28 +1,9 @@
-Containers:
-  1 Sample:
-    Attachment Volume: 60000
-    MUX Valve: 1
-    Maximum Volume: 10000
-    Small Volume: 5000
-  5 Sample:
-    Attachment Volume: 60000
-    MUX Valve: 2
-    Maximum Volume: 10000
-    Small Volume: 5000
-  10 Sample:
-    Attachment Volume: 60000
-    MUX Valve: 3
-    Maximum Volume: 10000
-    Small Volume: 5000
-D Term: 0.05
-Default Flow: 30000
-I Term: 6
-P Term: 1.4
-PVA Waiting Time: 1
-Project Path: C:\Users\Operator\PelliKAn\2_TransferStage
-Small Volume: 5000
-add: 30000
-attachment: 30000
-empty: 30000
-fill: 30000
-remove: 30000
+COM Port: COM3
+Valves:
+  Venting: [10,12]    # Used for venting. It is set to pin 10 in the arduino and connected with the LED at pin 12. NO-Valve
+  Liquid: [11,13]     # Used for switching between the water and waste bottles. It is set to pin 11 in the arduino and connected with the LED at pin 13
+  Container: [9,8]    # Used for blocking the container line. It is set to pin 9 in the arduino and connected with the LED at pin 8. NC-Valve
+
+
+
+

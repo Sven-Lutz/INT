@@ -1,3 +1,10 @@
-2025-07-21 10:22:45,693 - __main__ - INFO - Starting application...
-2025-07-21 10:22:45,712 - utils.config_manager - INFO - loading general.yaml
-2025-07-21 10:23:34,994 - __main__ - INFO - Application exited with code 0
+2025-07-28 09:00:34,185 - __main__ - INFO - Starting application...
+2025-07-28 09:00:34,214 - utils.config_manager - INFO - loading general.yaml
+2025-07-28 09:00:34,219 - utils.config_manager - INFO - loading valves.yaml
+2025-07-28 09:00:34,221 - hardware.drivers.dummy_devices.dummy_valves - INFO - Staring valve communication
+2025-07-28 09:00:34,221 - hardware.drivers.dummy_devices.dummy_valves - DEBUG - Venting: CLOSED | Valve states: {'Venting': 0}
+2025-07-28 09:00:34,222 - hardware.drivers.dummy_devices.dummy_valves - DEBUG - Container: CLOSED | Valve states: {'Venting': 0, 'Container': 0}
+2025-07-28 09:00:34,222 - hardware.drivers.dummy_devices.dummy_valves - INFO - Valve communication successfully started
+2025-07-28 09:00:34,292 - builders.signal_binder - INFO - Container selected: 1 Sample, maximum volume set to 10000
+2025-07-28 09:00:34,294 - builders.signal_binder - INFO - Container selected: 5 Sample, maximum volume set to 100000
+2025-07-28 09:00:39,799 - __main__ - INFO - Application exited with code 0

@@ -1,44 +1,47 @@
 from PySide6.QtCore import QObject, Signal
 
-class AllSignals(QObject):
+class OperationSignals(QObject):
+    operation_done = Signal()
+    operation_failed = Signal(str)
 
-    def __init__(self):                                         # Constructor
-        super().__init__()                                      # Call base class constructor
-
-class ExperimentSignals(QObject):
-    add_signal = Signal()
-    remove_signal = Signal()
-    fill_signal = Signal()
-    empty_signal = Signal()
-    automatic_signal = Signal()
-    pause_signal = Signal()
-    experiment_done = Signal()
-    stop_experiment = Signal()
-
-    def __init__(self):                                         # Constructor
-        super().__init__()                                      # Call base class constructor
+    def __init__(self):
+        super().__init__()
 
 class UISignals(QObject):
-    start_clicked = Signal(str)
-    stop_clicked = Signal()
-    pause_clicked = Signal()
+    container_changed = Signal(str)
+    config_changed = Signal(str, str, object, bool)                # str and object are representing key, new_value
+
+    start_operation = Signal(str)
+    pause_operation = Signal()
+    resume_operation = Signal()
+    stop_operation = Signal()
+    flush_operation = Signal()
+
 
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
 
 class HardwareSignals(QObject):
-
+    liquid_valve_changed = Signal(bool)
+    container_valve_changed = Signal(bool)
+    venting_valve_changed = Signal(bool)
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
 
 class DataSignals(QObject):
     update_status = Signal(str)
     update_measurement = Signal()
+
+    set_start_enabled = Signal(bool)
+    set_stop_enabled = Signal(bool)
+    set_pause_enabled = Signal(bool)
+
+    set_flush_enabled = Signal(bool)
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
 
 # Singleton instance
-experiment_signals = ExperimentSignals()
+operation_signals = OperationSignals()
 ui_signals = UISignals()
 data_signals = DataSignals()
 hardware_signals = HardwareSignals()
