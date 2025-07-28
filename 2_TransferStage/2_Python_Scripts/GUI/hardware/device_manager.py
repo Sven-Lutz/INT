@@ -1,6 +1,7 @@
 import logging
 
 from hardware.drivers.dummy_devices.dummy_valves import Valve
+from hardware.drivers.pressure_controller import PressureController
 
 from core.signals import hardware_signals
 
@@ -13,6 +14,9 @@ class DeviceManager:
         cfg = ConfigManager().load_config("valves")
         self.valve = Valve(cfg)
 
+        cfg = ConfigManager.load_config("pressure_controller")
+        print(cfg)
+        #self.pressure_ctl = PressureController(cfg)
         #self.pump = PumpController(config["pump"])
         return
 
@@ -55,11 +59,9 @@ class DeviceManager:
     def safe_state(self):
         self.valve.vent_pos()
         self._update_signals()
-        print(self.valve.state)
 
     def _update_signals(self):
         hardware_signals.liquid_valve_changed.emit(self.valve.state["Liquid"])  # send a snapshot
         hardware_signals.container_valve_changed.emit(self.valve.state["Container"])  # send a snapshot
         hardware_signals.venting_valve_changed.emit(not self.valve.state["Venting"])  # send a snapshot
-        print(self.valve.state)
 

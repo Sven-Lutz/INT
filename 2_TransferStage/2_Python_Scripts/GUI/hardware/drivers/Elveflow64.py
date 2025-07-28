@@ -4,7 +4,7 @@ import os
 from ctypes import *
 
 project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-dll_path = os.path.join(project_path,r'4_Config\DLL64\ElveFlow64.dll')
+dll_path = os.path.join(project_path,r'drivers\DLL64\ElveFlow64.dll')
 
 ElveflowDLL=CDLL(dll_path)# change this path
 

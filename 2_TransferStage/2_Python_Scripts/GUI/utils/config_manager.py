@@ -69,11 +69,12 @@ class ConfigManager:
                 specific_cfg = yaml.safe_load(f) or {}                                      # load name.yaml
 
         if name != "general":
-            merged_cfg = copy.deepcopy(self.general_config)                                 # Merge general config into specific config, without modifying originals
+            merged_cfg = copy.deepcopy(specific_cfg)                                        # Merge general config into specific config, without modifying originals
+            merged_cfg["Project Path"] = self.general_config["Project Path"]
+            merged_cfg["Config Path"] = self.config_dir
             merged_cfg.update(specific_cfg)
         else:
             merged_cfg = specific_cfg                                                       # do not merge if name is general
-
         self._configs[name] = merged_cfg                                                    # load merged_cfg in config dict
         return merged_cfg                                                                   # return merged config
 
@@ -123,3 +124,4 @@ class ConfigManager:
         except Exception as e:
             logger.error(f"Failed to save config '{name}': {e}")
         return
+

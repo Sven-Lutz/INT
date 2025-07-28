@@ -104,6 +104,8 @@ class OperationManager(QObject):
             data_signals.set_start_enabled.emit(not self.is_busy())
             data_signals.set_stop_enabled.emit(self.is_busy())
             data_signals.set_pause_enabled.emit(self.is_busy())
+
+            data_signals.set_flush_enabled.emit(not self.is_busy())
         except Exception as e:
             logger.error(f"Error in on_operation_done: {e}")
         return
