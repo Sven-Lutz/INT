@@ -13,7 +13,6 @@ class OperationManager(QObject):
         self.device_manager = device_manager
         self.operation = None                                                   # start with no operation
         self.paused = False
-        self._connected = False
 
         ui_signals.start_operation.connect(self.start_operation)  # <-- connect to UI start signal
         ui_signals.pause_operation.connect(self.pause_operation)
@@ -29,6 +28,7 @@ class OperationManager(QObject):
             "remove": RemoveOperation,
             "automatic": AutomaticOperation
         }
+        return
 
     def start_operation(self, operation_type):
         if self.operation:
@@ -42,9 +42,6 @@ class OperationManager(QObject):
             return
 
         self.operation = operation_class(self.device_manager)
-        if not self._connected:
-            operation_signals.operation_done.connect(self.on_operation_done)
-            self._connected = True
 
         data_signals.update_status.emit(f"Running: {operation_type}")
 
@@ -55,7 +52,6 @@ class OperationManager(QObject):
         data_signals.set_pause_enabled.emit(self.is_busy())
 
         data_signals.set_flush_enabled.emit(not self.is_busy())
-
         return
 
     def pause_operation(self):
@@ -75,43 +71,31 @@ class OperationManager(QObject):
         logger.info("Stopping operation")
         if self.operation:
             self.operation.stop()
-            self.operation = None
-            self.paused = False
 
-            data_signals.set_pause_enabled.emit(False)
             data_signals.update_status.emit("Stopped")
 
-            data_signals.set_start_enabled.emit(not self.is_busy())
-            data_signals.set_stop_enabled.emit(self.is_busy())
-            data_signals.set_pause_enabled.emit(self.is_busy())
-
-            data_signals.set_flush_enabled.emit(not self.is_busy())
-
+            self._reset_ui_state()
         else:
             logger.warning("OperationManager: no active operation to stop")
         return
 
     def on_operation_done(self):
-        try:
-            logger.info("Operation done")
-            data_signals.update_status.emit("Done")
-
-            #operation_signals.operation_done.emit()
-            logger.info(f"Operation: {self.is_busy()}")
-            self.operation = None
-            self._connected = False
-
-            data_signals.set_start_enabled.emit(not self.is_busy())
-            data_signals.set_stop_enabled.emit(self.is_busy())
-            data_signals.set_pause_enabled.emit(self.is_busy())
-
-            data_signals.set_flush_enabled.emit(not self.is_busy())
-        except Exception as e:
-            logger.error(f"Error in on_operation_done: {e}")
+        self._reset_ui_state()
         return
 
     def is_busy(self) -> bool:
         return self.operation is not None
+
+    def _reset_ui_state(self):
+        self.operation = None
+        self.paused = False
+
+        data_signals.set_start_enabled.emit(not self.is_busy())
+        data_signals.set_stop_enabled.emit(self.is_busy())
+        data_signals.set_pause_enabled.emit(self.is_busy())
+
+        data_signals.set_flush_enabled.emit(not self.is_busy())
+        return
 
     def start_flush(self):
         if self.is_busy():
@@ -119,10 +103,6 @@ class OperationManager(QObject):
             return
 
         self.operation = FlushOperation(self.device_manager)
-
-        if not self._connected:
-            operation_signals.operation_done.connect(self.on_operation_done)
-            self._connected = True
 
         self.operation.start()
         data_signals.update_status.emit("Flushing...")
@@ -132,7 +112,6 @@ class OperationManager(QObject):
         if isinstance(self.operation, FlushOperation):
             self.operation.stop()
             self.operation = None
-            self._connected = False
             data_signals.update_status.emit("Flush stopped")
             data_signals.set_flush_enabled.emit(True)
         return

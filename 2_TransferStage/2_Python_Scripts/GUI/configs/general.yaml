@@ -1,3 +1,4 @@
+Container Volume: 0
 Containers:
   1 Sample:
     MUX Valve: 1
@@ -12,8 +13,8 @@ Containers:
     Maximum Volume: 200000
     Small Volume: 5000
 D Term: 0.05
-I Term: 6
 Default Flow: 30000
+I Term: 6
 Operations:
 - add
 - remove
@@ -23,6 +24,5 @@ Operations:
 P Term: 1.4
 PVA Waiting Time: 1
 Project Path: C:\Users\Operator\PelliKAn\2_TransferStage
-Selected Container: 5 Sample
+Selected Container: 1 Sample
 Selected Operation: add
-Container Volume: 0

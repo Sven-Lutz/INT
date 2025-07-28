@@ -12,7 +12,7 @@ class PIDFlowController(QObject):
         PID controller to maintain flow by adjusting pressure.
         Terminates automatically when target volume is reached.
         """
-
+    finished = Signal()
     def __init__(self, device_manager, target_volume, direction):
         """
         :param setpoint: Desired flow rate in mL/s
@@ -31,7 +31,6 @@ class PIDFlowController(QObject):
 
         self._volume = 0.0
         self._previous_flow = 0.0
-
         self._paused = False
 
         # PID Controller
@@ -53,7 +52,6 @@ class PIDFlowController(QObject):
             self.device_manager.filling()
         else:
             self.device_manager.removing()
-
         self.timer.start()
         return
 
@@ -62,23 +60,19 @@ class PIDFlowController(QObject):
             logger.info("PIDFlowController paused")
             self._paused = True
             self.timer.stop()
-            self.device_manager.set_pressure(0)
-            self.device_manager.shut_container()
         return
 
     def resume(self):
         if self._paused:
             logger.info("PIDFlowController resumed")
             self._paused = False
-            self.device_manager.open_container()
             self.timer.start()
         return
 
     def stop(self):
         logger.info("PIDFlowController stopped")
         self.timer.stop()
-        self.device_manager.set_pressure(0)
-        operation_signals.operation_done.emit()
+        self.finished.emit()
         return
 
     def _update(self):
@@ -93,7 +87,7 @@ class PIDFlowController(QObject):
 
         data_signals.flow_updated.emit(flow)
         data_signals.pressure_updated.emit(pressure_output)
-        data_signals.volume_updated.emit(self.target_volume - self._volume)
+        data_signals.tbc_volume_updated.emit(self.target_volume - self._volume)
         data_signals.container_volume_updated.emit(self.container_vol + self._volume)
 
         logger.debug(f"[PID] Flow: {flow:.2f} uL/min | Pressure: {pressure_output:.1f} mbar | Volume: {self._volume:.2f} uL")
@@ -101,5 +95,5 @@ class PIDFlowController(QObject):
         if self._volume >= self.target_volume:
             logger.info(f"Target volume of {self.target_volume:.2f} mL reached")
             self.stop()
-        self.previous_flow = flow
+        self._previous_flow = flow
         return

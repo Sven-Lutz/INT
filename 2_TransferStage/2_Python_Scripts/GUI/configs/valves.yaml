@@ -1,8 +1,14 @@
 COM Port: COM3
 Valves:
-  Venting: [10,12]    # Used for venting. It is set to pin 10 in the arduino and connected with the LED at pin 12. NO-Valve
-  Liquid: [11,13]     # Used for switching between the water and waste bottles. It is set to pin 11 in the arduino and connected with the LED at pin 13
-  Container: [9,8]    # Used for blocking the container line. It is set to pin 9 in the arduino and connected with the LED at pin 8. NC-Valve
+  Venting:
+    Pins: [10,12]    # Used for venting. It is set to pin 10 in the arduino and connected with the LED at pin 12. NO-Valve
+    State: 0
+  Liquid:
+    Pins: [11,13]     # Used for switching between the water and waste bottles. It is set to pin 11 in the arduino and connected with the LED at pin 13
+    State: 0
+  Container:
+    State: 0
+    Pins: [9,8]    # Used for blocking the container line. It is set to pin 9 in the arduino and connected with the LED at pin 8. NC-Valve
 
 
 

@@ -769,7 +769,7 @@ class MainApplication(tk.Tk):
 
         self.temp.update({"Is Paused": pause_event.is_set()})               # Update the temp
         self.temp.update({"Is Running": measurement_event.is_set()})
-        func()                                                              # Call the pause function in the experiment script to handle the valve states
+        func()                                                              # Call the pause function in the experiment script to handle the valve state
         return
 
     def stop_measurement(self):

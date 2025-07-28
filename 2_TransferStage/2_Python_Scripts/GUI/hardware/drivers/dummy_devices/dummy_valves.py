@@ -22,7 +22,7 @@ class Valve:
         #self.board = Arduino(port)                                      # Connecting to the board
         #time.sleep(1.0)                                                 # allow Arduino to initialize
 
-        self.state = {}                                                 # Track current valve states
+        self.state = {}                                                 # Track current valve state
 
         self.vent_pos()                                                 # Set valves into the safe position
         logger.info("Valve communication successfully started")

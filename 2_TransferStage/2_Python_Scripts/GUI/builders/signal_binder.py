@@ -45,7 +45,8 @@ class SignalBinder:
 
         data_signals.flow_updated.connect(self._update_flow_display)
         data_signals.pressure_updated.connect(self._update_pressure_display)
-        data_signals.volume_updated.connect(self._update_volume_display)
+        data_signals.tbc_volume_updated.connect(self._update_volume_display)
+        data_signals.container_volume_updated.connect(self._update_container_volume_display)
         return
 
     def _on_container_changed(self,container_name):

@@ -24,6 +24,8 @@ class DeviceManager:
 
         cfg = ConfigManager().load_config("vacuum_pump")
         self.pump = VacuumPump(cfg)
+
+        self.safe_state()
         return
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -63,11 +65,14 @@ class DeviceManager:
         return
 
     def safe_state(self):
+        self.shut_container()
         self.pressure_ctrl.set_pressure(0)
         self.pump.stop()
         self.valve.vent_pos()
 
+        hardware_signals.pump_changed.emit(False)
         self._update_signals()
+        logger.info("System is now in a safe state")
         return
 
     def set_pressure(self, p):

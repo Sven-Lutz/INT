@@ -360,7 +360,7 @@ def MUX_DRI_Get_Valve (MUX_DRI_ID_in, selected_Valve):
  # desired valve.
  # For MUX Distribution 12, between 1-12.
  # For MUX Distributor (6 or 10 valves), between 1-6 or 1-10.
- # For MUX Recirculation 6 or MUX Injection (6 valves), the two states are 1 
+ # For MUX Recirculation 6 or MUX Injection (6 valves), the two state are 1
  # or 2.
  # 
  # Rotation indicates the path the valve will perform to select a valve, 

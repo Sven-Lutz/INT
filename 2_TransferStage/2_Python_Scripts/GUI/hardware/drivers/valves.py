@@ -15,13 +15,14 @@ class Valve:
         logger.info("Staring valve communication")
         port = config.get("COM Port", None)
         self.valves = config.get("Valves", {})
+        self.state = {valve: props['State'] for valve, props in config['Valves'].items()}  # Track current valve state
         if not self.valves:
             raise ValueError("Valve configuration is empty or missing 'valves' key.")
 
         self.board = Arduino(port)                                      # Connecting to the board
         time.sleep(1.0)                                                 # allow Arduino to initialize
 
-        self.state = {}                                                 # Track current valve states
+
 
         self.vent_pos()                                                 # Set valves into the safe position
         logger.info("Valve communication successfully started")
@@ -51,7 +52,7 @@ class Valve:
             logger.error(f"Valve '{name}' is not defined in the configuration.")
             raise ValueError(f"Valve '{name}' is not defined in the configuration.")
 
-        pin_valve, pin_led = self.valves[name]
+        pin_valve, pin_led = self.valves[name]["Pins"]
         self.board.digital[pin_valve].write(state)
         self.board.digital[pin_led].write(state)
 
