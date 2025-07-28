@@ -65,7 +65,7 @@ class DeviceManager:
         self._update_signals()
         return
 
-    def set_pressure(self,p):
+    def set_pressure(self, p):
         self.pressure_ctrl.set_pressure(p)
         return
 

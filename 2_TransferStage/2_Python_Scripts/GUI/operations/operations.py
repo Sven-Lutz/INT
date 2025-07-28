@@ -4,6 +4,7 @@ import time
 from PySide6.QtCore import QObject, Signal, QTimer
 
 from operations.dummy_operations.dummy_run import DummyOperation
+from core.pid_controller import PIDFlowController
 
 logger = logging.getLogger(__name__)                            # Create a logger for this module
 
@@ -11,64 +12,64 @@ class BaseOperation(QObject):
     finished = Signal()
 
 
-    def __init__(self, device_manager):
+    def __init__(self, device_manager, setpoint=None, target_volume=None, direction=""):
         super().__init__()
         self.device_manager = device_manager
-        self.dummy = DummyOperation()
-        self.dummy.finished.connect(self._done)
+
+        self._init_pid(setpoint,target_volume,direction)
+
         self._should_pause = False
+
+        #self.dummy = DummyOperation()
+        #self.dummy.finished.connect(self._done)
+
+        return
+
+    def _init_pid(self, setpoint=None, target_volume=None, direction=""):
+
+        self.pid_ctrl = None
+
+        if setpoint is not None and target_volume is not None and direction != "":
+            self.pid_controller = PIDFlowController(device_manager=self.device_manager, setpoint=setpoint, target_volume=target_volume, direction=direction)
+            self.pid_controller.finished.connect(self._done)
         return
 
     def start(self):
-        self.dummy.start()
+        if self.pid_controller:
+            self.pid_controller.start()
+        else:
+            logger.warning("No PID controller configured")
         return
 
     def pause(self):
         self._should_pause = True
+        if self.pid_controller:
+            self.pid_controller.pause()
         self.device_manager.shut_container()
-        self.dummy.pause()
         return
 
     def resume(self):
         self._should_pause = False
+        if self.pid_controller:
+            self.pid_controller.resume()
         self.device_manager.open_container()
-        self.dummy.resume()
         return
 
-    def _done(self):
+    def stop(self):
+        if self.pid_controller:
+            self.pid_controller.stop()
         self.device_manager.safe_state()
         self.finished.emit()
         return
 
-    def stop(self):
+    def _done(self):
         self.device_manager.safe_state()
         self.finished.emit()
         return
 
 class AddOperation(BaseOperation):
     def __init__(self, device_manager):
-        super().__init__(device_manager)
-
-    def start(self):
-        self.device_manager.filling()
-
-        self.device_manager.set_pressure(2000)
-        super().start()
-        print(f"Flow Sensor: {self.device_manager.get_flow()}")
-        logger.info("AddOperation started")
-
-
-    def stop(self):
-        super().stop()
-        print(f"Flow Sensor: {self.device_manager.get_flow()}")
-        logger.info("AddOperation stopped")
-        return
-
-
-    def _done(self):
-        super()._done()
-        logger.info("AddOperation finished")
-        print(f"Flow Sensor: {self.device_manager.get_flow()}")
+        super().__init__(device_manager, setpoint=3000.0, target_volume=1000.0, direction="positive")
 
 class RemoveOperation(BaseOperation):
     def __init__(self, device_manager):
