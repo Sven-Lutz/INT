@@ -1,12 +1,12 @@
-2025-07-21 13:49:48,934 - __main__ - INFO - Starting application...
-2025-07-21 13:49:48,956 - utils.config_manager - INFO - loading general.yaml
-2025-07-21 13:49:48,970 - builders.signal_binder - DEBUG - <class 'frames.parameter_frame.ParameterFrame'>
-2025-07-21 13:49:48,971 - builders.signal_binder - DEBUG - <class 'core.experiment_manager.ExperimentManager'>
-2025-07-21 13:49:48,971 - builders.signal_binder - DEBUG - add
-2025-07-21 13:49:48,971 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot '<lambda>'
-2025-07-21 13:49:48,971 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot '<lambda>'
-2025-07-21 13:49:48,972 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot 'start_experiment'
-2025-07-21 13:49:48,972 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot 'SignalInstance'
-2025-07-21 13:49:48,972 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot 'set_status'
-2025-07-21 13:49:48,972 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot 'set_measurement'
-2025-07-21 13:50:50,898 - __main__ - INFO - Application exited with code 0
+2025-07-21 14:46:01,528 - __main__ - INFO - Starting application...
+2025-07-21 14:46:01,548 - utils.config_manager - INFO - loading general.yaml
+2025-07-21 14:46:01,559 - builders.signal_binder - DEBUG - <class 'frames.parameter_frame.ParameterFrame'>
+2025-07-21 14:46:01,559 - builders.signal_binder - DEBUG - <class 'core.experiment_manager.ExperimentManager'>
+2025-07-21 14:46:01,559 - builders.signal_binder - DEBUG - add
+2025-07-21 14:46:01,559 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot '<lambda>'
+2025-07-21 14:46:01,560 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot '<lambda>'
+2025-07-21 14:46:01,560 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot 'start_experiment'
+2025-07-21 14:46:01,560 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot 'SignalInstance'
+2025-07-21 14:46:01,560 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot 'set_status'
+2025-07-21 14:46:01,560 - builders.signal_binder - INFO - Connected signal 'SignalInstance' to slot 'set_measurement'
+2025-07-21 14:46:04,616 - __main__ - INFO - Application exited with code 0

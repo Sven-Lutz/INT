@@ -22,7 +22,7 @@ class UiBuilder:
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(parameter_frame)
-        splitter.addWidget(state_variable_frame)
+        #splitter.addWidget(state_variable_frame)
 
         layout.addWidget(project_frame)
         layout.addWidget(splitter)
