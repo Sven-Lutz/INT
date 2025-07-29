@@ -4,6 +4,7 @@ from hardware.drivers.dummy_devices.dummy_valves import Valve
 from hardware.drivers.dummy_devices.dummy_pressure_controller import PressureController
 from hardware.drivers.dummy_devices.dummy_flow_sensor import FlowSensor
 from hardware.drivers.dummy_devices.dummy_vacuum_pump import VacuumPump
+from hardware.drivers.container_selector import ContainerSelector
 
 from core.signals import hardware_signals
 
@@ -22,8 +23,12 @@ class DeviceManager:
         cfg = ConfigManager().load_config("flow_sensor")
         #self.flow_snsr = FlowSensor(cfg)
         self.flow_snsr = FlowSensor(self.pressure_ctrl)                 # this is only for the dummy device
+
         cfg = ConfigManager().load_config("vacuum_pump")
         self.pump = VacuumPump(cfg)
+
+        cfg = ConfigManager().load_config("container_selector")
+        self.container_selector = ContainerSelector(cfg)
 
         self.safe_state()
         return
@@ -69,6 +74,7 @@ class DeviceManager:
         self.pressure_ctrl.set_pressure(0)
         self.pump.stop()
         self.valve.vent_pos()
+        self.container_selector.select_container("Drain")
 
         hardware_signals.pump_changed.emit(False)
         self._update_signals()
@@ -96,9 +102,17 @@ class DeviceManager:
         self.pump.stop()
         return
 
+    def select_container(self,container_name):
+        self.container_selector(container_name)
+        return
+
     def _update_signals(self):
         hardware_signals.liquid_valve_changed.emit(self.valve.state["Liquid"])  # send a snapshot
         hardware_signals.container_valve_changed.emit(self.valve.state["Container"])  # send a snapshot
         hardware_signals.venting_valve_changed.emit(not self.valve.state["Venting"])  # send a snapshot
+
+        ConfigManager().update_config("valves","Valves.Liquid.State", self.valve.state["Liquid"])
+        ConfigManager().update_config("valves", "Valves.Container.State", self.valve.state["Container"])
+        ConfigManager().update_config("valves", "Valves.Venting.State", not self.valve.state["Venting"])
         return
 

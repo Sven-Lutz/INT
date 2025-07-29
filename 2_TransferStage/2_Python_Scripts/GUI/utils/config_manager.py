@@ -91,27 +91,37 @@ class ConfigManager:
 
     def update_config(self, name, key, value, save=True):
         """
-        def: Updates the key of the name.yaml with value and possibly saves it
-        params: name: String which indicates which config needs to be changed
-                key: String which indicates which key in the config needs to be changed
-                value: Generic which holds the new information
-                save: Bool which allows or prohibits saving to the file
-        return:---
-        """
+        Updates the (possibly nested) key of the name.yaml with value and optionally saves it.
 
-        if name not in self._configs:                                           # if the config has not been loaded it cannot be updated
+        Parameters:
+            name (str): Name of the config to update.
+            key (str): Dot-separated key string (e.g., "database.host").
+            value (Any): New value to assign to the key.
+            save (bool): Whether to persist changes to the file.
+
+        Returns:
+            None
+        """
+        if name not in self._configs:
             logger.error(f"Config '{name}' not loaded. Cannot update.")
             return
 
         config = self._configs[name]
-        config[key] = value                                                     # set the new value of key
+        keys = key.split(".")
+        sub_config = config
+        for k in keys[:-1]:
+            if k not in sub_config or not isinstance(sub_config[k], dict):
+                sub_config[k] = {}  # Auto-create nested dicts if missing
+            sub_config = sub_config[k]
+
+        sub_config[keys[-1]] = value
         logger.info(f"Updated '{key}' in config '{name}' to: {value}")
         self._configs[name] = config
+
         if name == "general":
             self._load_general_config()
         if save:
-            self.save_config(name)                                              # if allowed, save the file
-        return
+            self.save_config(name)
 
     def save_config(self, name):
         """

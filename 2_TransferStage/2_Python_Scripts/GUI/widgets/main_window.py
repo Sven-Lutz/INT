@@ -1,7 +1,7 @@
 import logging
 import os
 import PySide6.QtWidgets as Qtw
-
+from fontTools.config import Config
 
 from utils.config_manager import ConfigManager
 from utils.widget_finder import WidgetFinder
@@ -46,7 +46,8 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
 
         self.ui.projectPathLineEdit.setText(self.config.get("Project Path", "No Path Found"))                   # Load project path
 
-        container_names = self.config["Containers"].keys()                                                      # Load container names
+        cfg = ConfigManager().load_config("container_selector")
+        container_names = cfg["Containers"].keys()                                                      # Load container names
         self.ui.containerComboBox.addItems(container_names)                                                     # Connect container names with ComboBox
 
         selected_container = self.config.get("Selected Container", "No Container Found")                        # Set initial container to latest selection
@@ -73,6 +74,12 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         self.ui.containerVolLineEdit.setText(f"{self.config.get("Container Volume", "No Volume Found"):.2f} uL")
         self.ui.bottleVolLineEdit.setText(f"{self.config.get("Remaining Bottle Volume", "No Bottle Found"):.2f} mL")
 
+        cfg = ConfigManager().load_config("valves")
+        self.ui.liquidToggleSwitch.setChecked(bool(cfg["Valves"]["Liquid"]["State"]))
+        self.ui.ventingToggleSwitch.setChecked(bool(cfg["Valves"]["Venting"]["State"]))
+        self.ui.containerToggleSwitch.setChecked(bool(cfg["Valves"]["Container"]["State"]))
+
+
         self.ui.progressBar.setValue(0)
         self.ui.remainingTimeLabel.setText("Remaining Time: 00:00")
         return
@@ -94,8 +101,10 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         return
 
     def _update_volume_field(self, container_name):
-        volume = self.config["Containers"].get(container_name, {}).get("Maximum Volume", "")
+        cfg = ConfigManager().load_config("container_selector")
+        volume = cfg["Containers"].get(container_name, {}).get("Maximum Volume", "No Volume Found")
         self.ui.maxVolLineEdit.setText(str(volume))
+        self.device_manager.select_container(container_name)
         return
 
     def _list_widgets(self):

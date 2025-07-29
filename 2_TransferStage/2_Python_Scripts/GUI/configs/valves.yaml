@@ -1,15 +1,19 @@
 COM Port: COM3
+Config Path: C:\Users\Operator\PelliKAn\2_TransferStage\2_Python_Scripts\GUI\configs
+Project Path: C:\Users\Operator\PelliKAn\2_TransferStage\2_Python_Scripts\GUI
 Valves:
-  Venting:
-    Pins: [10,12]    # Used for venting. It is set to pin 10 in the arduino and connected with the LED at pin 12. NO-Valve
+  Container:
+    Pins:
+    - 9
+    - 8
     State: 0
   Liquid:
-    Pins: [11,13]     # Used for switching between the water and waste bottles. It is set to pin 11 in the arduino and connected with the LED at pin 13
-    State: 0
-  Container:
-    State: 0
-    Pins: [9,8]    # Used for blocking the container line. It is set to pin 9 in the arduino and connected with the LED at pin 8. NC-Valve
-
-
-
-
+    Pins:
+    - 11
+    - 13
+    State: 1
+  Venting:
+    Pins:
+    - 10
+    - 12
+    State: true

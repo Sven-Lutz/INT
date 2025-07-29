@@ -63,7 +63,8 @@ class SignalBinder:
         return
 
     def _on_container_changed(self,container_name):
-        max_volume = self.config["Containers"].get(container_name, None).get("Maximum Volume", None)
+        cfg = ConfigManager().load_config("container_selector")
+        max_volume = cfg["Containers"].get(container_name, None).get("Maximum Volume", None)
         self.ui.maxVolLineEdit.setText(str(max_volume))
 
         logger.info(f"Container selected: {container_name}, maximum max_volume set to {max_volume}")
