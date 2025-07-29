@@ -115,7 +115,7 @@ class ConfigManager:
             sub_config = sub_config[k]
 
         sub_config[keys[-1]] = value
-        logger.info(f"Updated '{key}' in config '{name}' to: {value}")
+        logger.debug(f"Updated '{key}' in config '{name}' to: {value}")
         self._configs[name] = config
 
         if name == "general":
@@ -139,7 +139,7 @@ class ConfigManager:
         try:
             with open(path, "w") as f:
                 yaml.safe_dump(to_save, f)                                      # save config to file
-            logger.info(f"Saved config '{name}' to disk.")
+            logger.debug(f"Saved config '{name}' to disk.")
         except Exception as e:
             logger.error(f"Failed to save config '{name}': {e}")
         return

@@ -10,7 +10,7 @@ def configure_logging():
     log_file = os.path.join(log_dir, 'app.log')
 
     root_logger = logging.getLogger()                                                               # get the top-level logger
-    root_logger.setLevel(logging.DEBUG)                                                             # minimum logging to debug on the escalation pyramid
+    root_logger.setLevel(logging.INFO)                                                             # minimum logging to debug on the escalation pyramid
 
     if root_logger.handlers:                                                                        # avoid duplicate handlers
         return

@@ -59,7 +59,7 @@ class PressureController:
         """
         self.channel = 1                                                                # Convert channel (1) to c_int32, this has to be done, as the pressure controller is programmed in C
         self.pressure = p
-        logger.info(f"Pressure {self.pressure} at channel {self.channel}")
+        logger.debug(f"Pressure {self.pressure} at channel {self.channel}")
         return
 
     def get_pressure(self):

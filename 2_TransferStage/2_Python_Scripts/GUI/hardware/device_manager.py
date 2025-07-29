@@ -74,7 +74,7 @@ class DeviceManager:
         self.pressure_ctrl.set_pressure(0)
         self.pump.stop()
         self.valve.vent_pos()
-        self.container_selector.select_container("Drain")
+        self.container_selector.select_container("1 Sample")
 
         hardware_signals.pump_changed.emit(False)
         self._update_signals()
@@ -102,8 +102,9 @@ class DeviceManager:
         self.pump.stop()
         return
 
-    def select_container(self,container_name):
-        self.container_selector(container_name)
+    def select_container(self, container_name):
+        logger.info("Container Selected")
+        self.container_selector.select_container(container_name)
         return
 
     def _update_signals(self):

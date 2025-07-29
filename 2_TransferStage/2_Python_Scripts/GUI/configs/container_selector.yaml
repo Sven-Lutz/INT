@@ -14,8 +14,8 @@ Containers:
     Maximum Volume: 200000
     Small Volume: 5000
   Drain:
-    MUX valve: 7
-    Maximum Volume: 2000000
+    MUX Valve: 7
+    Maximum Volume: NaN
 
 
 

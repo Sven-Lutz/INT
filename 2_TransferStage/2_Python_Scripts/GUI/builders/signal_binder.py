@@ -1,9 +1,7 @@
 import logging
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QDialog
 
 from core.signals import ui_signals, operation_signals, data_signals, hardware_signals
-from fontTools.config import Config
 from widgets.set_bottle_volume_dialog import SetBottleVolumeDialog
 from utils.config_manager import ConfigManager
 
@@ -18,10 +16,11 @@ def get_callable_name(callable_obj):
         return str(callable_obj)
 
 class SignalBinder:
-    def __init__(self, ui, operation_manager, config):
+    def __init__(self, ui, operation_manager, device_manager, config):
         self.ui = ui
         self.config = config
         self.operation_manager = operation_manager
+        self.device_manager = device_manager
 
         self._blink_state = False
         self._pause_button_blinking()
@@ -33,6 +32,8 @@ class SignalBinder:
 
     def _bind_ui_to_signals(self):
         self.ui.containerComboBox.currentTextChanged.connect(self._on_container_changed)
+        self.ui.containerComboBox.currentTextChanged.connect(self.device_manager.select_container)
+
         self.ui.soakTimeLineEdit.editingFinished.connect(self._on_soak_time_changed)
         self.ui.startPushButton.clicked.connect(self._emit_start_operation)
         self.ui.stopPushButton.clicked.connect(ui_signals.stop_operation.emit)
@@ -62,14 +63,16 @@ class SignalBinder:
         data_signals.bottle_volume_updated.connect(self._update_bottle_volume_display)
         return
 
-    def _on_container_changed(self,container_name):
+    def _on_container_changed(self, container_name):
         cfg = ConfigManager().load_config("container_selector")
         max_volume = cfg["Containers"].get(container_name, None).get("Maximum Volume", None)
         self.ui.maxVolLineEdit.setText(str(max_volume))
 
-        logger.info(f"Container selected: {container_name}, maximum max_volume set to {max_volume}")
+        logger.debug(f"Container selected: {container_name}, maximum max_volume set to {max_volume}")
         ui_signals.container_changed.emit(container_name)
         ui_signals.config_changed.emit("general", "Selected Container", container_name, True)
+
+
         return
 
     def _on_soak_time_changed(self):
@@ -81,7 +84,7 @@ class SignalBinder:
             logger.error("Invalid value entered for PVA Waiting Time")
         return
 
-    def _on_operation_changed(self,operation_name):
+    def _on_operation_changed(self, operation_name):
         logger.info(f"Operation selected: {operation_name}")
         ui_signals.config_changed.emit("general", "Selected Operation", operation_name, True)
         return

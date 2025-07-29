@@ -11,7 +11,7 @@ class ContainerSelector:
         self.Instr_ID = c_int32()
         self._initialize_device()
 
-        print("Transfer container selector communication successfully started\n")
+        logger.info("Transfer container selector communication successfully started\n")
         return
 
     def _initialize_device(self):
@@ -29,7 +29,7 @@ class ContainerSelector:
         mux_valves = set()
         for container in self.config.get("Containers", {}).values():
             for key in container:
-                if key == "MUX valve":
+                if key == "MUX Valve":
                     mux_valves.add(container[key])
         return channel in mux_valves
 
@@ -53,14 +53,17 @@ class ContainerSelector:
         container_info = containers[matched_key]
 
         # Handle both "MUX Valve" and "MUX valve" keys
-        mux_valve = container_info.get("MUX Valve") or container_info.get("MUX valve")
-
+        mux_valve = int(container_info.get("MUX Valve"))
+        logger.info(f"MUX valve selected: {mux_valve}, type: {type(mux_valve)}")
         if mux_valve is None:
             logger.warning(f"MUX valve not defined for container '{matched_key}'")
             raise ValueError(f"ERROR: MUX valve not defined for container '{matched_key}'")
 
         if self._confirm_channel(mux_valve):
-            MUX_DRI_Set_Valve(self.Instr_ID.value, mux_valve, 0)
+            error = MUX_DRI_Set_Valve(self.Instr_ID.value, mux_valve, 0)
+            if error != 0:
+                logger.error(f"Unable to select Channel: {error}")
+                raise ConnectionError(f"ERROR: Unable to select Channel {mux_valve}: {error}")
             logger.debug(f"MUX Valve set to {mux_valve} for container '{matched_key}'")
         else:
             logger.warning("Channel is not connected in System")

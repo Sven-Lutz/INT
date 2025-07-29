@@ -39,10 +39,8 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         self.ui = UiBuilder.load_ui(ui_path, self)
         self.setCentralWidget(self.ui)
 
-        self.binder = SignalBinder(self.ui, operation_manager=self.operation_manager, config=self.config)       # Start signal binding
+        self.binder = SignalBinder(self.ui, operation_manager=self.operation_manager, device_manager=self.device_manager, config=self.config)       # Start signal binding
         self.binder.bind_signals()
-
-
 
         self.ui.projectPathLineEdit.setText(self.config.get("Project Path", "No Path Found"))                   # Load project path
 
@@ -98,13 +96,6 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         data_signals.set_pause_enabled.connect(self.binder.reset_pause_button)
 
         data_signals.set_flush_enabled.connect(self.ui.flushPushButton.setEnabled)
-        return
-
-    def _update_volume_field(self, container_name):
-        cfg = ConfigManager().load_config("container_selector")
-        volume = cfg["Containers"].get(container_name, {}).get("Maximum Volume", "No Volume Found")
-        self.ui.maxVolLineEdit.setText(str(volume))
-        self.device_manager.select_container(container_name)
         return
 
     def _list_widgets(self):
