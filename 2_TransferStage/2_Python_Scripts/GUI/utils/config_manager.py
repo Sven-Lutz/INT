@@ -36,6 +36,13 @@ class ConfigManager:
         """Load general config"""
         self.load_config("general")                                                 # load general config
         self.general_config = self._configs["general"]                              # add general config to the config dict
+        self._check_project_path()
+        return
+
+    def _check_project_path(self):
+        if self.general_config.get("Project Path") != os.getcwd():
+            self.update_config("general", "Project Path", os.getcwd(), True)
+            logger.info("Project Path has been updated")
         return
 
     def load_config(self, name):
@@ -99,7 +106,9 @@ class ConfigManager:
         config = self._configs[name]
         config[key] = value                                                     # set the new value of key
         logger.info(f"Updated '{key}' in config '{name}' to: {value}")
-
+        self._configs[name] = config
+        if name == "general":
+            self._load_general_config()
         if save:
             self.save_config(name)                                              # if allowed, save the file
         return

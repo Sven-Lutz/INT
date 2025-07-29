@@ -35,7 +35,7 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         return
 
     def _init_ui_defaults(self):                                                                                # Private method to build the UI
-        ui_path = os.path.join(self.config.get("Project Path"),"2_Python_Scripts","GUI","ui","main_window.ui")
+        ui_path = os.path.join(self.config.get("Project Path"),"ui","main_window.ui")
         self.ui = UiBuilder.load_ui(ui_path, self)
         self.setCentralWidget(self.ui)
 
