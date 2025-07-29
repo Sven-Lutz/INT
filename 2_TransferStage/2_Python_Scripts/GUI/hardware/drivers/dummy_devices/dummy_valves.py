@@ -1,8 +1,6 @@
 import time
 import logging
 
-from pyfirmata import Arduino
-
 logger = logging.getLogger(__name__)
 
 
@@ -13,18 +11,15 @@ class Valve:
 
     def __init__(self, config:dict ):
         logger.info("Staring valve communication")
-        port = config.get("COM Port",None)
+        port = config.get("COM Port", None)
         self.valves = config.get("Valves", {})
-
+        self.state = {valve: props['State'] for valve, props in config['Valves'].items()}  # Track current valve state
         if not self.valves:
             raise ValueError("Valve configuration is empty or missing 'valves' key.")
 
-        #self.board = Arduino(port)                                      # Connecting to the board
-        #time.sleep(1.0)                                                 # allow Arduino to initialize
+        time.sleep(1.0)  # allow Arduino to initialize
 
-        self.state = {}                                                 # Track current valve state
-
-        self.vent_pos()                                                 # Set valves into the safe position
+        self.vent_pos()  # Set valves into the safe position
         logger.info("Valve communication successfully started")
         return
 
@@ -38,7 +33,6 @@ class Valve:
     def shutdown(self):
         logger.debug("Shutting down valve system")
         self.vent_pos()
-        #self.board.exit()
         return
 
     def _switch_valve(self, name, state):
@@ -53,8 +47,6 @@ class Valve:
             raise ValueError(f"Valve '{name}' is not defined in the configuration.")
 
         pin_valve, pin_led = self.valves[name]
-        #self.board.digital[pin_valve].write(state)
-        #self.board.digital[pin_led].write(state)
 
         self.state[name] = state
         logger.debug(f"{name}: {'OPEN' if state else 'CLOSED'} | Valve states: {self.state}")

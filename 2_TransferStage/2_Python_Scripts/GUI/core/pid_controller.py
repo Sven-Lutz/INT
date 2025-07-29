@@ -84,7 +84,6 @@ class PIDFlowController(QObject):
 
         pressure_output = self.pid(flow)
         self.device_manager.set_pressure(pressure_output)
-
         data_signals.flow_updated.emit(flow)
         data_signals.pressure_updated.emit(pressure_output)
         data_signals.tbc_volume_updated.emit(self.target_volume - self._volume)

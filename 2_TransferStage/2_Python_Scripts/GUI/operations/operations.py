@@ -30,7 +30,6 @@ class BaseOperation(QObject):
     def _init_pid(self, target_volume=None, direction=""):
         if target_volume is not None and direction != "":
             self.pid_ctrl = PIDFlowController(device_manager=self.device_manager, target_volume=target_volume, direction=direction)
-            operation_signals.operation_done.connect(self._finalize)
 
             self.pid_ctrl.finished.connect(self._on_controller_done)
         else:
@@ -72,7 +71,7 @@ class BaseOperation(QObject):
     def _finalize(self, message: str = "Operation finished"):
         logger.info(message)
         self.device_manager.safe_state()
-        #operation_signals.operation_done.emit()
+        operation_signals.operation_done.emit()
         return
 
     def _on_controller_done(self):

@@ -4,14 +4,17 @@ Containers:
     MUX Valve: 1
     Maximum Volume: 180000
     Small Volume: 5000
-  10 Sample:
-    MUX Valve: 3
-    Maximum Volume: 1100000
-    Small Volume: 5000
   5 Sample:
     MUX Valve: 2
     Maximum Volume: 200000
     Small Volume: 5000
+  10 Sample:
+    MUX Valve: 3
+    Maximum Volume: 1100000
+    Small Volume: 5000
+  Drain :
+    MUX valve: 7
+    Maximum Volume: 2000000
 D Term: 0.05
 Default Flow: 30000
 I Term: 6

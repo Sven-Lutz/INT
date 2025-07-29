@@ -1,9 +1,9 @@
 import logging
 
-from hardware.drivers.valves import Valve
-from hardware.drivers.pressure_controller import PressureController
-from hardware.drivers.flow_sensor import FlowSensor
-from hardware.drivers.vacuum_pump import VacuumPump
+from hardware.drivers.dummy_devices.dummy_valves import Valve
+from hardware.drivers.dummy_devices.dummy_pressure_controller import PressureController
+from hardware.drivers.dummy_devices.dummy_flow_sensor import FlowSensor
+from hardware.drivers.dummy_devices.dummy_vacuum_pump import VacuumPump
 
 from core.signals import hardware_signals
 
@@ -20,8 +20,8 @@ class DeviceManager:
         self.pressure_ctrl = PressureController(cfg)
 
         cfg = ConfigManager().load_config("flow_sensor")
-        self.flow_snsr = FlowSensor(cfg)
-
+        #self.flow_snsr = FlowSensor(cfg)
+        self.flow_snsr = FlowSensor(self.pressure_ctrl)                 # this is only for the dummy device
         cfg = ConfigManager().load_config("vacuum_pump")
         self.pump = VacuumPump(cfg)
 
@@ -80,6 +80,7 @@ class DeviceManager:
         return
 
     def get_pressure(self):
+        logger.debug(self.pressure_ctrl.get_pressure())
         return self.pressure_ctrl.get_pressure()
 
     def get_flow(self):
