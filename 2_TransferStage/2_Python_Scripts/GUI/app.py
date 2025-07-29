@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QApplication
-from main_window import MainWindow
+from widgets.main_window import MainWindow
 import sys
 import logging
 from logs.log_config import configure_logging

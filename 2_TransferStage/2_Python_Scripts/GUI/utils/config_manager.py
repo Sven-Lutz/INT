@@ -82,7 +82,7 @@ class ConfigManager:
         """Return all loaded configs (only those actually loaded)"""
         return dict(self._configs)
 
-    def update_config(self, name, key, value, save=False):
+    def update_config(self, name, key, value, save=True):
         """
         def: Updates the key of the name.yaml with value and possibly saves it
         params: name: String which indicates which config needs to be changed

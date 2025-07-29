@@ -72,7 +72,12 @@ class PIDFlowController(QObject):
     def stop(self):
         logger.info("PIDFlowController stopped")
         self.timer.stop()
+
+        new_container_volume = self.container_vol + self._volume
+        cfg = ConfigManager()
+        cfg.update_config("general", "Container Volume", round(new_container_volume,2), True)
         self.finished.emit()
+
         return
 
     def _update(self):

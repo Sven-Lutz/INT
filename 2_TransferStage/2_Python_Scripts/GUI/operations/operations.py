@@ -104,21 +104,46 @@ class EmptyOperation(BaseOperation):
 class AutomaticOperation(BaseOperation):
     def __init__(self, device_manager):
         super().__init__(device_manager)
+        cfg = ConfigManager().load_config("general")
+        self._soaking_time = cfg.get("PVA Waiting Time") * 1000 # QTimer takes ms as input
+
+        self.fill_op = FillOperation(device_manager)
+        self.empty_op = EmptyOperation(device_manager)
+
+        # Connect signals
+        self.fill_op.pid_ctrl.finished.disconnect(self.fill_op._on_controller_done)
+        self.fill_op.pid_ctrl.finished.connect(self._on_fill_done)
+        self.empty_op.pid_ctrl.finished.disconnect(self.empty_op._on_controller_done)
+        self.empty_op.pid_ctrl.finished.connect(self._on_empty_done)
+
+        self._timer = QTimer()
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._start_empty_op)
 
     def start(self):
-        self.device_manager.filling()
-        super().start()
         logger.info("AutomaticOperation started")
-        return
+        logger.debug("Starting FillOperation now...")
+        self.fill_op.start()
+
+    def _on_fill_done(self):
+        logger.debug("Received fill_op.pid_ctrl.finished signal")
+        logger.info(f"FillOperation completed. Waiting  {self._soaking_time/1000} seconds before starting EmptyOperation.")
+        self._timer.start(self._soaking_time)
+
+    def _start_empty_op(self):
+        logger.info("Starting EmptyOperation after delay")
+        self.empty_op.start()
+
+    def _on_empty_done(self):
+        logger.info("EmptyOperation completed")
+        self._finalize("AutomaticOperation completed")
 
     def stop(self):
-        super().stop()
         logger.info("AutomaticOperation stopped")
-
-
-    def _done(self):
-        super()._done()
-        logger.info("AutomaticOperation finished")
+        self.fill_op.stop()
+        self.empty_op.stop()
+        self._timer.stop()
+        self._finalize("AutomaticOperation stopped manually")
 
 
 class FlushOperation(BaseOperation):

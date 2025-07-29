@@ -1,7 +1,11 @@
 import logging
 from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QDialog
 
 from core.signals import ui_signals, operation_signals, data_signals, hardware_signals
+from fontTools.config import Config
+from widgets.set_bottle_volume_dialog import SetBottleVolumeDialog
+from utils.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,10 @@ class SignalBinder:
         self.ui.flushPushButton.pressed.connect(self.operation_manager.start_flush)
         self.ui.flushPushButton.released.connect(self.operation_manager.stop_flush)
 
+        self.ui.setBottlePushButton.clicked.connect(self._set_bottle_volume)
+
+        self.ui.resetContPushButton.clicked.connect(self._reset_container)
+
         hardware_signals.liquid_valve_changed.connect(self.ui.liquidToggleSwitch.setChecked)
         hardware_signals.container_valve_changed.connect(self.ui.containerToggleSwitch.setChecked)
         hardware_signals.venting_valve_changed.connect(self.ui.ventingToggleSwitch.setChecked)
@@ -47,6 +55,8 @@ class SignalBinder:
         data_signals.pressure_updated.connect(self._update_pressure_display)
         data_signals.tbc_volume_updated.connect(self._update_volume_display)
         data_signals.container_volume_updated.connect(self._update_container_volume_display)
+
+        data_signals.bottle_volume_updated.connect(self._update_bottle_volume_display)
         return
 
     def _on_container_changed(self,container_name):
@@ -133,6 +143,22 @@ class SignalBinder:
     def _update_container_volume_display(self, container_vol):
         self.ui.containerVolLineEdit.setText(f"{container_vol:.2f} mL")
         return
+
+    def _update_bottle_volume_display(self,bottle_vol):
+        self.ui.bottleVolLineEdit.setText(f"{bottle_vol:.1f} mL")
+        return
+
+    def _set_bottle_volume(self):
+        dialog = SetBottleVolumeDialog(self.ui)
+        dialog.exec()
+        return
+
+    def _reset_container(self):
+        self._update_container_volume_display(0)
+        ConfigManager().update_config("general", "Container Volume", 0)
+        return
+
+
 
 
 

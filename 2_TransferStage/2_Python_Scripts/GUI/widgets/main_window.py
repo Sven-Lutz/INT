@@ -1,5 +1,5 @@
 import logging
-
+import os
 import PySide6.QtWidgets as Qtw
 
 
@@ -30,11 +30,11 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
     def _init_config(self):                                     # Private method to load configuration
         cfg_manager = ConfigManager()                           # Create a ConfigManager instance
         self.config = cfg_manager.general_config                # Load the "general" configuration section
-
         return
 
     def _init_ui_defaults(self):                                                                                # Private method to build the UI
-        self.ui = UiBuilder.load_ui("widgets.ui", self)
+        ui_path = os.path.join(self.config.get("Project Path"),"2_Python_Scripts","GUI","ui","main_window.ui")
+        self.ui = UiBuilder.load_ui(ui_path, self)
         self.setCentralWidget(self.ui)
 
         self.binder = SignalBinder(self.ui, operation_manager=self.operation_manager, config=self.config)       # Start signal binding
@@ -68,6 +68,8 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
 
         self.ui.flushPushButton.setEnabled(True)
 
+        self.ui.containerVolLineEdit.setText(f"{self.config.get("Container Volume", "No Volume Found"):.2f} uL")
+        self.ui.bottleVolLineEdit.setText(f"{self.config.get("Remaining Bottle Volume", "No Bottle Found"):.2f} mL")
         return
 
     def _init_devices(self):
@@ -84,7 +86,6 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         data_signals.set_pause_enabled.connect(self.binder.reset_pause_button)
 
         data_signals.set_flush_enabled.connect(self.ui.flushPushButton.setEnabled)
-
         return
 
     def _update_volume_field(self, container_name):

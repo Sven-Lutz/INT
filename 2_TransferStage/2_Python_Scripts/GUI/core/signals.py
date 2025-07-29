@@ -1,3 +1,5 @@
+from tokenize import Single
+
 from PySide6.QtCore import QObject, Signal
 
 class OperationSignals(QObject):
@@ -17,6 +19,7 @@ class UISignals(QObject):
     stop_operation = Signal()
     flush_operation = Signal()
 
+    reset_container = Signal()
 
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
@@ -44,6 +47,8 @@ class DataSignals(QObject):
     pressure_updated = Signal(float)
     tbc_volume_updated = Signal(float)
     container_volume_updated = Signal(float)
+
+    bottle_volume_updated = Signal(float)
 
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor

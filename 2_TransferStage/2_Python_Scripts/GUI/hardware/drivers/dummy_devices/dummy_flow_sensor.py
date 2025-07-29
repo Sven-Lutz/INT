@@ -15,7 +15,7 @@ class FlowSensor:
         self.pressure_ctrl = pressure_controller
         self._initialize_device()
         logger.info("Flow controller communication successfully started")
-        self.k = 15
+        self.k = 7
         return
 
     def _initialize_device(self):
@@ -40,8 +40,7 @@ class FlowSensor:
         """
         limit = self.config.get("Flow Limit")
         pressure = self.pressure_ctrl.pressure
-        noise = random.gauss(0,0.02*self.k * pressure)
+        noise = random.gauss(0,0.02 * self.k * pressure)
 
         flow = self.k * pressure + noise
-        print(flow)
         return flow
