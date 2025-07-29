@@ -56,6 +56,9 @@ class SignalBinder:
         data_signals.tbc_volume_updated.connect(self._update_volume_display)
         data_signals.container_volume_updated.connect(self._update_container_volume_display)
 
+        data_signals.progress_updated.connect(self.ui.progressBar.setValue)
+        data_signals.time_updated.connect(self.ui.remainingTimeLabel.setText)
+
         data_signals.bottle_volume_updated.connect(self._update_bottle_volume_display)
         return
 

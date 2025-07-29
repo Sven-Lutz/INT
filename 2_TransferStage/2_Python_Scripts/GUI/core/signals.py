@@ -50,6 +50,9 @@ class DataSignals(QObject):
 
     bottle_volume_updated = Signal(float)
 
+    progress_updated = Signal(int)
+    time_updated = Signal(str)
+
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor
 

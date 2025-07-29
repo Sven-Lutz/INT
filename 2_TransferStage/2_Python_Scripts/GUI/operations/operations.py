@@ -1,14 +1,14 @@
 import logging
 import time
 
-from PySide6.QtCore import QObject, Signal, QTimer
+from PySide6.QtCore import QObject, QTimer
 
 from operations.dummy_operations.dummy_run import DummyOperation
 
 from utils.config_manager import ConfigManager
 
 from core.pid_controller import PIDFlowController
-from core.signals import operation_signals
+from core.signals import operation_signals, data_signals
 
 logger = logging.getLogger(__name__)                            # Create a logger for this module
 
@@ -104,8 +104,9 @@ class EmptyOperation(BaseOperation):
 class AutomaticOperation(BaseOperation):
     def __init__(self, device_manager):
         super().__init__(device_manager)
+
         cfg = ConfigManager().load_config("general")
-        self._soaking_time = cfg.get("PVA Waiting Time") * 1000 # QTimer takes ms as input
+        self._soaking_time = cfg.get("PVA Waiting Time")
 
         self.fill_op = FillOperation(device_manager)
         self.empty_op = EmptyOperation(device_manager)
@@ -116,34 +117,62 @@ class AutomaticOperation(BaseOperation):
         self.empty_op.pid_ctrl.finished.disconnect(self.empty_op._on_controller_done)
         self.empty_op.pid_ctrl.finished.connect(self._on_empty_done)
 
-        self._timer = QTimer()
-        self._timer.setSingleShot(True)
-        self._timer.timeout.connect(self._start_empty_op)
+        self._soak_timer = QTimer()
+        self._soak_timer.setInterval(100)  # update every 100ms
+        self._soak_timer.timeout.connect(self._on_soak_tick)
+
+        self._soak_elapsed = 0
 
     def start(self):
         logger.info("AutomaticOperation started")
         logger.debug("Starting FillOperation now...")
         self.fill_op.start()
+        return
+
 
     def _on_fill_done(self):
-        logger.debug("Received fill_op.pid_ctrl.finished signal")
-        logger.info(f"FillOperation completed. Waiting  {self._soaking_time/1000} seconds before starting EmptyOperation.")
-        self._timer.start(self._soaking_time)
+        logger.debug("FillOperation completed.")
+        logger.info(f"Waiting for {self._soaking_time / 1000 :.0f} seconds before EmptyOperation...")
+
+        self._soak_elapsed = 0
+        self._soak_timer.start()
+        return
+
+    def _on_soak_tick(self):
+
+        self._soak_elapsed += self._soak_timer.interval()
+        progress = int(self._soak_elapsed / self._soaking_time * 100)
+        data_signals.progress_updated.emit(progress)
+
+        minutes, seconds = divmod(int(self._soaking_time * 60 - self._soak_elapsed / 1000), 60)
+        formatted_time = f"Remaining Time: {minutes:02}:{seconds:02}"
+        logger.debug(f"Wating Time: {formatted_time}")
+        data_signals.time_updated.emit(formatted_time)
+
+        if self._soak_elapsed / 1000 >= self._soaking_time * 60:
+            self._soak_timer.stop()
+            self._start_empty_op()
+        return
 
     def _start_empty_op(self):
         logger.info("Starting EmptyOperation after delay")
         self.empty_op.start()
 
+
     def _on_empty_done(self):
         logger.info("EmptyOperation completed")
         self._finalize("AutomaticOperation completed")
+        return
 
     def stop(self):
         logger.info("AutomaticOperation stopped")
         self.fill_op.stop()
         self.empty_op.stop()
-        self._timer.stop()
+        self._soak_timer.stop()
+        formatted_time = f"Remaining Time: {00:02}:{00:02}"
+        data_signals.time_updated.emit(formatted_time)
         self._finalize("AutomaticOperation stopped manually")
+        return
 
 
 class FlushOperation(BaseOperation):

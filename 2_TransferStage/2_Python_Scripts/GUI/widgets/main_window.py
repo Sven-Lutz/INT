@@ -4,6 +4,7 @@ import PySide6.QtWidgets as Qtw
 
 
 from utils.config_manager import ConfigManager
+from utils.widget_finder import WidgetFinder
 
 from builders.signal_binder import SignalBinder
 from builders.ui_builder import UiBuilder
@@ -25,6 +26,7 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         self._init_ui_defaults()                                # Set up the user interface
         self._init_signals()                                    # Initialize signals and hardware devices
 
+        #self._list_widgets()
         return
 
     def _init_config(self):                                     # Private method to load configuration
@@ -70,6 +72,9 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
 
         self.ui.containerVolLineEdit.setText(f"{self.config.get("Container Volume", "No Volume Found"):.2f} uL")
         self.ui.bottleVolLineEdit.setText(f"{self.config.get("Remaining Bottle Volume", "No Bottle Found"):.2f} mL")
+
+        self.ui.progressBar.setValue(0)
+        self.ui.remainingTimeLabel.setText("Remaining Time: 00:00")
         return
 
     def _init_devices(self):
@@ -92,3 +97,8 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         volume = self.config["Containers"].get(container_name, {}).get("Maximum Volume", "")
         self.ui.maxVolLineEdit.setText(str(volume))
         return
+
+    def _list_widgets(self):
+        from PySide6.QtWidgets import QLabel
+        wgf = WidgetFinder(self.ui)
+        wgf.list_widgets_of_type(QLabel)

@@ -89,15 +89,28 @@ class PIDFlowController(QObject):
 
         pressure_output = self.pid(flow)
         self.device_manager.set_pressure(pressure_output)
+
         data_signals.flow_updated.emit(flow)
         data_signals.pressure_updated.emit(pressure_output)
         data_signals.tbc_volume_updated.emit(self.target_volume - self._volume)
         data_signals.container_volume_updated.emit(self.container_vol + self._volume)
+
+        progress = int((self._volume / self.target_volume) * 100)
+        data_signals.progress_updated.emit(min(progress, 100))
+
+        if flow != 0:
+            remaining_time = abs(self.target_volume-self._volume)/flow * 60
+            minutes, seconds = divmod(int(remaining_time), 60)
+            formatted_time = f"Remaining Time: {minutes:02}:{seconds:02}"
+        else:
+            formatted_time = "Calculating..."
+        data_signals.time_updated.emit(formatted_time)
 
         logger.debug(f"[PID] Flow: {flow:.2f} uL/min | Pressure: {pressure_output:.1f} mbar | Volume: {self._volume:.2f} uL")
 
         if self._volume >= self.target_volume:
             logger.info(f"Target volume of {self.target_volume:.2f} mL reached")
             self.stop()
+            data_signals.progress_updated.emit(0)
         self._previous_flow = flow
         return
