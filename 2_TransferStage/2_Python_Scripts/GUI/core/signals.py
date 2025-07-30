@@ -47,8 +47,6 @@ class DataSignals(QObject):
     set_reset_container_enabled = Signal(bool)
     set_bottle_volume_enabled = Signal(bool)
 
-
-
     flow_updated = Signal(float)
     pressure_updated = Signal(float)
     tbc_volume_updated = Signal(float)
@@ -58,6 +56,8 @@ class DataSignals(QObject):
 
     progress_updated = Signal(int)
     time_updated = Signal(str)
+
+    automatic_container_filled = Signal()
 
     def __init__(self):                                         # Constructor
         super().__init__()                                      # Call base class constructor

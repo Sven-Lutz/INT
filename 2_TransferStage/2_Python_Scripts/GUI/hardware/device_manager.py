@@ -103,7 +103,7 @@ class DeviceManager:
         return
 
     def select_container(self, container_name):
-        logger.info("Container Selected")
+        logger.debug("Container Selected")
         self.container_selector.select_container(container_name)
         return
 

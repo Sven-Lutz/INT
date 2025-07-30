@@ -2,7 +2,10 @@ import logging
 from PySide6.QtCore import QTimer
 
 from core.signals import ui_signals, operation_signals, data_signals, hardware_signals
+
 from widgets.set_bottle_volume_dialog import SetBottleVolumeDialog
+from widgets.automatic_dialog import AutomaticDialog
+
 from utils.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
@@ -67,6 +70,8 @@ class SignalBinder:
         data_signals.time_updated.connect(self.ui.remainingTimeLabel.setText)
 
         data_signals.bottle_volume_updated.connect(self._update_bottle_volume_display)
+
+        data_signals.automatic_container_filled.connect(self._show_automatic_dialog)
         return
 
     def _on_container_changed(self, container_name):
@@ -84,7 +89,7 @@ class SignalBinder:
         try:
             value = float(self.ui.soakTimeLineEdit.text())
             data_signals.config_changed.emit("general", "PVA Waiting Time", value, True)
-            logger.info(f"Config update requested: PVA Waiting Time = {value}")
+            logger.debug(f"Config update requested: PVA Waiting Time = {value}")
         except ValueError:
             logger.error("Invalid value entered for PVA Waiting Time")
         return
@@ -199,6 +204,11 @@ class SignalBinder:
     def _reset_container(self):
         self._update_container_volume_display(0)
         ConfigManager().update_config("general", "Container Volume", 0)
+        return
+
+    def _show_automatic_dialog(self):
+        dialog = AutomaticDialog(self.ui)
+        dialog.exec()
         return
 
 

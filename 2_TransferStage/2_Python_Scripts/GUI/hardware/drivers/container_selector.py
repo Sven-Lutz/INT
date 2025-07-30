@@ -11,7 +11,7 @@ class ContainerSelector:
         self.Instr_ID = c_int32()
         self._initialize_device()
 
-        logger.info("Transfer container selector communication successfully started\n")
+        logger.info("Transfer container selector communication successfully started")
         return
 
     def _initialize_device(self):
@@ -54,7 +54,7 @@ class ContainerSelector:
 
         # Handle both "MUX Valve" and "MUX valve" keys
         mux_valve = int(container_info.get("MUX Valve"))
-        logger.info(f"MUX valve selected: {mux_valve}, type: {type(mux_valve)}")
+        logger.debug(f"MUX valve selected: {mux_valve}, type: {type(mux_valve)}")
         if mux_valve is None:
             logger.warning(f"MUX valve not defined for container '{matched_key}'")
             raise ValueError(f"ERROR: MUX valve not defined for container '{matched_key}'")

@@ -48,7 +48,7 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         container_names = cfg["Containers"].keys()                                                      # Load container names
         self.ui.containerComboBox.addItems(container_names)                                                     # Connect container names with ComboBox
 
-        selected_container = self.config.get("Selected Container", "No Container Found")                        # Set initial container to latest selection
+        selected_container = cfg.get("Selected Container", "No Container Found")                        # Set initial container to latest selection
         index = self.ui.containerComboBox.findText(selected_container)
         if index >= 0:
             self.ui.containerComboBox.setCurrentIndex(index)
@@ -58,7 +58,7 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         operations_names = self.config["Operations"]
         self.ui.operationComboBox.addItems(operations_names)
 
-        selected_operation = self.config.get("Selected Operation", "No Container Found")                        # Set initial operation to latest selection
+        selected_operation = self.config.get("Selected Operation", "No Operation Found")                        # Set initial operation to latest selection
         index = self.ui.operationComboBox.findText(selected_operation)
         if index >= 0:
             self.ui.operationComboBox.setCurrentIndex(index)

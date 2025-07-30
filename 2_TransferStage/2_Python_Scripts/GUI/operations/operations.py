@@ -156,15 +156,16 @@ class AutomaticOperation(BaseOperation):
         logger.debug("FillOperation completed.")
         #logger.debug(f"Waiting for {self._soaking_time / 1000 :.0f} seconds before EmptyOperation...")
         self.device_manager.safe_state()
+        data_signals.automatic_container_filled.emit()
+
         self._soak_elapsed = 0
         self._soak_timer.start()
         return
 
     def _on_soak_tick(self):
-
         self._soak_elapsed += self._soak_timer.interval()
-        progress = int((self._soak_elapsed /1000) / (self._soaking_time * 60) * 100)
-        logger.debug(f"Progress of soaking {progress}")
+        progress = int((self._soak_elapsed / 1000) / (self._soaking_time * 60) * 100)
+        logger.info(f"Progress of soaking {progress}")
         data_signals.progress_updated.emit(progress)
 
         minutes, seconds = divmod(int(self._soaking_time * 60 - self._soak_elapsed / 1000), 60)
@@ -180,7 +181,7 @@ class AutomaticOperation(BaseOperation):
     def _start_empty_op(self):
         logger.info("Starting EmptyOperation after delay")
         self.empty_op.start()
-
+        return
 
     def _on_empty_done(self):
         logger.info("EmptyOperation completed")
@@ -189,6 +190,9 @@ class AutomaticOperation(BaseOperation):
 
     def stop(self):
         logger.info("AutomaticOperation stopped")
+        self.fill_op.pid_ctrl.finished.disconnect(self._on_fill_done)
+        self.empty_op.pid_ctrl.finished.disconnect(self._on_empty_done)
+
         self.fill_op.stop()
         self.empty_op.stop()
         self._soak_timer.stop()
