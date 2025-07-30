@@ -15,7 +15,7 @@ class PressureController:
         self.Instr_ID = c_int32()
         self._initialize_device()
         self._load_calibration()
-        logger.info("Pressure controller  communication successfully started\n")
+        logger.info("Pressure controller  communication successfully started")
         return
 
     def __exit__(self, exc_type, exc_val, exc_tb):

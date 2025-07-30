@@ -82,7 +82,7 @@ class SignalBinder:
 
     def _on_soak_time_changed(self):
         try:
-            value = int(self.ui.soakTimeLineEdit.text())
+            value = float(self.ui.soakTimeLineEdit.text())
             data_signals.config_changed.emit("general", "PVA Waiting Time", value, True)
             logger.info(f"Config update requested: PVA Waiting Time = {value}")
         except ValueError:

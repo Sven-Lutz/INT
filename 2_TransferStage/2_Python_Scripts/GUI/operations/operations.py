@@ -13,7 +13,7 @@ from core.signals import operation_signals, data_signals
 logger = logging.getLogger(__name__)                            # Create a logger for this module
 
 class BaseOperation(QObject):
-    def __init__(self, device_manager, target_volume: float, direction=""):
+    def __init__(self, device_manager, target_volume: float=0, direction=""):
         super().__init__()
         self._should_pause = False
         self.pid_ctrl = None
@@ -45,6 +45,7 @@ class BaseOperation(QObject):
 
         if self.direction == "positive" and self.target_volume > max_volume:
             logger.warning("Container will overflow. Aborting operation")
+            raise OverflowError("ERROR: Container will overflow. Aborting operation")
             self.stop()
         elif self.direction == "negative" and self.target_volume > current_volume:
             logger.warning("Air will be sucked in the system. Aborting operation")
@@ -153,8 +154,8 @@ class AutomaticOperation(BaseOperation):
 
     def _on_fill_done(self):
         logger.debug("FillOperation completed.")
-        logger.info(f"Waiting for {self._soaking_time / 1000 :.0f} seconds before EmptyOperation...")
-
+        #logger.debug(f"Waiting for {self._soaking_time / 1000 :.0f} seconds before EmptyOperation...")
+        self.device_manager.safe_state()
         self._soak_elapsed = 0
         self._soak_timer.start()
         return
@@ -162,12 +163,13 @@ class AutomaticOperation(BaseOperation):
     def _on_soak_tick(self):
 
         self._soak_elapsed += self._soak_timer.interval()
-        progress = int(self._soak_elapsed / self._soaking_time * 100)
+        progress = int((self._soak_elapsed /1000) / (self._soaking_time * 60) * 100)
+        logger.debug(f"Progress of soaking {progress}")
         data_signals.progress_updated.emit(progress)
 
         minutes, seconds = divmod(int(self._soaking_time * 60 - self._soak_elapsed / 1000), 60)
         formatted_time = f"Remaining Time: {minutes:02}:{seconds:02}"
-        logger.debug(f"Wating Time: {formatted_time}")
+        logger.debug(f"Waiting Time: {formatted_time}")
         data_signals.time_updated.emit(formatted_time)
 
         if self._soak_elapsed / 1000 >= self._soaking_time * 60:
