@@ -13,7 +13,7 @@ from core.signals import operation_signals, data_signals
 logger = logging.getLogger(__name__)                            # Create a logger for this module
 
 class BaseOperation(QObject):
-    def __init__(self, device_manager, target_volume=None, direction=""):
+    def __init__(self, device_manager, target_volume: float, direction=""):
         super().__init__()
         self._should_pause = False
         self.pid_ctrl = None
@@ -39,9 +39,9 @@ class BaseOperation(QObject):
 
     def start(self):
         cfg = ConfigManager().load_config("container_selector")
-        max_volume = cfg["Containers"].get(cfg.get("Selected Container")).get("Maximum Volume")
+        max_volume = float(cfg["Containers"].get(cfg.get("Selected Container")).get("Maximum Volume"))
         cfg = ConfigManager().load_config("general")
-        current_volume = cfg.get("Current Volume")
+        current_volume = cfg.get("Container Volume")
 
         if self.direction == "positive" and self.target_volume > max_volume:
             logger.warning("Container will overflow. Aborting operation")

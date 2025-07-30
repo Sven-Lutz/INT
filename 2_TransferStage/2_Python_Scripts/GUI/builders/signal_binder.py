@@ -32,7 +32,11 @@ class SignalBinder:
 
     def _bind_ui_to_signals(self):
         self.ui.containerComboBox.currentTextChanged.connect(self._on_container_changed)
+        self.ui.containerComboBox.currentTextChanged.connect(self._select_tbc_volume)
         self.ui.containerComboBox.currentTextChanged.connect(self.device_manager.select_container)
+
+        self.ui.operationComboBox.currentTextChanged.connect(self._on_operation_changed)
+        self.ui.operationComboBox.currentTextChanged.connect(self._select_tbc_volume)
 
         self.ui.soakTimeLineEdit.editingFinished.connect(self._on_soak_time_changed)
         self.ui.startPushButton.clicked.connect(self._emit_start_operation)
@@ -52,6 +56,8 @@ class SignalBinder:
 
         hardware_signals.pump_changed.connect(self.ui.pumpToggleSwitch.setChecked)
 
+        data_signals.config_changed.connect(ConfigManager().update_config)  # Connect to signals to Configmanager
+
         data_signals.flow_updated.connect(self._update_flow_display)
         data_signals.pressure_updated.connect(self._update_pressure_display)
         data_signals.tbc_volume_updated.connect(self._update_volume_display)
@@ -70,15 +76,14 @@ class SignalBinder:
 
         logger.debug(f"Container selected: {container_name}, maximum max_volume set to {max_volume}")
         ui_signals.container_changed.emit(container_name)
-        ui_signals.config_changed.emit("general", "Selected Container", container_name, True)
-
+        data_signals.config_changed.emit("container_selector", "Selected Container", container_name, True)
 
         return
 
     def _on_soak_time_changed(self):
         try:
             value = int(self.ui.soakTimeLineEdit.text())
-            ui_signals.config_changed.emit("general", "PVA Waiting Time", value, True)
+            data_signals.config_changed.emit("general", "PVA Waiting Time", value, True)
             logger.info(f"Config update requested: PVA Waiting Time = {value}")
         except ValueError:
             logger.error("Invalid value entered for PVA Waiting Time")
@@ -86,7 +91,38 @@ class SignalBinder:
 
     def _on_operation_changed(self, operation_name):
         logger.info(f"Operation selected: {operation_name}")
-        ui_signals.config_changed.emit("general", "Selected Operation", operation_name, True)
+        data_signals.config_changed.emit("general", "Selected Operation", operation_name, True)
+        return
+
+    def _select_tbc_volume(self):
+        cfg = ConfigManager().load_config("general")
+        selected_operation = cfg.get("Selected Operation")
+        container_volume = cfg.get("Container Volume")
+
+        cfg = ConfigManager().load_config("container_selector")
+        selected_container = cfg.get("Selected Container")
+
+        if selected_operation in ("add", "remove"):
+            tbc_volume = cfg["Containers"].get(selected_container).get("Small Volume")
+
+        elif selected_operation in ("fill", "automatic"):
+            max_volume = cfg["Containers"].get(selected_container, None).get("Maximum Volume", None)
+            tbc_volume = max_volume - container_volume
+        elif selected_operation == "empty":
+            tbc_volume = container_volume
+
+        self.ui.tbcVolLineEdit.setText(f"{tbc_volume:.2f} uL")
+
+        self._update_final_volume(tbc_volume, container_volume, selected_operation)
+        return
+
+    def _update_final_volume(self, tbc_volume, container_volume, selected_operation):
+        if selected_operation in ("add", "fill", "automatic"):
+            final_volume = container_volume + tbc_volume
+        elif selected_operation in ("remove", "empty"):
+            final_volume = container_volume - tbc_volume
+
+        self.ui.finalVolLineEdit.setText(f"{final_volume:.2f} uL")
         return
 
     def _emit_start_operation(self):
@@ -152,7 +188,7 @@ class SignalBinder:
         return
 
     def _update_bottle_volume_display(self,bottle_vol):
-        self.ui.bottleVolLineEdit.setText(f"{bottle_vol:.1f} mL")
+        self.ui.bottleVolLineEdit.setText(f"{bottle_vol:.2f} mL")
         return
 
     def _set_bottle_volume(self):

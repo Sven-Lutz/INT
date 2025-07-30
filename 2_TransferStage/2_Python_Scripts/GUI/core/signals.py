@@ -11,7 +11,6 @@ class OperationSignals(QObject):
 
 class UISignals(QObject):
     container_changed = Signal(str)
-    config_changed = Signal(str, str, object, bool)                # str and object are representing key, new_value
 
     start_operation = Signal(str)
     pause_operation = Signal()
@@ -34,6 +33,8 @@ class HardwareSignals(QObject):
         super().__init__()                                      # Call base class constructor
 
 class DataSignals(QObject):
+    config_changed = Signal(str, str, object, bool)  # str and object are representing key, new_value
+
     update_status = Signal(str)
     update_measurement = Signal()
 
@@ -42,6 +43,11 @@ class DataSignals(QObject):
     set_pause_enabled = Signal(bool)
 
     set_flush_enabled = Signal(bool)
+
+    set_reset_container_enabled = Signal(bool)
+    set_bottle_volume_enabled = Signal(bool)
+
+
 
     flow_updated = Signal(float)
     pressure_updated = Signal(float)

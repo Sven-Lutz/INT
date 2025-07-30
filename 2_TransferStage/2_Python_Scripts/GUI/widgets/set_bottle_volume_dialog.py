@@ -15,7 +15,7 @@ class SetBottleVolumeDialog(QDialog):
         self._init_config()
 
 
-        ui_path = os.path.join(self.config.get("Project Path"), "2_Python_Scripts", "GUI", "ui", "set_bottle_dialog.ui")
+        ui_path = os.path.join(self.config.get("Project Path"),"ui", "set_bottle_dialog.ui")
         self.dialog = UiBuilder.load_ui(ui_path, parent=None)
         layout = QVBoxLayout()
         layout.addWidget(self.dialog)

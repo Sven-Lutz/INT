@@ -26,6 +26,7 @@ class PIDFlowController(QObject):
         self.device_manager = device_manager
         self.target_volume = target_volume
         self.container_vol = cfg_general.get("Container Volume")
+        self.bottle_volume = cfg_general.get("Remaining Bottle Volume")
         self.direction = direction
         self.interval = 100
 
@@ -74,8 +75,10 @@ class PIDFlowController(QObject):
         self.timer.stop()
 
         new_container_volume = self.container_vol + self._volume
-        cfg = ConfigManager()
-        cfg.update_config("general", "Container Volume", round(new_container_volume,2), True)
+
+        data_signals.config_changed.emit("general", "Remaining Bottle Volume", round(self.remaining_bottle_volume,2), True)
+        data_signals.config_changed.emit("general", "Container Volume", round(new_container_volume,2), True)
+
         self.finished.emit()
 
         return
@@ -94,6 +97,11 @@ class PIDFlowController(QObject):
         data_signals.pressure_updated.emit(pressure_output)
         data_signals.tbc_volume_updated.emit(self.target_volume - self._volume)
         data_signals.container_volume_updated.emit(self.container_vol + self._volume)
+
+        if self.direction == "positive":
+            self.remaining_bottle_volume = self.bottle_volume - self._volume / 1000
+            data_signals.bottle_volume_updated.emit(round(self.remaining_bottle_volume,2))
+
 
         progress = int((self._volume / self.target_volume) * 100)
         data_signals.progress_updated.emit(min(progress, 100))

@@ -46,12 +46,8 @@ class OperationManager(QObject):
         data_signals.update_status.emit(f"Running: {operation_type}")
 
         self.operation.start()
+        self._update_ui_state()
 
-        data_signals.set_start_enabled.emit(not self.is_busy())
-        data_signals.set_stop_enabled.emit(self.is_busy())
-        data_signals.set_pause_enabled.emit(self.is_busy())
-
-        data_signals.set_flush_enabled.emit(not self.is_busy())
         return
 
     def pause_operation(self):
@@ -73,28 +69,32 @@ class OperationManager(QObject):
             self.operation.stop()
 
             data_signals.update_status.emit("Stopped")
-
-            self._reset_ui_state()
+            self.operation = None
+            self.paused = False
+            self._update_ui_state()
         else:
             logger.warning("OperationManager: no active operation to stop")
         return
 
     def on_operation_done(self):
-        self._reset_ui_state()
+        self.operation = None
+        self.paused = False
+        self._update_ui_state()
         return
 
     def is_busy(self) -> bool:
         return self.operation is not None
 
-    def _reset_ui_state(self):
-        self.operation = None
-        self.paused = False
+    def _update_ui_state(self):
 
         data_signals.set_start_enabled.emit(not self.is_busy())
         data_signals.set_stop_enabled.emit(self.is_busy())
         data_signals.set_pause_enabled.emit(self.is_busy())
 
         data_signals.set_flush_enabled.emit(not self.is_busy())
+
+        data_signals.set_reset_container_enabled.emit(not self.is_busy())
+        data_signals.set_bottle_volume_enabled.emit(not self.is_busy())
         return
 
     def start_flush(self):

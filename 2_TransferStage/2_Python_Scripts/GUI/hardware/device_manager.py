@@ -112,6 +112,7 @@ class DeviceManager:
         hardware_signals.container_valve_changed.emit(self.valve.state["Container"])  # send a snapshot
         hardware_signals.venting_valve_changed.emit(not self.valve.state["Venting"])  # send a snapshot
 
+
         ConfigManager().update_config("valves","Valves.Liquid.State", self.valve.state["Liquid"])
         ConfigManager().update_config("valves", "Valves.Container.State", self.valve.state["Container"])
         ConfigManager().update_config("valves", "Valves.Venting.State", not self.valve.state["Venting"])

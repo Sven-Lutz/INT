@@ -63,13 +63,9 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         if index >= 0:
             self.ui.operationComboBox.setCurrentIndex(index)
 
-        self.ui.startPushButton.setEnabled(True)
-        self.ui.stopPushButton.setEnabled(False)
-        self.ui.pausePushButton.setEnabled(False)
-
-        self.ui.flushPushButton.setEnabled(True)
 
         self.ui.containerVolLineEdit.setText(f"{self.config.get("Container Volume", "No Volume Found"):.2f} uL")
+        self.ui.setFlowLineEdit.setText(f"{self.config.get("Default Flow"):.2f} uL/min")
         self.ui.bottleVolLineEdit.setText(f"{self.config.get("Remaining Bottle Volume", "No Bottle Found"):.2f} mL")
 
         cfg = ConfigManager().load_config("valves")
@@ -80,6 +76,13 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
 
         self.ui.progressBar.setValue(0)
         self.ui.remainingTimeLabel.setText("Remaining Time: 00:00")
+
+        self._disable_ui()
+        return
+
+    def _disable_ui(self):
+        self.ui.stopPushButton.setEnabled(False)
+        self.ui.pausePushButton.setEnabled(False)
         return
 
     def _init_devices(self):
@@ -88,14 +91,20 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
 
     def _init_signals(self):
 
-        ui_signals.config_changed.connect(ConfigManager().update_config)                        # Connect to signals to Configmanager
-
         data_signals.set_start_enabled.connect(self.ui.startPushButton.setEnabled)
         data_signals.set_stop_enabled.connect(self.ui.stopPushButton.setEnabled)
         data_signals.set_pause_enabled.connect(self.ui.pausePushButton.setEnabled)
         data_signals.set_pause_enabled.connect(self.binder.reset_pause_button)
 
         data_signals.set_flush_enabled.connect(self.ui.flushPushButton.setEnabled)
+
+        data_signals.set_reset_container_enabled.connect(self.ui.resetContPushButton.setEnabled)
+        data_signals.set_bottle_volume_enabled.connect(self.ui.setBottlePushButton.setEnabled)
+
+        data_signals.set_start_enabled.connect(self.ui.containerComboBox.setEnabled)
+        data_signals.set_stop_enabled.connect(self.ui.soakTimeLineEdit.setReadOnly)
+        data_signals.set_start_enabled.connect(self.ui.operationComboBox.setEnabled)
+
         return
 
     def _list_widgets(self):
