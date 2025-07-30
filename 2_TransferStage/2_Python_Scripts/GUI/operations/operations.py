@@ -17,19 +17,20 @@ class BaseOperation(QObject):
         super().__init__()
         self._should_pause = False
         self.pid_ctrl = None
-
+        self.target_volume = target_volume
+        self.direction = direction
         self.device_manager = device_manager
 
-        self._init_pid(target_volume, direction)
+        self._init_pid()
 
         #self.dummy = DummyOperation()
         #self.dummy.finished.connect(self._done)
 
         return
 
-    def _init_pid(self, target_volume=None, direction=""):
-        if target_volume is not None and direction != "":
-            self.pid_ctrl = PIDFlowController(device_manager=self.device_manager, target_volume=target_volume, direction=direction)
+    def _init_pid(self):
+        if self.target_volume is not None and self.direction != "":
+            self.pid_ctrl = PIDFlowController(device_manager=self.device_manager, target_volume=self.target_volume, direction=self.direction)
 
             self.pid_ctrl.finished.connect(self._on_controller_done)
         else:
@@ -37,11 +38,23 @@ class BaseOperation(QObject):
         return
 
     def start(self):
-        self.device_manager.start_pump()
-        if self.pid_ctrl:
-            self.pid_ctrl.start()
+        cfg = ConfigManager().load_config("container_selector")
+        max_volume = cfg["Containers"].get(cfg.get("Selected Container")).get("Maximum Volume")
+        cfg = ConfigManager().load_config("general")
+        current_volume = cfg.get("Current Volume")
+
+        if self.direction == "positive" and self.target_volume > max_volume:
+            logger.warning("Container will overflow. Aborting operation")
+            self.stop()
+        elif self.direction == "negative" and self.target_volume > current_volume:
+            logger.warning("Air will be sucked in the system. Aborting operation")
+            self.stop()
         else:
-            logger.warning("No PID controller configured")
+            self.device_manager.start_pump()
+            if self.pid_ctrl:
+                self.pid_ctrl.start()
+            else:
+                logger.warning("No PID controller configured")
         return
 
     def pause(self):
@@ -81,24 +94,32 @@ class BaseOperation(QObject):
 
 class AddOperation(BaseOperation):
     def __init__(self, device_manager):
-        super().__init__(device_manager, target_volume=1000.0, direction="positive")
+        cfg = ConfigManager().load_config("container_selector")
+        small_volume = cfg["Containers"].get(cfg.get("Selected Container")).get("Small Volume")
+        super().__init__(device_manager, target_volume=small_volume, direction="positive")
 
 
 class RemoveOperation(BaseOperation):
     def __init__(self, device_manager):
-        super().__init__(device_manager, target_volume=5000.0, direction="negative")
+        cfg = ConfigManager().load_config("container_selector")
+        small_volume = cfg["Containers"].get(cfg.get("Selected Container")).get("Small Volume")
+        super().__init__(device_manager, target_volume=small_volume, direction="negative")
 
 
 class FillOperation(BaseOperation):
     def __init__(self, device_manager):
-        cfg = ConfigManager().load_config("general")
+        cfg = ConfigManager().load_config("container_selector")
         max_volume = cfg["Containers"].get(cfg.get("Selected Container")).get("Maximum Volume")
-        super().__init__(device_manager, target_volume=1000.0, direction="positive")
+        cfg = ConfigManager().load_config("general")
+        current_volume = cfg["Container Volume"]
+        super().__init__(device_manager, target_volume=max_volume-current_volume, direction="positive")
 
 
 class EmptyOperation(BaseOperation):
     def __init__(self, device_manager):
-        super().__init__(device_manager, target_volume=1000.0, direction="negative")
+        cfg = ConfigManager().load_config("general")
+        current_volume = cfg["Container Volume"]
+        super().__init__(device_manager, target_volume=current_volume, direction="negative")
 
 
 class AutomaticOperation(BaseOperation):

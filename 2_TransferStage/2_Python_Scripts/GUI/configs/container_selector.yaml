@@ -8,14 +8,15 @@ Containers:
   10 Sample:
     MUX Valve: 3
     Maximum Volume: 1100000
-    Small Volume: 5000
+    Small Volume: 25000
   5 Sample:
     MUX Valve: 2
     Maximum Volume: 200000
-    Small Volume: 5000
+    Small Volume: 10000
   Drain:
     MUX Valve: 7
     Maximum Volume: NaN
+    Small Volume: 5000
 
 
 

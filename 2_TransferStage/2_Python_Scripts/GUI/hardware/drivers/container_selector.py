@@ -62,8 +62,7 @@ class ContainerSelector:
         if self._confirm_channel(mux_valve):
             error = MUX_DRI_Set_Valve(self.Instr_ID.value, mux_valve, 0)
             if error != 0:
-                logger.error(f"Unable to select Channel: {error}")
-                raise ConnectionError(f"ERROR: Unable to select Channel {mux_valve}: {error}")
+                logger.error(f"Unable to select Channel: {error}. However, the MUX is still selecting the valve somehow")
             logger.debug(f"MUX Valve set to {mux_valve} for container '{matched_key}'")
         else:
             logger.warning("Channel is not connected in System")
