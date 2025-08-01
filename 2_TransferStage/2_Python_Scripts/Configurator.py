@@ -8,7 +8,7 @@ import yaml
 import os
 
 from pyfirmata2 import Arduino
-from Elveflow64 import *
+from GUI.hardware.drivers.Elveflow64 import *
 
 ##########################
 ###The global variables###

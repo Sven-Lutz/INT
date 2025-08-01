@@ -1,7 +1,3 @@
-from pandas.core.computation.ops import is_term
-
-import Configurator
-
 import time
 import os
 
@@ -10,24 +6,28 @@ import matplotlib.pyplot as plt
 
 from simple_pid import PID
 
+from hardware.device_manager import DeviceManager
 project = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-writer = Configurator.WritingManager(project)
-config, _ = writer.read_yaml("both")
-valve = Configurator.Valve()
-OB1 = Configurator.PressureController(config)
-BFS = Configurator.FlowController(config)
+device_manager = DeviceManager()
+#writer = Configurator.WritingManager(project)
+#config, _ = writer.read_yaml("both")
+#valve = Configurator.Valve()
+#OB1 = Configurator.PressureController(config)
+#BFS = Configurator.FlowController()
 
 flow_setpoint = 30000
 tot_changed_vol = 10000
 
-p_term = 1.4            # At 2.8 the p-term becomes unstable
+p_term = 0.9            # At 1.8 the p-term becomes unstable
 i_term = 6            # At 8 oscillations start, but are still decreasing
 d_term = 0.05
 
+device_manager.select_container("10 Sample")
 def main():
 
-    valve.push_pos()                                            # Set valves in push state
+    device_manager.filling()                                            # Set valves in push state
+    device_manager.start_pump()
     pid = PID(p_term, i_term, d_term, setpoint=flow_setpoint)   # PID controller is initialized, values have been manually found
     pid.output_limits = (-1000, 6000)                           # Limits for pressure are added, range is set by the hardware of the OB1
 
@@ -40,8 +40,8 @@ def main():
 
     while abs(changed_volume) < abs(tot_changed_vol):  # Stop if enough changed_volume has been changed
 
-        flow_value = BFS.get_flow()                     # Read set_flow
-        pressure_value = OB1.get_pressure()             # Read pressure
+        flow_value = device_manager.get_flow()                     # Read set_flow
+        pressure_value = device_manager.get_pressure()             # Read pressure
         delta_t = timestamp - data[0][-1]               # Calculate passed time since last reading
         delta_f = flow_value - data[2][-1]              # Calculate difference in set_flow since last reading
 
@@ -56,7 +56,7 @@ def main():
         data[4].append(changed_volume)                      # Append changed_volume to list
 
         control_value = pid(flow_value)                     # Get new pressure value
-        OB1.set_pressure(p=control_value)                   # Set to new pressure
+        device_manager.set_pressure(p=control_value)                   # Set to new pressure
 
         timestamp = time.time() - start_time                # Calculate new timestamp
 
@@ -66,8 +66,8 @@ def main():
     df.to_json(r"C:\Users\Operator\TransferStage\5_Raw_Data\PID_test.json")
 
 
-    OB1.set_pressure(p=0)                                                           # Set pressure to zero
-    valve.vent_pos()                                                                # Set valves to venting
+    device_manager.set_pressure(p=0)                                                           # Set pressure to zero
+    device_manager.safe_state()                                                                # Set valves to venting
 
     plot_changes(df)
     return

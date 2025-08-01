@@ -114,7 +114,7 @@ class SignalBinder:
             max_volume = cfg["Containers"].get(selected_container, None).get("Maximum Volume", None)
             tbc_volume = max_volume - container_volume
         elif selected_operation == "empty":
-            tbc_volume = container_volume
+            tbc_volume = max(cfg["Containers"].get(selected_container).get("Small Volume"), 0)
 
         self.ui.tbcVolLineEdit.setText(f"{tbc_volume:.2f} uL")
 

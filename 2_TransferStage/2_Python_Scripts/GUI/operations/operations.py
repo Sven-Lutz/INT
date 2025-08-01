@@ -43,6 +43,7 @@ class BaseOperation(QObject):
         cfg = ConfigManager().load_config("general")
         current_volume = cfg.get("Container Volume")
 
+
         if self.direction == "positive" and self.target_volume > max_volume:
             logger.warning("Container will overflow. Aborting operation")
             raise OverflowError("ERROR: Container will overflow. Aborting operation")
@@ -180,6 +181,7 @@ class AutomaticOperation(BaseOperation):
 
     def _start_empty_op(self):
         logger.info("Starting EmptyOperation after delay")
+
         self.empty_op.start()
         return
 
