@@ -11,7 +11,7 @@ Valves:
     Pins:
     - 11
     - 13
-    State: 1
+    State: 0
   Venting:
     Pins:
     - 10
