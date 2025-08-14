@@ -44,7 +44,7 @@ class FlowSensor:
         return
 
     def shutdown(self):
-        logger.info("Shutting down Flow Sensor...")
+        logger.info("Shutting down Flow Sensor")
 
         try:
             # Call the ElveFlow destructor to release the device

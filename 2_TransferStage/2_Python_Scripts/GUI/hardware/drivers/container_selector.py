@@ -33,6 +33,22 @@ class ContainerSelector:
                     mux_valves.add(container[key])
         return channel in mux_valves
 
+    def shutdown(self):
+        logger.info("Shutting down Container Selector (MUX)...")
+        try:
+            self.select_container("Drain")
+            logger.debug("Selecting Drain output before shutting down")
+
+            # Call the ElveFlow destructor to release the MUX device
+            error = MUX_DRI_Destructor(self.Instr_ID.value)
+            if error != 0:
+                logger.warning(f"MUX_DRI_Destructor returned error code: {error}")
+            else:
+                logger.info("MUX device communication successfully closed.")
+        except Exception as e:
+            logger.error(f"Exception during ContainerSelector shutdown: {e}")
+        return
+
     def get_container(self):
         valve = c_int32(-1)
         MUX_DRI_Get_Valve(self.Instr_ID.value, byref(valve))  # get the active valve. it returns 0 if valve is busy.
@@ -67,5 +83,4 @@ class ContainerSelector:
         else:
             logger.warning("Channel is not connected in System")
             raise ValueError("ERROR: Channel is not connected in System")
-
         return

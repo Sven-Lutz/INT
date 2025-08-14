@@ -36,9 +36,11 @@ class DeviceManager:
     def shutdown(self):
         logger.info("Shutting down all devices")
         self.safe_state()
-        self.valve.shutdown()
+        self.pressure_ctrl.shutdown()
         self.pump.shutdown()
-        self.container_selector.select_container("Drain")
+        self.valve.shutdown()
+        self.container_selector.shutdown()
+        self.flow_snsr.shutdown()
         return
 
     def venting(self):

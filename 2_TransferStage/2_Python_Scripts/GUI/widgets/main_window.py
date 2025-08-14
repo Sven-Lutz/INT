@@ -109,13 +109,11 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         return
 
     def cleanup(self):
-        logger.info("Cleaning up MainWindow resources...")
-
-        if hasattr(self, "device_manager"):
-            self.device_manager.shutdown()  # Implement shutdown logic
-
+        logger.info("Cleaning up MainWindow resources")
         if hasattr(self, "operation_manager"):
             self.operation_manager.shutdown()  # Implement shutdown logic
+        if hasattr(self, "device_manager"):
+            self.device_manager.shutdown()  # Implement shutdown logic
         return
 
     def closeEvent(self, event):

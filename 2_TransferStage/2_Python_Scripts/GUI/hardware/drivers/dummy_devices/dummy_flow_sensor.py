@@ -33,6 +33,10 @@ class FlowSensor:
         logger.info(f"Density retrieved: {1000} kg/m^3")
         return
 
+    def shutdown(self):
+        logger.info("Shutting down Flow Sensor")
+        return
+
     def get_flow(self):
         """
         def: This function read the set_flow of the sensor.

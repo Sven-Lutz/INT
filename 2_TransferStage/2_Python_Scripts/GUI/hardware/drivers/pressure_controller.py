@@ -66,7 +66,7 @@ class PressureController:
         except Exception as e:
             logger.error(f"Exception during PressureController shutdown: {e}")
         return
-    
+
     def calibrate(self):
         """
         def: This function performs calibration and save it to the calibration file.

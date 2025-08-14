@@ -46,8 +46,8 @@ class BaseOperation(QObject):
 
         if self.direction == "positive" and self.target_volume > max_volume:
             logger.warning("Container will overflow. Aborting operation")
-            raise OverflowError("ERROR: Container will overflow. Aborting operation")
             self.stop()
+            raise OverflowError("ERROR: Container will overflow. Aborting operation")
         elif self.direction == "negative" and self.target_volume > current_volume:
             logger.warning("Air will be sucked in the system. Aborting operation")
             self.stop()
@@ -115,14 +115,16 @@ class FillOperation(BaseOperation):
         cfg = ConfigManager().load_config("general")
         current_volume = cfg["Container Volume"]
         super().__init__(device_manager, target_volume=max_volume-current_volume, direction="positive")
-
+        return
 
 class EmptyOperation(BaseOperation):
     def __init__(self, device_manager):
         cfg = ConfigManager().load_config("general")
-        current_volume = cfg["Container Volume"]
-        super().__init__(device_manager, target_volume=current_volume, direction="negative")
-
+        current_volume = cfg.get("Container Volume")
+        cfg = ConfigManager().load_config("container_selector")
+        small_volume = cfg["Containers"].get(cfg.get("Selected Container")).get("Small Volume")
+        super().__init__(device_manager, target_volume=current_volume-small_volume, direction="negative")
+        return
 
 class AutomaticOperation(BaseOperation):
     def __init__(self, device_manager):

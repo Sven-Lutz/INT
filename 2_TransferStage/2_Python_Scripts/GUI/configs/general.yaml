@@ -11,12 +11,6 @@ Operations:
 - automatic
 P Term: 0.9
 PVA Waiting Time: 60.0
-<<<<<<< HEAD
 Project Path: U:\Masterarbeit\X_PelliKAn\2_TransferStage\2_Python_Scripts\GUI
 Remaining Bottle Volume: 484.91
-Selected Operation: add
-=======
-Project Path: C:\Users\Operator\PelliKAn\2_TransferStage\2_Python_Scripts\GUI
-Remaining Bottle Volume: 809.97
-Selected Operation: automatic
->>>>>>> d41d0d5eee9df6b748292937b8fc67dcec3bfdcc
+Selected Operation: empty

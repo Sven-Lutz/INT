@@ -27,6 +27,12 @@ class ContainerSelector:
                     mux_valves.add(container[key])
         return channel in mux_valves
 
+    def shutdown(self):
+        logger.info("Shutting down Container Selector (MUX)...")
+        self.select_container("Drain")
+        logger.debug("Selecting Drain output before shutting down")
+        return
+
     def select_container(self, container_name: str):
         # Make sure the container name matches exactly (e.g., "5 Sample", not "5Sample")
         containers = self.config.get("Containers", {})
