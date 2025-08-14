@@ -43,6 +43,20 @@ class FlowSensor:
             logger.warning(f"WARNING: Unable to retrieve density, error code: {error}")
         return
 
+    def shutdown(self):
+        logger.info("Shutting down Flow Sensor...")
+
+        try:
+            # Call the ElveFlow destructor to release the device
+            error = BFS_Destructor(self.Instr_ID.value)
+            if error != 0:
+                logger.warning(f"BFS_Destructor returned error code: {error}")
+            else:
+                logger.info("Flow sensor communication successfully closed.")
+        except Exception as e:
+            logger.error(f"Exception during FlowSensor shutdown: {e}")
+        return
+
     def get_flow(self):
         """
         def: This function read the set_flow of the sensor.

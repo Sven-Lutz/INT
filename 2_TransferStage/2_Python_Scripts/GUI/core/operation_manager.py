@@ -30,6 +30,11 @@ class OperationManager(QObject):
         }
         return
 
+    def shutdown(self):
+        logger.info("Shutting down Operation Manager")
+        self.stop_operation()
+        return
+
     def start_operation(self, operation_type):
         if self.operation:
             logger.info(f"{operation_type} operation already in progress. Please wait.")

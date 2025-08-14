@@ -22,11 +22,6 @@ class PressureController:
         self.shutdown()
         return
 
-    def shutdown(self):
-        logger.info("Shutting down Pressure Controller")
-        self.set_pressure(0)
-        return
-
     def _initialize_device(self):
         """
         def: This funciton initializes the OB1 device and store the instrument ID.
@@ -54,6 +49,24 @@ class PressureController:
         self.set_pressure(0)                                                        # Set initial pressure to zero
         return
 
+    def shutdown(self):
+        logger.info("Shutting down Pressure Controller...")
+
+        try:
+            # Set pressure to zero before shutdown
+            self.set_pressure(0)
+            logger.debug("Pressure set to 0 before shutdown.")
+
+            # Close communication with the OB1 device
+            error = OB1_Destructor(self.Instr_ID.value)
+            if error != 0:
+                logger.warning(f"OB1_Destructor returned error code: {error}")
+            else:
+                logger.info("OB1 device communication successfully closed.")
+        except Exception as e:
+            logger.error(f"Exception during PressureController shutdown: {e}")
+        return
+    
     def calibrate(self):
         """
         def: This function performs calibration and save it to the calibration file.
