@@ -116,11 +116,6 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
             self.device_manager.shutdown()  # Implement shutdown logic
         return
 
-    def closeEvent(self, event):
-        self.cleanup()
-        super().closeEvent(event)
-        return
-
     def _list_widgets(self):
         from PySide6.QtWidgets import QLabel
         wgf = WidgetFinder(self.ui)

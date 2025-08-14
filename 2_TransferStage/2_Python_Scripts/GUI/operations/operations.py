@@ -1,5 +1,4 @@
 import logging
-import time
 
 from PySide6.QtCore import QObject, QTimer
 
@@ -209,29 +208,78 @@ class AutomaticOperation(BaseOperation):
 class FlushOperation(BaseOperation):
     def __init__(self, device_manager):
         super().__init__(device_manager)
+
+        self._volume = 0
+        self._previous_flow = 0
+        self.container_vol = None
+        self.remaining_bottle_volume = None
+
+        cfg = ConfigManager().load_config("container_selector")
+        self.max_volume = cfg["Containers"].get(cfg.get("Selected Container")).get("Maximum Volume")
+
         self._timer = QTimer()
-        self._timer.timeout.connect(self.flush_step)
+        self._timer.timeout.connect(self._flush_step)
         self._running = False
 
     def start(self):
-        logger.info("FlushOperation started")
         self._running = True
-        self._timer.start(100)  # adjust flush frequency (ms)
+        self._volume = 0
+
+        cfg = ConfigManager().load_config("general")
+        self.container_vol = cfg.get("Container Volume")
+        self.remaining_bottle_volume = cfg.get("Remaining Bottle Volume")
+
+        if not self._check_environment():
+            return
+
+        logger.info("FlushOperation started")
+
         self.device_manager.start_pump()
         self.device_manager.filling()
         self.device_manager.set_pressure(4000)
+
+        self._timer.start(100)  # adjust flush frequency (ms)
         return
 
-    def flush_step(self):
-        if not self._running:
-            return
-        self.device_manager.filling()  # implement this in your device manager
-        logger.debug("Flush step executed")
+    def _flush_step(self):
+        if not self._check_environment():
+            return  # Exit early if environment is not valid
+
+        flow = self.device_manager.get_flow()  # uL/min
+        delta_f = flow - self._previous_flow
+
+        data_signals.flow_updated.emit(flow)
+        data_signals.pressure_updated.emit(4000)  # fixed pressure
+
+        self._volume += abs((flow + 0.5 * delta_f) * 0.1 * 0.001 / 60)  # 0.1s interval
+        self.container_vol += self._volume
+        self.remaining_bottle_volume -= self._volume / 1000
+
+        data_signals.bottle_volume_updated.emit(round(self.remaining_bottle_volume, 2))
+        data_signals.container_volume_updated.emit(self.container_vol)
         return
+
+    def _check_environment(self):
+        if not self._running:
+            return False
+        if self.container_vol >= self.max_volume:
+            logger.warning("Container is full, flushing stopped")
+            self.stop()
+            return False
+        elif self.remaining_bottle_volume == 0:
+            logger.warning("Bottle empty, flushing stopped")
+            self.stop()
+            return False
+        return True
 
     def stop(self):
         logger.info("FlushOperation stopping")
         self._running = False
         self._timer.stop()
+        new_container_volume = self.container_vol + self._volume
+        if self.direction == "positive":
+            data_signals.config_changed.emit("general", "Remaining Bottle Volume", round(self.remaining_bottle_volume, 2), True)
+        data_signals.config_changed.emit("general", "Container Volume", round(new_container_volume, 2), True)
+
         self._finalize("FlushOperation finished")
         return
