@@ -11,7 +11,7 @@ Containers:
     Small Volume: 50000
   5 Sample:
     MUX Valve: 2
-    Maximum Volume: 200000
+    Maximum Volume: 520000
     Small Volume: 25000
   Drain:
     MUX Valve: 7
