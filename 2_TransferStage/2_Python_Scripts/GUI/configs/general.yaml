@@ -1,5 +1,5 @@
 Bottle Volume: 1500
-Container Volume: 170003.86
+Container Volume: 170987.14
 D Term: 0
 Default Flow: 30000
 I Term: 6
@@ -12,5 +12,5 @@ Operations:
 P Term: 0.9
 PVA Waiting Time: 60.0
 Project Path: U:\Masterarbeit\X_PelliKAn\2_TransferStage\2_Python_Scripts\GUI
-Remaining Bottle Volume: 484.91
+Remaining Bottle Volume: 483.93
 Selected Operation: add

@@ -16,6 +16,7 @@ from hardware.device_manager import DeviceManager
 
 logger = logging.getLogger(__name__)                            # Create a logger for this module
 
+
 class MainWindow(Qtw.QMainWindow):                              # Define the main window class inheriting from QMainWindow
     def __init__(self):                                         # Constructor method
         super().__init__()                                      # Call the base class constructor
@@ -42,9 +43,6 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         ui_path = os.path.join(self.config.get("Project Path"),"ui","main_window.ui")
         self.ui = UiBuilder.load_ui(ui_path, self)
         self.setCentralWidget(self.ui)
-
-        self.binder = SignalBinder(self.ui, operation_manager=self.operation_manager, device_manager=self.device_manager, config=self.config)       # Start signal binding
-        self.binder.bind_signals()
 
         self._populate_ui()
         self._disable_ui()
@@ -91,6 +89,8 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
         return
 
     def _init_signals(self):
+        self.binder = SignalBinder(self.ui, operation_manager=self.operation_manager, device_manager=self.device_manager, config=self.config)  # Start signal binding
+        self.binder.bind_signals()
 
         data_signals.set_start_enabled.connect(self.ui.startPushButton.setEnabled)
         data_signals.set_stop_enabled.connect(self.ui.stopPushButton.setEnabled)
@@ -108,16 +108,16 @@ class MainWindow(Qtw.QMainWindow):                              # Define the mai
 
         return
 
+    def _list_widgets(self):
+        from PySide6.QtWidgets import QLabel
+        wgf = WidgetFinder(self.ui)
+        wgf.list_widgets_of_type(QLabel)
+        return
+
     def cleanup(self):
         logger.info("Cleaning up MainWindow resources")
         if hasattr(self, "operation_manager"):
             self.operation_manager.shutdown()  # Implement shutdown logic
         if hasattr(self, "device_manager"):
             self.device_manager.shutdown()  # Implement shutdown logic
-        return
-
-    def _list_widgets(self):
-        from PySide6.QtWidgets import QLabel
-        wgf = WidgetFinder(self.ui)
-        wgf.list_widgets_of_type(QLabel)
         return
