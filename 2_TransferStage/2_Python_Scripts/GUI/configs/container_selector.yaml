@@ -1,0 +1,22 @@
+COM Port: ASRL10::INSTR
+Config Path: C:\Users\Operator\PelliKAn\2_TransferStage\2_Python_Scripts\GUI\configs
+Containers:
+  1 Sample:
+    MUX Valve: 1
+    Maximum Volume: 170000
+    Small Volume: 5000
+  10 Sample:
+    MUX Valve: 3
+    Maximum Volume: 1000000
+    Small Volume: 50000
+  5 Sample:
+    MUX Valve: 2
+    Maximum Volume: 520000
+    Small Volume: 25000
+  Drain:
+    MUX Valve: 7
+    Maximum Volume: 1000
+    Small Volume: 0
+Controller Name: MUXst du oder was
+Project Path: C:\Users\Operator\PelliKAn\2_TransferStage\2_Python_Scripts\GUI
+Selected Container: 1 Sample

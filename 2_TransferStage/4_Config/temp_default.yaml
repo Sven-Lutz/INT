@@ -1,16 +1,17 @@
-Bottle Volume: 221.7471862090773
-Current Flow: -9372.666010402292
-Current Pressure: -886.5752787955488
-Current Vessel Volume: 3678.441539221469
-Final Volume: 1999.3144164529367
+Bottle Volume: 0
+Current Flow: 0
+Current Pressure: 0
+Current Vessel Volume: 0
+Final Volume: 5000
 Is Paused: false
 Is Running: false
 Operation: remove
 Remaining PVA Time: 0
-Remaining Volume: 1679.1271227685324
+Remaining Volume: 0
+Safety Volume: 2000
+Selected Container: 10 Sample
 Set Flow: 30000
 Small Volume: 5000
-V1: 1
-V2: 0
+V1: 0
+V2: 1
 V3: 0
-Safety Volume: 2000

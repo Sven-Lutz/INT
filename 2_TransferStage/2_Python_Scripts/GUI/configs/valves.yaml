@@ -1,0 +1,19 @@
+COM Port: COM3
+Config Path: C:\Users\Operator\PelliKAn\2_TransferStage\2_Python_Scripts\GUI\configs
+Project Path: C:\Users\Operator\PelliKAn\2_TransferStage\2_Python_Scripts\GUI
+Valves:
+  Container:
+    Pins:
+    - 9
+    - 8
+    State: 0
+  Liquid:
+    Pins:
+    - 11
+    - 13
+    State: 1
+  Venting:
+    Pins:
+    - 10
+    - 12
+    State: true
