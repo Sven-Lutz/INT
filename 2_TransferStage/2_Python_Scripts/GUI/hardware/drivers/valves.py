@@ -31,16 +31,6 @@ class Valve:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.shutdown()
-        return
-
-    def shutdown(self):
-        logger.debug("Shutting down valve system")
-        self.vent_pos()
-        self.board.exit()
-        return
-
     def _switch_valve(self, name, state):
         """
         def: Switches the given valve (and its LED) to the specified state.
@@ -58,6 +48,12 @@ class Valve:
 
         self.state[name] = state
         logger.info(f"{name}: {'OPEN' if state else 'CLOSED'} | Valve states: {self.state}")
+        return
+
+    def shutdown(self):
+        logger.debug("Shutting down valve system")
+        self.vent_pos()
+        self.board.exit()
         return
 
     def vent_pos(self):

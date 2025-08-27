@@ -16,7 +16,7 @@ Containers:
   Drain:
     MUX Valve: 7
     Maximum Volume: 1000
-    Small Volume: 1000
+    Small Volume: 0
 Controller Name: MUXst du oder was
 Project Path: C:\Users\Operator\PelliKAn\2_TransferStage\2_Python_Scripts\GUI
 Selected Container: 1 Sample

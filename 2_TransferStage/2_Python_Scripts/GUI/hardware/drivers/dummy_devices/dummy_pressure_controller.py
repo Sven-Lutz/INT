@@ -44,6 +44,12 @@ class PressureController:
         self.set_pressure(0)                                                        # Set initial pressure to zero
         return
 
+    def shutdown(self):
+        logger.info("Shutting down Pressure Controller...")
+        self.set_pressure(0)
+        logger.debug("Pressure set to 0 before shutdown.")
+        return
+
     def calibrate(self):
         """
         def: This function performs calibration and save it to the calibration file.

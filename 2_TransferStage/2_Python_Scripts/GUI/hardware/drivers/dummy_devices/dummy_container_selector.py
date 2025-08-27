@@ -1,6 +1,5 @@
 import logging
 
-from hardware.drivers.Elveflow64 import *
 
 logger = logging.getLogger(__name__)
 
@@ -8,7 +7,6 @@ class ContainerSelector:
     def __init__(self, config):
         logger.info("Starting container selector communication...")
         self.config = config
-        self.Instr_ID = c_int32()
         self._initialize_device()
 
         logger.info("Transfer container selector communication successfully started")
@@ -16,13 +14,9 @@ class ContainerSelector:
 
     def _initialize_device(self):
         """
-        def: This funciton initializes the OB1 device and store the instrument ID.
+        def: This function initializes the OB1 device and store the instrument ID.
         """
-        error = MUX_DRI_Initialization(self.config.get("COM Port").encode('ascii'), byref(self.Instr_ID))    #see User Guide to determine regulator types and NIMAX to determine the instrument name
-        if error != 0:
-            logger.error(f"Unable to connect to MUX device, error code: {error}")
-            raise ConnectionError(f"ERROR: Unable to connect to MUX device, error code: {error}")
-        logger.info(f"MUX initialized with ID: {self.Instr_ID.value}")
+        logger.info(f"MUX initialized")
         return
 
     def _confirm_channel(self, channel):
@@ -35,25 +29,9 @@ class ContainerSelector:
 
     def shutdown(self):
         logger.info("Shutting down Container Selector (MUX)...")
-        try:
-            self.select_container("Drain")
-            logger.debug("Selecting Drain output before shutting down")
-
-            # Call the ElveFlow destructor to release the MUX device
-            error = MUX_DRI_Destructor(self.Instr_ID.value)
-            if error != 0:
-                logger.warning(f"MUX_DRI_Destructor returned error code: {error}")
-            else:
-                logger.info("MUX device communication successfully closed.")
-        except Exception as e:
-            logger.error(f"Exception during ContainerSelector shutdown: {e}")
+        self.select_container("Drain")
+        logger.debug("Selecting Drain output before shutting down")
         return
-
-    def get_container(self):
-        valve = c_int32(-1)
-        MUX_DRI_Get_Valve(self.Instr_ID.value, byref(valve))  # get the active valve. it returns 0 if valve is busy.
-        logger.debug('selected channel', valve.value)
-        return valve.value
 
     def select_container(self, container_name: str):
         # Make sure the container name matches exactly (e.g., "5 Sample", not "5Sample")
@@ -76,9 +54,6 @@ class ContainerSelector:
             raise ValueError(f"ERROR: MUX valve not defined for container '{matched_key}'")
 
         if self._confirm_channel(mux_valve):
-            error = MUX_DRI_Set_Valve(self.Instr_ID.value, mux_valve, 0)
-            if error != 0:
-                logger.error(f"Unable to select Channel: {error}. However, the MUX is still selecting the valve somehow")
             logger.debug(f"MUX Valve set to {mux_valve} for container '{matched_key}'")
         else:
             logger.warning("Channel is not connected in System")

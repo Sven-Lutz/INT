@@ -210,8 +210,3 @@ class SignalBinder:
         dialog = AutomaticDialog(self.ui)
         dialog.exec()
         return
-
-
-
-
-
