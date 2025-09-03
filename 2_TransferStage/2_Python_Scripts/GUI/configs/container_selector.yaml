@@ -3,7 +3,7 @@ Config Path: C:\Users\Operator\PelliKAn\2_TransferStage\2_Python_Scripts\GUI\con
 Containers:
   1 Sample:
     MUX Valve: 1
-    Maximum Volume: 170000
+    Maximum Volume: 160000
     Small Volume: 5000
   10 Sample:
     MUX Valve: 3
