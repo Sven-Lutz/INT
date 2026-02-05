@@ -144,4 +144,5 @@ class PressureController:
         Placeholder for cleanup logic if needed.
         """
         logger.info("Closing pressure controller (not implemented).")
+        self.set_pressure(0, channel=1)
         return
