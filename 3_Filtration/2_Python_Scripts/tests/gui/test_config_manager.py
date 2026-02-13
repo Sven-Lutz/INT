@@ -1,17 +1,15 @@
-from utils.config_manager import ConfigManager
+from pathlib import Path
+from src.utils.config_manager import ConfigManager
 
-def main():
-    cfg = ConfigManager()
 
-    config = cfg.load_config("pressure_controller")
+def test_default_configs_exist():
+    root = Path(__file__).resolve().parents[2]
+    defaults_dir = root / "src" / "config" / "defaults"
 
-    print(config)
-    config = cfg.load_config("valves")
-    print(config)
+    assert defaults_dir.exists(), "defaults directory missing"
 
-    config = cfg.get_all_configs()
+    yaml_files = list(defaults_dir.glob("*.yaml"))
+    assert yaml_files, "no default yaml files found"
 
-    print(config)
-
-if __name__ == "__main__":
-    main()
+    for p in yaml_files:
+        assert p.read_text().strip(), f"{p.name} is empty"

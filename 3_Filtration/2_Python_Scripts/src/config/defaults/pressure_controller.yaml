@@ -1,1 +1,27 @@
-Pressure Limit: 6000
+# src/config/defaults/pressure_controller.yaml
+main:
+  port: COM4
+  address: 3
+  baudrate: 38400
+  channel: 1
+
+backwash:
+  port: COM4
+  address: 4
+  baudrate: 38400
+  channel: 1
+
+full_scale_raw: 32000
+
+limit_percent_main: 80.0
+limit_percent_backwash: 60.0
+
+meas_raw: [1, 0]
+set_raw: [1, 1]
+
+readback_tolerance_percent: 1.0
+max_write_retries: 2
+io_timeout_s: 1.5
+
+ramp_max_step_percent: 5.0
+ramp_sleep_s: 0.15

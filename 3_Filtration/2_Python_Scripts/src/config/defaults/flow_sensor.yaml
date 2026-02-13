@@ -1,4 +1,7 @@
-Controller Name: BFS2
-COM Port: ASRL5::INSTR
-Flow Limit: 33300
-
+# src/config/defaults/flow_sensor.yaml
+flow:
+  port: COM5
+  address: 3
+  baudrate: 38400
+  channel: 1
+  full_scale_raw: 32000

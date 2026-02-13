@@ -1,4 +1,10 @@
-Project Path: C:\Users\Operator\PelliKAn\3_Filtration
-Set Flow: 6900
-Volume of Solution: 300
-Set Pressure: 30
+# src/config/defaults/general.yaml
+project_path: "U:/PelliKAn/3_Filtration/2_Python_Scripts"
+
+logging:
+  level: INFO
+
+serial:
+  baudrate_default: 38400
+
+full_scale_raw_default: 32000

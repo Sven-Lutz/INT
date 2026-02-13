@@ -1,1 +1,2 @@
-COM Port: "COM6"
+# src/config/defaults/valves.yaml
+COM Port: COM6
