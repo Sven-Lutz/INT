@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from PySide6.QtCore import Qt
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QFrame,
@@ -87,7 +89,7 @@ class LeftFrame(QFrame):
         sb.setButtonSymbols(QAbstractSpinBox.UpDownArrows)
         sb.setCorrectionMode(QAbstractSpinBox.CorrectToNearestValue)
         sb.setGroupSeparatorShown(True)
-        sb.setAlignment(int(sb.alignment()) | int(0))
+        sb.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         return sb
 
     def _spin_s(self, *, default: float, min_v: float = 0.0, max_v: Optional[float] = None, decimals: int = 1) -> QDoubleSpinBox:

@@ -7,14 +7,15 @@ import PySide6.QtWidgets as Qtw
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtWidgets import QMessageBox
 
-from .frames.top_frame import TopFrame
-from .frames.left_frame import LeftFrame
-from .frames.right_frame import RightFrame
-
 from src.utils.config_manager import ConfigManager
 from src.gui.data import ExperimentWorker, RunParams
 from src.backend.core.experimentator import ExperimentConfig
 from src.gui.data.parser import FillingInputs, compute_filling
+from src.gui.monitor.server import MonitorServer
+
+from .frames.top_frame import TopFrame
+from .frames.left_frame import LeftFrame
+from .frames.right_frame import RightFrame
 
 
 class MainWindow(Qtw.QMainWindow):
@@ -23,9 +24,11 @@ class MainWindow(Qtw.QMainWindow):
         self.setWindowTitle("Little Chonker")
         self.resize(980, 700)
 
+        # Config
         self.cfg_manager = ConfigManager()
         self.config = self.cfg_manager.load_config("general")
 
+        # UI root
         central = Qtw.QWidget()
         self.setCentralWidget(central)
 
@@ -52,19 +55,28 @@ class MainWindow(Qtw.QMainWindow):
         splitter.setSizes([560, 380])
         layout.addWidget(splitter, 1)
 
+        # Worker thread
         self._thread: Optional[QThread] = None
         self._worker: Optional[ExperimentWorker] = None
 
+        # Live monitor
+        self.monitor: Optional[MonitorServer] = None
+        self._start_monitor()
+
+        # Signals
         self.left.start_clicked.connect(self._start_experiment)
         self.left.ok_clicked.connect(self._send_ok)
         self.left.compute_clicked.connect(self._compute_filling_ui)
 
         self._apply_style()
 
+        # Compute initial filling helper values (non-fatal if something is missing early)
         try:
             self._compute_filling_ui()
         except Exception:
             pass
+
+    # ---------- UI setup helpers ----------
 
     def _apply_style(self) -> None:
         self.setStyleSheet(
@@ -74,6 +86,25 @@ class MainWindow(Qtw.QMainWindow):
             "QScrollArea { background: transparent; }"
             "QFrame { background: transparent; }"
         )
+
+    def _start_monitor(self) -> None:
+        """Start live monitor and set QR code. Non-fatal if it fails."""
+        enabled = bool(self.config.get("monitor_enabled", True))
+        if not enabled:
+            return
+
+        host = str(self.config.get("monitor_host", "0.0.0.0"))
+        port = int(self.config.get("monitor_port", 8765))
+
+        try:
+            self.monitor = MonitorServer(host=host, port=port)
+            self.monitor.start()
+            self.right.set_qr_url(self.monitor.url())
+        except Exception:
+            # Keep UI usable even if monitor fails (e.g. port taken / missing deps)
+            self.monitor = None
+
+    # ---------- Filling helper ----------
 
     def _compute_filling_ui(self) -> None:
         try:
@@ -90,6 +121,8 @@ class MainWindow(Qtw.QMainWindow):
             self.left.lbl_fill_suggest.setText(f"Suggested ramp: {comp.suggested_ramp_s:.1f} s")
         except Exception as e:
             QMessageBox.critical(self, "Compute error", str(e))
+
+    # ---------- Experiment config ----------
 
     def _read_run_params(self) -> RunParams:
         p = self.left.params()
@@ -123,6 +156,8 @@ class MainWindow(Qtw.QMainWindow):
             base_backwash_remove_ml=float(self.config.get("base_backwash_remove_ml", 0.0)),
         )
 
+    # ---------- Run control ----------
+
     def _start_experiment(self) -> None:
         if self._thread is not None:
             QMessageBox.warning(self, "Already running", "An experiment is already running.")
@@ -144,8 +179,12 @@ class MainWindow(Qtw.QMainWindow):
             self._worker.step_changed.connect(self._on_step_changed)
             self._worker.loss_updated.connect(self.right.set_loss)
 
-            if hasattr(self._worker, "telemetry"):
-                self._worker.telemetry.connect(self.right.ingest_telemetry)
+            # Optional telemetry (only connect if both exist)
+            if hasattr(self._worker, "telemetry") and hasattr(self.right, "ingest_telemetry"):
+                try:
+                    self._worker.telemetry.connect(self.right.ingest_telemetry)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
 
             self._worker.finished.connect(self._on_finished)
             self._worker.failed.connect(self._on_failed)
@@ -189,6 +228,8 @@ class MainWindow(Qtw.QMainWindow):
         QMessageBox.critical(self, "Failed", err)
         self._cleanup_thread()
 
+    # ---------- Cleanup ----------
+
     def _cleanup_thread(self) -> None:
         if self._thread is not None:
             self._thread.quit()
@@ -198,4 +239,9 @@ class MainWindow(Qtw.QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._cleanup_thread()
-        super().closeEvent(event)
+        try:
+            if self.monitor is not None:
+                self.monitor.stop()
+                self.monitor = None
+        finally:
+            super().closeEvent(event)
