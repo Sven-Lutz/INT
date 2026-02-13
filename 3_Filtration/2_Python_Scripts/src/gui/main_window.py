@@ -42,6 +42,7 @@ class MainWindow(Qtw.QMainWindow):
         left_scroll = Qtw.QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(Qtw.QFrame.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         left_scroll.setWidget(self.left)
 
         splitter = Qtw.QSplitter(Qt.Horizontal)
@@ -58,12 +59,28 @@ class MainWindow(Qtw.QMainWindow):
         self.left.ok_clicked.connect(self._send_ok)
         self.left.compute_clicked.connect(self._compute_filling_ui)
 
+        self._apply_style()
+
+        try:
+            self._compute_filling_ui()
+        except Exception:
+            pass
+
+    def _apply_style(self) -> None:
+        self.setStyleSheet(
+            "QMainWindow { background: #f6f7fb; }"
+            "QGroupBox { background: white; border: 1px solid #e5e7eb; border-radius: 10px; margin-top: 8px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 6px; }"
+            "QScrollArea { background: transparent; }"
+            "QFrame { background: transparent; }"
+        )
+
     def _compute_filling_ui(self) -> None:
         try:
             inputs = FillingInputs(
-                target_mbar=float(self.left.ed_fill_target.text()),
-                ramp_s=float(self.left.ed_fill_ramp.text()),
-                hold_s=float(self.left.ed_fill_hold.text()),
+                target_mbar=float(self.left.sb_fill_target.value()),
+                ramp_s=float(self.left.sb_fill_ramp.value()),
+                hold_s=float(self.left.sb_fill_hold.value()),
             )
             full_scale = float(self.config.get("pressure_full_scale_mbar", 8000.0))
             comp = compute_filling(inputs, full_scale_mbar=full_scale)
@@ -73,6 +90,38 @@ class MainWindow(Qtw.QMainWindow):
             self.left.lbl_fill_suggest.setText(f"Suggested ramp: {comp.suggested_ramp_s:.1f} s")
         except Exception as e:
             QMessageBox.critical(self, "Compute error", str(e))
+
+    def _read_run_params(self) -> RunParams:
+        p = self.left.params()
+        return RunParams(
+            backwash1_duration_s=float(p["backwash1_duration_s"]),
+            backwash1_pressure_mbar=p["backwash1_pressure_mbar"],
+            filling_target_mbar=float(p["filling_target_mbar"]),
+            filling_ramp_s=float(p["filling_ramp_s"]),
+            filling_hold_s=float(p["filling_hold_s"]),
+            filtration_duration_s=float(p["filtration_duration_s"]),
+            filtration_pressure_mbar=p["filtration_pressure_mbar"],
+            venting_duration_s=float(p["venting_duration_s"]),
+            backwash2_base_remove_ml=float(p["backwash2_base_remove_ml"]),
+            backwash2_pressure_mbar=p["backwash2_pressure_mbar"],
+            backwash2_max_duration_s=float(p["backwash2_max_duration_s"]),
+        )
+
+    def _build_experiment_config(self) -> ExperimentConfig:
+        log_dir = os.path.join(os.path.dirname(__file__), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+
+        return ExperimentConfig(
+            initial_volume_ml=float(self.config.get("initial_volume_ml", 0.0)),
+            min_volume_ml=float(self.config.get("min_volume_ml", 0.0)),
+            sample_period_s=float(self.config.get("sample_period_s", 0.2)),
+            log_dir=log_dir,
+            log_name_prefix="run",
+            flow_is_ml_per_min=bool(self.config.get("flow_is_ml_per_min", True)),
+            pressure_full_scale_mbar=float(self.config.get("pressure_full_scale_mbar", 8000.0)),
+            ramp_update_dt_s=float(self.config.get("ramp_update_dt_s", 0.15)),
+            base_backwash_remove_ml=float(self.config.get("base_backwash_remove_ml", 0.0)),
+        )
 
     def _start_experiment(self) -> None:
         if self._thread is not None:
@@ -95,6 +144,9 @@ class MainWindow(Qtw.QMainWindow):
             self._worker.step_changed.connect(self._on_step_changed)
             self._worker.loss_updated.connect(self.right.set_loss)
 
+            if hasattr(self._worker, "telemetry"):
+                self._worker.telemetry.connect(self.right.ingest_telemetry)
+
             self._worker.finished.connect(self._on_finished)
             self._worker.failed.connect(self._on_failed)
 
@@ -107,44 +159,6 @@ class MainWindow(Qtw.QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Start error", str(e))
             self._cleanup_thread()
-
-    def _read_run_params(self) -> RunParams:
-        def f(text: str) -> float:
-            return float(text)
-
-        def opt_mbar(text: str) -> Optional[float]:
-            v = float(text)
-            return None if v == 0.0 else v
-
-        return RunParams(
-            backwash1_duration_s=f(self.left.ed_backwash1_duration.text()),
-            backwash1_pressure_mbar=opt_mbar(self.left.ed_backwash1_pressure.text()),
-            filling_target_mbar=f(self.left.ed_fill_target.text()),
-            filling_ramp_s=f(self.left.ed_fill_ramp.text()),
-            filling_hold_s=f(self.left.ed_fill_hold.text()),
-            filtration_duration_s=f(self.left.ed_filtration_duration.text()),
-            filtration_pressure_mbar=opt_mbar(self.left.ed_filtration_pressure.text()),
-            venting_duration_s=f(self.left.ed_venting_duration.text()),
-            backwash2_base_remove_ml=f(self.left.ed_backwash2_base_remove.text()),
-            backwash2_pressure_mbar=opt_mbar(self.left.ed_backwash2_pressure.text()),
-            backwash2_max_duration_s=f(self.left.ed_backwash2_max_duration.text()),
-        )
-
-    def _build_experiment_config(self) -> ExperimentConfig:
-        log_dir = os.path.join(os.path.dirname(__file__), "logs")
-        os.makedirs(log_dir, exist_ok=True)
-
-        return ExperimentConfig(
-            initial_volume_ml=float(self.config.get("initial_volume_ml", 0.0)),
-            min_volume_ml=float(self.config.get("min_volume_ml", 0.0)),
-            sample_period_s=float(self.config.get("sample_period_s", 0.2)),
-            log_dir=log_dir,
-            log_name_prefix="run",
-            flow_is_ml_per_min=bool(self.config.get("flow_is_ml_per_min", True)),
-            pressure_full_scale_mbar=float(self.config.get("pressure_full_scale_mbar", 8000.0)),
-            ramp_update_dt_s=float(self.config.get("ramp_update_dt_s", 0.15)),
-            base_backwash_remove_ml=float(self.config.get("base_backwash_remove_ml", 0.0)),
-        )
 
     def _on_request_ok(self, step: str, reason: str) -> None:
         self.right.set_status(f"Manual OK required: {reason}")
