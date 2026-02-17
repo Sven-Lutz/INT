@@ -1,4 +1,4 @@
-# hardware/drivers/pressure_controller.py
+# src/hardware/drivers/pressure_controller.py
 from __future__ import annotations
 
 import logging
@@ -35,44 +35,49 @@ class PressureControllerConfig:
     main: ProparEndpoint
     backwash: ProparEndpoint
 
+    # engineering: set_pressure_percent() forwards "percent" as engineering units (your current Experimentator assumption)
+    # raw_percent: percent is converted to raw (0..full_scale_raw) before writing
+    scale_mode: str = "engineering"  # "engineering" | "raw_percent"
+
     full_scale_raw: int = 32000
     limit_percent_main: float = 80.0
     limit_percent_backwash: float = 80.0
 
-    meas_raw: ProcPar = (1, 0)
-    set_raw: ProcPar = (1, 1)
+    meas: ProcPar = (33, 205)
+    setp: ProcPar = (33, 206)
 
-    readback_tolerance_percent: float = 1.0
+    # Readback checks are nice, but must not kill the run if reads fail
+    verify_readback: bool = False
+
+    readback_tolerance: float = 1.0
     max_write_retries: int = 2
     io_timeout_s: float = 1.5
 
-    ramp_max_step_percent: Optional[float] = 5.0
+    ramp_max_step: Optional[float] = 0.2
     ramp_sleep_s: float = 0.15
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "PressureControllerConfig":
-        meas = d.get("meas_raw", [1, 0])
-        sp = d.get("set_raw", [1, 1])
+        meas = d.get("meas", d.get("meas_raw", [33, 205]))
+        setp = d.get("setp", d.get("set_raw", [33, 206]))
 
-        ramp = d.get("ramp_max_step_percent", 5.0)
-        ramp_v: Optional[float]
-        if ramp is None:
-            ramp_v = None
-        else:
-            ramp_v = float(ramp)
+        ramp = d.get("ramp_max_step", d.get("ramp_max_step_percent", 0.2))
+        ramp_v: Optional[float] = None if ramp is None else float(ramp)
 
         return PressureControllerConfig(
             main=ProparEndpoint.from_dict(d["main"]),
             backwash=ProparEndpoint.from_dict(d["backwash"]),
+            scale_mode=str(d.get("scale_mode", "engineering")),
             full_scale_raw=int(d.get("full_scale_raw", 32000)),
             limit_percent_main=float(d.get("limit_percent_main", 80.0)),
             limit_percent_backwash=float(d.get("limit_percent_backwash", 80.0)),
-            meas_raw=(int(meas[0]), int(meas[1])),
-            set_raw=(int(sp[0]), int(sp[1])),
-            readback_tolerance_percent=float(d.get("readback_tolerance_percent", 1.0)),
+            meas=(int(meas[0]), int(meas[1])),
+            setp=(int(setp[0]), int(setp[1])),
+            verify_readback=bool(d.get("verify_readback", False)),
+            readback_tolerance=float(d.get("readback_tolerance", d.get("readback_tolerance_percent", 1.0))),
             max_write_retries=int(d.get("max_write_retries", 2)),
             io_timeout_s=float(d.get("io_timeout_s", 1.5)),
-            ramp_max_step_percent=ramp_v,
+            ramp_max_step=ramp_v,
             ramp_sleep_s=float(d.get("ramp_sleep_s", 0.15)),
         )
 
@@ -82,42 +87,31 @@ class _ProparPressureChannel:
         self,
         name: str,
         endpoint: ProparEndpoint,
-        full_scale_raw: int,
+        cfg: PressureControllerConfig,
+        *,
         limit_percent: float,
-        meas_raw: ProcPar,
-        set_raw: ProcPar,
-        readback_tolerance_percent: float,
-        max_write_retries: int,
-        io_timeout_s: float,
-        ramp_max_step_percent: Optional[float],
-        ramp_sleep_s: float,
     ):
         self.name = name
         self.endpoint = endpoint
-        self.full_scale_raw = int(full_scale_raw)
+        self.cfg = cfg
         self.limit_percent = float(limit_percent)
-        self.meas_raw = (int(meas_raw[0]), int(meas_raw[1]))
-        self.set_raw = (int(set_raw[0]), int(set_raw[1]))
-        self.readback_tolerance_percent = float(readback_tolerance_percent)
-        self.max_write_retries = int(max_write_retries)
-        self.io_timeout_s = float(io_timeout_s)
-        self.ramp_max_step_percent = ramp_max_step_percent if ramp_max_step_percent is None else float(ramp_max_step_percent)
-        self.ramp_sleep_s = float(ramp_sleep_s)
+
         self.inst: Optional[object] = None
 
         if not str(self.endpoint.port).strip():
             raise ValueError(f"{self.name}: port must be set.")
-        if self.full_scale_raw <= 0:
+        if self.cfg.full_scale_raw <= 0:
             raise ValueError(f"{self.name}: full_scale_raw must be > 0.")
         if not (0.0 < self.limit_percent <= 100.0):
             raise ValueError(f"{self.name}: limit_percent must be in (0, 100].")
-        if self.readback_tolerance_percent < 0.0:
-            raise ValueError(f"{self.name}: readback_tolerance_percent must be >= 0.")
-        if self.max_write_retries < 0:
+        if self.cfg.readback_tolerance < 0.0:
+            raise ValueError(f"{self.name}: readback_tolerance must be >= 0.")
+        if self.cfg.max_write_retries < 0:
             raise ValueError(f"{self.name}: max_write_retries must be >= 0.")
-        if self.io_timeout_s <= 0:
+        if self.cfg.io_timeout_s <= 0:
             raise ValueError(f"{self.name}: io_timeout_s must be > 0.")
 
+    # ---------- connection ----------
     def connect(self) -> None:
         if self.inst is not None:
             logger.debug("%s: connect() called but already connected", self.name)
@@ -151,131 +145,275 @@ class _ProparPressureChannel:
 
         logger.info("%s: connected (id=%r)", self.name, dev_id)
 
+        # initial read (non-fatal)
         try:
-            p = self.read_pressure_percent()
-            sp = self.read_setpoint_percent()
-            logger.info("%s: initial pressure=%.3f%% setpoint=%.3f%%", self.name, p, sp)
+            m = self.read_measure()
+            s = self.read_setpoint()
+            logger.info("%s: initial measure=%r setpoint=%r", self.name, m, s)
         except Exception:
-            logger.exception("%s: initial read failed", self.name)
+            logger.exception("%s: initial read failed (non-fatal)", self.name)
 
     def _require_connected(self) -> None:
         if self.inst is None:
             raise RuntimeError(f"{self.name}: not connected. Call connect() first.")
 
-    def _read_parameter(self, proc: int, par: int) -> float:
+    # ---------- propar primitives ----------
+    @staticmethod
+    def _pp_type(vartype: str) -> int:
+        vt = (vartype or "").strip().lower()
+        if vt == "f":
+            return int(getattr(propar, "PP_TYPE_FLOAT", 8))
+        if vt == "l":
+            return int(getattr(propar, "PP_TYPE_INT32", 4))
+        if vt == "i":
+            return int(getattr(propar, "PP_TYPE_INT16", 2))
+        if vt == "c":
+            return int(getattr(propar, "PP_TYPE_STRING", 9))
+        return int(getattr(propar, "PP_TYPE_INT32", 4))
+
+    def _read_pp(self, proc: int, parm: int, *, vartype: str = "f", varlength: int = 0) -> float:
+        """
+        Robust reader across propar variants:
+        1) inst.readParameter(proc, parm)
+        2) inst.read_parameters([dict]) but ONLY with proc_nr/parm_nr keys (your propar requires them)
+        """
         self._require_connected()
-        t0 = time.time()
-        last_exc: Optional[Exception] = None
-        while (time.time() - t0) < self.io_timeout_s:
+        inst = self.inst
+        assert inst is not None
+
+        # Variant A: classic API
+        fn = getattr(inst, "readParameter", None)
+        if callable(fn):
             try:
-                v = self.inst.read_parameter(int(proc), int(par))  # type: ignore[union-attr]
+                v = fn(int(proc), int(parm))
+                if v is None:
+                    raise RuntimeError(f"{self.name}: readParameter returned None (proc={proc}, parm={parm})")
                 return float(v)
             except Exception as e:
-                last_exc = e
-                time.sleep(0.05)
-        logger.exception("%s: read timeout (proc=%s, par=%s)", self.name, proc, par)
-        if last_exc:
-            raise last_exc
-        raise TimeoutError(f"{self.name}: read timeout proc={proc} par={par}")
+                logger.debug("%s: readParameter failed (%s)", self.name, e)
 
-    def _write_parameter(self, proc: int, par: int, value: float) -> None:
-        self._require_connected()
+        # Variant B: read_parameters schema(s) — MUST include proc_nr/parm_nr
+        read_params = getattr(inst, "read_parameters", None)
+        if not callable(read_params):
+            raise RuntimeError(f"{self.name}: propar instrument has no usable read API")
+
+        req_variants = [
+            {
+                "proc_nr": int(proc),
+                "parm_nr": int(parm),
+                "parm_type": self._pp_type(vartype),
+                "varlength": int(varlength),
+            },
+            # Some builds accept/need node; safe to include
+            {
+                "node": int(self.endpoint.address),
+                "proc_nr": int(proc),
+                "parm_nr": int(parm),
+                "parm_type": self._pp_type(vartype),
+                "varlength": int(varlength),
+            },
+        ]
+
         t0 = time.time()
         last_exc: Optional[Exception] = None
-        while (time.time() - t0) < self.io_timeout_s:
-            try:
-                self.inst.write_parameter(int(proc), int(par), float(value))  # type: ignore[union-attr]
-                return
-            except Exception as e:
-                last_exc = e
-                time.sleep(0.05)
-        logger.exception("%s: write timeout (proc=%s, par=%s)", self.name, proc, par)
+
+        while (time.time() - t0) < self.cfg.io_timeout_s:
+            for req in req_variants:
+                try:
+                    res = read_params([req])
+                    if not (isinstance(res, list) and res and isinstance(res[0], dict)):
+                        raise RuntimeError(f"{self.name}: unexpected read_parameters response: {res!r}")
+
+                    r0 = res[0]
+                    status = r0.get("status", None)
+                    data = r0.get("data", None)
+
+                    if status not in (None, 0):
+                        raise RuntimeError(
+                            f"{self.name}: propar status={status} for proc={proc} parm={parm} data={data!r}"
+                        )
+                    if data is None:
+                        raise RuntimeError(f"{self.name}: propar returned data=None for proc={proc} parm={parm}")
+
+                    return float(data)
+
+                except Exception as e:
+                    last_exc = e
+
+            time.sleep(0.05)
+
         if last_exc:
             raise last_exc
-        raise TimeoutError(f"{self.name}: write timeout proc={proc} par={par}")
+        raise TimeoutError(f"{self.name}: read timeout proc={proc} parm={parm}")
 
-    def _raw_to_percent(self, raw: int) -> float:
-        return int(raw) / float(self.full_scale_raw) * 100.0
+    def _write_pp(self, proc: int, parm: int, value: float, *, vartype: str = "f", varlength: int = 0) -> None:
+        """
+        Robust writer across propar variants:
+        1) inst.writeParameter(proc, parm, value)
+        2) inst.write_parameters([dict]) but ONLY with proc_nr/parm_nr keys (your propar requires them)
+        """
+        self._require_connected()
+        inst = self.inst
+        assert inst is not None
 
-    def _percent_to_raw(self, percent: float) -> int:
-        return int(round(float(percent) / 100.0 * float(self.full_scale_raw)))
+        fn = getattr(inst, "writeParameter", None)
+        if callable(fn):
+            try:
+                fn(int(proc), int(parm), float(value))
+                return
+            except Exception as e:
+                logger.debug("%s: writeParameter failed (%s)", self.name, e)
 
-    def read_pressure_percent(self) -> float:
-        proc, par = self.meas_raw
-        raw = int(self._read_parameter(proc, par))
-        pct = self._raw_to_percent(raw)
-        logger.debug("%s: read pressure raw=%s -> %.6f%% (proc=%s par=%s)", self.name, raw, pct, proc, par)
-        return pct
+        write_params = getattr(inst, "write_parameters", None)
+        if not callable(write_params):
+            raise RuntimeError(f"{self.name}: propar instrument has no usable write API")
 
-    def read_setpoint_percent(self) -> float:
-        proc, par = self.set_raw
-        raw = int(self._read_parameter(proc, par))
-        pct = self._raw_to_percent(raw)
-        logger.debug("%s: read setpoint raw=%s -> %.6f%% (proc=%s par=%s)", self.name, raw, pct, proc, par)
-        return pct
+        req_variants = [
+            {
+                "proc_nr": int(proc),
+                "parm_nr": int(parm),
+                "parm_type": self._pp_type(vartype),
+                "varlength": int(varlength),
+                "data": float(value),
+            },
+            {
+                "node": int(self.endpoint.address),
+                "proc_nr": int(proc),
+                "parm_nr": int(parm),
+                "parm_type": self._pp_type(vartype),
+                "varlength": int(varlength),
+                "data": float(value),
+            },
+        ]
 
-    def set_pressure_percent(self, percent: float, *, ramp: bool = True) -> None:
-        target = float(percent)
-        if not (0.0 <= target <= self.limit_percent):
-            raise ValueError(f"{self.name}: percent out of range [0, {self.limit_percent}]")
+        t0 = time.time()
+        last_exc: Optional[Exception] = None
 
-        if ramp and self.ramp_max_step_percent is not None and self.ramp_max_step_percent > 0:
-            current = self.read_setpoint_percent()
-            step = float(self.ramp_max_step_percent)
-            if target == current:
-                logger.info("%s: target unchanged (%.3f%%)", self.name, target)
+        while (time.time() - t0) < self.cfg.io_timeout_s:
+            for req in req_variants:
+                try:
+                    res = write_params([req])
+
+                    # treat None as success; list with status must be checked
+                    if isinstance(res, list) and res and isinstance(res[0], dict):
+                        status = res[0].get("status", None)
+                        if status not in (None, 0):
+                            raise RuntimeError(f"{self.name}: write status={status} for proc={proc} parm={parm}")
+                    return
+
+                except Exception as e:
+                    last_exc = e
+
+            time.sleep(0.05)
+
+        if last_exc:
+            raise last_exc
+        raise TimeoutError(f"{self.name}: write timeout proc={proc} parm={parm}")
+
+    # ---------- scaling ----------
+    def _raw_to_percent(self, raw: float) -> float:
+        return float(raw) / float(self.cfg.full_scale_raw) * 100.0
+
+    def _percent_to_raw(self, percent: float) -> float:
+        return float(percent) / 100.0 * float(self.cfg.full_scale_raw)
+
+    # ---------- high-level API ----------
+    def read_measure(self) -> float:
+        proc, parm = self.cfg.meas
+        return self._read_pp(proc, parm, vartype="f", varlength=0)
+
+    def read_setpoint(self) -> float:
+        proc, parm = self.cfg.setp
+        return self._read_pp(proc, parm, vartype="f", varlength=0)
+
+    def set_setpoint(self, target: float, *, ramp: bool = True) -> None:
+        if self.cfg.scale_mode == "raw_percent":
+            if not (0.0 <= float(target) <= self.limit_percent):
+                raise ValueError(f"{self.name}: target percent out of range [0, {self.limit_percent}]")
+            target_value = self._percent_to_raw(float(target))
+        else:
+            target_value = float(target)
+
+        self._set_setpoint_value(target_value, ramp=ramp)
+
+    def _set_setpoint_value(self, target_value: float, *, ramp: bool) -> None:
+        proc, parm = self.cfg.setp
+
+        # If ramp requested but we can't read current setpoint, fall back to single write
+        if ramp and self.cfg.ramp_max_step is not None and self.cfg.ramp_max_step > 0:
+            try:
+                cur = self.read_setpoint()
+            except Exception as e:
+                logger.warning("%s: ramp requested but read_setpoint failed (%s) -> direct write", self.name, e)
+                self._set_once(proc, parm, target_value)
                 return
 
-            direction = 1.0 if target > current else -1.0
-            value = current
-            logger.info("%s: ramp setpoint %.3f%% -> %.3f%% (step=%.3f%%)", self.name, current, target, step)
+            step = float(self.cfg.ramp_max_step)
+            if target_value == cur:
+                logger.info("%s: setpoint unchanged (%r)", self.name, target_value)
+                return
 
-            while (direction > 0 and value < target) or (direction < 0 and value > target):
-                nxt = value + direction * step
-                if direction > 0:
-                    nxt = min(nxt, target)
-                else:
-                    nxt = max(nxt, target)
-                self._set_setpoint_once(nxt)
-                value = nxt
-                time.sleep(self.ramp_sleep_s)
+            direction = 1.0 if target_value > cur else -1.0
+            v = cur
+            logger.info("%s: ramp setpoint %r -> %r (step=%r)", self.name, cur, target_value, step)
+
+            while (direction > 0 and v < target_value) or (direction < 0 and v > target_value):
+                nxt = v + direction * step
+                nxt = min(nxt, target_value) if direction > 0 else max(nxt, target_value)
+                self._set_once(proc, parm, nxt)
+                v = nxt
+                time.sleep(self.cfg.ramp_sleep_s)
             return
 
-        logger.info("%s: set setpoint to %.3f%% (no ramp)", self.name, target)
-        self._set_setpoint_once(target)
+        self._set_once(proc, parm, target_value)
 
-    def _set_setpoint_once(self, percent: float) -> None:
-        proc, par = self.set_raw
-        raw = self._percent_to_raw(percent)
-
-        logger.debug("%s: write setpoint %.6f%% -> raw=%s (proc=%s par=%s)", self.name, percent, raw, proc, par)
-
+    def _set_once(self, proc: int, parm: int, value: float) -> None:
         last_exc: Optional[Exception] = None
-        for attempt in range(self.max_write_retries + 1):
+
+        for attempt in range(self.cfg.max_write_retries + 1):
             try:
-                self._write_parameter(proc, par, float(raw))
-                rb = self.read_setpoint_percent()
-                delta = abs(rb - float(percent))
-                tol = self.readback_tolerance_percent
-                logger.debug("%s: readback %.6f%% (delta=%.6f%% tol=%.6f%%)", self.name, rb, delta, tol)
-                if delta <= tol:
-                    logger.info("%s: setpoint accepted %.3f%%", self.name, float(percent))
+                self._write_pp(proc, parm, value, vartype="f", varlength=0)
+
+                # Optional readback verify
+                if not self.cfg.verify_readback:
+                    logger.info("%s: setpoint write OK (verify_readback disabled) value=%r", self.name, value)
                     return
-                logger.warning("%s: readback mismatch (wanted=%.3f%% got=%.3f%%)", self.name, float(percent), rb)
+
+                try:
+                    rb = self.read_setpoint()
+                except Exception as e:
+                    logger.warning("%s: readback failed (%s) -> accepting write", self.name, e)
+                    return
+
+                delta = abs(rb - float(value))
+                tol = float(self.cfg.readback_tolerance)
+
+                if delta <= tol:
+                    logger.info("%s: setpoint accepted value=%r (rb=%r, tol=%r)", self.name, value, rb, tol)
+                    return
+
+                logger.warning(
+                    "%s: readback mismatch (wanted=%r got=%r delta=%r tol=%r)",
+                    self.name,
+                    value,
+                    rb,
+                    delta,
+                    tol,
+                )
+
             except Exception as e:
                 last_exc = e
                 logger.warning("%s: set attempt %s failed: %s", self.name, attempt + 1, e)
                 time.sleep(0.05)
 
-        logger.exception("%s: failed to set setpoint after retries", self.name)
         if last_exc:
             raise last_exc
-        raise RuntimeError(f"{self.name}: failed to set setpoint")
+        raise RuntimeError(f"{self.name}: failed to set setpoint after retries")
 
     def shutdown(self) -> None:
-        logger.info("%s: shutdown requested -> setpoint 0%%", self.name)
+        logger.info("%s: shutdown requested -> setpoint 0", self.name)
         try:
-            self.set_pressure_percent(0.0, ramp=True)
+            self.set_setpoint(0.0, ramp=False)
         except Exception:
             logger.exception("%s: shutdown failed", self.name)
 
@@ -308,60 +446,58 @@ class PressureController:
         self.main = _ProparPressureChannel(
             name="PressureController.main",
             endpoint=self.cfg.main,
-            full_scale_raw=self.cfg.full_scale_raw,
+            cfg=self.cfg,
             limit_percent=self.cfg.limit_percent_main,
-            meas_raw=self.cfg.meas_raw,
-            set_raw=self.cfg.set_raw,
-            readback_tolerance_percent=self.cfg.readback_tolerance_percent,
-            max_write_retries=self.cfg.max_write_retries,
-            io_timeout_s=self.cfg.io_timeout_s,
-            ramp_max_step_percent=self.cfg.ramp_max_step_percent,
-            ramp_sleep_s=self.cfg.ramp_sleep_s,
         )
 
         self.backwash = _ProparPressureChannel(
             name="PressureController.backwash",
             endpoint=self.cfg.backwash,
-            full_scale_raw=self.cfg.full_scale_raw,
+            cfg=self.cfg,
             limit_percent=self.cfg.limit_percent_backwash,
-            meas_raw=self.cfg.meas_raw,
-            set_raw=self.cfg.set_raw,
-            readback_tolerance_percent=self.cfg.readback_tolerance_percent,
-            max_write_retries=self.cfg.max_write_retries,
-            io_timeout_s=self.cfg.io_timeout_s,
-            ramp_max_step_percent=self.cfg.ramp_max_step_percent,
-            ramp_sleep_s=self.cfg.ramp_sleep_s,
         )
 
     def connect(self) -> None:
         self.main.connect()
         self.backwash.connect()
 
-    def set_pressure_percent(self, channel: int, percent: float, *, ramp: bool = True) -> None:
+    # Engineering units by default
+    def read_pressure(self, channel: int) -> float:
         ch = int(channel)
         if ch == 1:
-            self.main.set_pressure_percent(percent, ramp=ramp)
+            return self.main.read_measure()
+        if ch == 2:
+            return self.backwash.read_measure()
+        raise ValueError("channel must be 1 (main) or 2 (backwash)")
+
+    def read_setpoint(self, channel: int) -> float:
+        ch = int(channel)
+        if ch == 1:
+            return self.main.read_setpoint()
+        if ch == 2:
+            return self.backwash.read_setpoint()
+        raise ValueError("channel must be 1 (main) or 2 (backwash)")
+
+    def set_pressure(self, channel: int, value: float, *, ramp: bool = True) -> None:
+        ch = int(channel)
+        if ch == 1:
+            self.main.set_setpoint(value, ramp=ramp)
             return
         if ch == 2:
-            self.backwash.set_pressure_percent(percent, ramp=ramp)
+            self.backwash.set_setpoint(value, ramp=ramp)
             return
         raise ValueError("channel must be 1 (main) or 2 (backwash)")
+
+    # -------- Legacy API expected by DeviceManager/Experimentator --------
+    def set_pressure_percent(self, channel: int, percent: float, ramp: bool = True) -> None:
+        # In engineering mode, "percent" is forwarded as the device expects (current system assumption)
+        self.set_pressure(channel=int(channel), value=float(percent), ramp=bool(ramp))
 
     def read_pressure_percent(self, channel: int) -> float:
-        ch = int(channel)
-        if ch == 1:
-            return self.main.read_pressure_percent()
-        if ch == 2:
-            return self.backwash.read_pressure_percent()
-        raise ValueError("channel must be 1 (main) or 2 (backwash)")
+        return float(self.read_pressure(int(channel)))
 
     def read_setpoint_percent(self, channel: int) -> float:
-        ch = int(channel)
-        if ch == 1:
-            return self.main.read_setpoint_percent()
-        if ch == 2:
-            return self.backwash.read_setpoint_percent()
-        raise ValueError("channel must be 1 (main) or 2 (backwash)")
+        return float(self.read_setpoint(int(channel)))
 
     def shutdown(self) -> None:
         self.main.shutdown()

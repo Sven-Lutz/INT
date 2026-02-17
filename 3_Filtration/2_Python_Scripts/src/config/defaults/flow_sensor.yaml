@@ -1,7 +1,29 @@
 # src/config/defaults/flow_sensor.yaml
+
 flow:
   port: COM5
   address: 3
   baudrate: 38400
   channel: 1
+
+  # Use engineering units (float) via ProPar
+  scale_mode: engineering
+
+  # ProPar mapping (NOT FlowDDE IDs):
+  # Fmeasure  = proc 33, parm 0
+  # Fsetpoint = proc 33, parm 3
+  meas: [33, 0]
+  setp: [33, 3]
+
+  # Raw mapping (uint, 0..32000 = 0..100%):
+  # Measure  = proc 1, parm 0
+  # Setpoint = proc 1, parm 1
+  meas_raw: [1, 0]
+  set_raw: [1, 1]
+
   full_scale_raw: 32000
+
+  # Readback tolerance in engineering units (e.g. mL/min or ln/min)
+  readback_tolerance: 0.05
+
+  io_timeout_s: 1.5

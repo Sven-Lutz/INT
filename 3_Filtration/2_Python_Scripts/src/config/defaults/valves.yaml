@@ -1,2 +1,8 @@
 # src/config/defaults/valves.yaml
-COM Port: COM6
+
+valves:
+  port: COM6
+  baudrate: 9600
+
+  # Safe state on disconnect (VENTING, BACKWASH, FILTRATION)
+  safe_state: VENTING

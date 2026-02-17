@@ -1,10 +1,14 @@
 # src/config/defaults/general.yaml
-project_path: "U:/PelliKAn/3_Filtration/2_Python_Scripts"
+
+project_path: C:/Users/Operator/PelliKAn/3_Filtration/2_Python_Scripts
 
 logging:
   level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 serial:
   baudrate_default: 38400
+  timeout_s: 1.5
 
+# Default raw full scale for Bronkhorst devices (0..32000 = 0..100%)
 full_scale_raw_default: 32000

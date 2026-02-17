@@ -1,27 +1,45 @@
 # src/config/defaults/pressure_controller.yaml
+
 main:
-  port: COM4
+  port: COM10
   address: 3
   baudrate: 38400
   channel: 1
 
 backwash:
-  port: COM4
+  port: COM10
   address: 4
   baudrate: 38400
   channel: 1
+
+# Use float engineering units (ProPar vartype 'f')
+scale_mode: engineering
+
+# ProPar mapping (NOT FlowDDE IDs):
+# fMeasure  = proc 33, parm 0
+# fSetpoint = proc 33, parm 3
+meas: [33, 0]
+setp: [33, 3]
+
+# Raw mapping (uint, 0..32000 = 0..100%)
+# Measure  = proc 1, parm 0
+# Setpoint = proc 1, parm 1
+meas_raw: [1, 0]
+set_raw: [1, 1]
 
 full_scale_raw: 32000
 
 limit_percent_main: 80.0
 limit_percent_backwash: 60.0
 
-meas_raw: [1, 0]
-set_raw: [1, 1]
-
+# Tolerance in engineering units (bar)
+readback_tolerance: 0.05
 readback_tolerance_percent: 1.0
+
 max_write_retries: 2
 io_timeout_s: 1.5
 
+# Ramp step in engineering units (bar)
+ramp_max_step: 0.2
 ramp_max_step_percent: 5.0
 ramp_sleep_s: 0.15

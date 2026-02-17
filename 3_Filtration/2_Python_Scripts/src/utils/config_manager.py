@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-import os
 import copy
 import logging
+import os
 from typing import Any, Dict, Optional
 
 import yaml
 
 logger = logging.getLogger(__name__)
 
+
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = dict(base)
     for k, v in override.items():
         if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = _deep_merge(out[k], v)
+            out[k] = _deep_merge(out[k], v)  # type: ignore[arg-type]
         else:
             out[k] = v
     return out
@@ -36,25 +37,50 @@ def _get_by_dotpath(d: Dict[str, Any], path: str) -> Any:
         cur = cur[p]
     return cur
 
+
 class ConfigManager:
+    """
+    Loads YAML configs from:
+      - defaults: src/config/defaults/<name>.yaml
+      - runtime : src/config/runtime/<name>.yaml  (bootstrapped from defaults if missing)
+
+    Merging rule:
+      merged = deep_merge(general.yaml, specific.yaml)
+
+    Overrides:
+      - if env var PELLIKAN_CONFIG_DIR is set, it overrides runtime dir
+      - if ConfigManager(config_dir=...) is passed, it overrides runtime dir
+    """
+
     _instance: Optional["ConfigManager"] = None
 
     def __new__(cls, config_dir: Optional[str] = None):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._init(config_dir)
+            return cls._instance
+
+        # IMPORTANT: if caller passes a config_dir later, honor it
+        if config_dir is not None:
+            new_dir = os.path.abspath(str(config_dir))
+            if os.path.abspath(cls._instance.runtime_dir) != new_dir:
+                logger.info("ConfigManager: reinitializing with new config_dir=%s", new_dir)
+                cls._instance._init(config_dir)
+
         return cls._instance
 
     def _init(self, config_dir: Optional[str]) -> None:
         base = os.path.dirname(os.path.dirname(__file__))  # .../src
 
-        self.runtime_dir = os.path.abspath(
-            config_dir or os.path.join(base, "config", "runtime")
-        )
-        self.defaults_dir = os.path.abspath(
-            os.path.join(base, "config", "defaults")
-        )
+        # defaults are always inside repo
+        self.defaults_dir = os.path.abspath(os.path.join(base, "config", "defaults"))
 
+        # runtime can be overridden
+        env_dir = os.environ.get("PELLIKAN_CONFIG_DIR")
+        runtime = env_dir or config_dir or os.path.join(base, "config", "runtime")
+        self.runtime_dir = os.path.abspath(runtime)
+
+        # kept for compatibility (some code might read config_dir)
         self.config_dir = self.runtime_dir
 
         os.makedirs(self.runtime_dir, exist_ok=True)
@@ -63,8 +89,8 @@ class ConfigManager:
         self._general: Dict[str, Any] = {}
 
         logger.info("ConfigManager initialized")
-        logger.debug("runtime_dir=%s", self.runtime_dir)
-        logger.debug("defaults_dir=%s", self.defaults_dir)
+        logger.info("runtime_dir=%s", self.runtime_dir)
+        logger.info("defaults_dir=%s", self.defaults_dir)
 
         self._load_general()
 
@@ -75,10 +101,6 @@ class ConfigManager:
         return os.path.join(self.defaults_dir, f"{name}.yaml")
 
     def _ensure_runtime_from_defaults(self, name: str) -> None:
-        """
-        If runtime/<name>.yaml does not exist but defaults/<name>.yaml exists,
-        copy defaults → runtime.
-        """
         runtime_path = self._runtime_path(name)
         if os.path.exists(runtime_path):
             return
@@ -87,10 +109,7 @@ class ConfigManager:
         if not os.path.exists(defaults_path):
             return
 
-        logger.info(
-            "Bootstrapping runtime config '%s' from defaults",
-            name,
-        )
+        logger.info("Bootstrapping runtime config '%s' from defaults", name)
         data = self._read_yaml(defaults_path)
         self._write_yaml(runtime_path, data)
 
@@ -108,16 +127,13 @@ class ConfigManager:
 
     def _write_yaml(self, path: str, data: Dict[str, Any]) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-
         if not isinstance(data, dict):
             raise ValueError("Config data must be a dict.")
-
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, sort_keys=False)
 
     def _load_general(self) -> None:
         self._ensure_runtime_from_defaults("general")
-
         path = self._runtime_path("general")
 
         if not os.path.exists(path):
@@ -136,23 +152,18 @@ class ConfigManager:
             return copy.deepcopy(self._cache[name])
 
         self._ensure_runtime_from_defaults(name)
-
-        path = self._runtime_path(name)
-        specific = self._read_yaml(path)
-
+        specific = self._read_yaml(self._runtime_path(name))
         merged = _deep_merge(copy.deepcopy(self._general), specific)
 
         self._cache[name] = merged
         return copy.deepcopy(merged)
 
     def save_config(self, name: str, data: Dict[str, Any]) -> None:
-        path = self._runtime_path(name)
-        self._write_yaml(path, data)
+        self._write_yaml(self._runtime_path(name), data)
         self._cache.pop(name, None)
 
     def update_config(self, name: str, key: str, value: Any) -> None:
         self._ensure_runtime_from_defaults(name)
-
         path = self._runtime_path(name)
         data = self._read_yaml(path)
 

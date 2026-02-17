@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QImage, QPixmap
@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+# ---------- Small UI model ----------
+
 
 @dataclass(frozen=True)
 class _StepItem:
@@ -21,7 +23,34 @@ class _StepItem:
     label: str
 
 
+# ---------- Right panel ----------
+
+
 class RightFrame(QFrame):
+    """
+    Right-side status + timeline + monitor + metrics panel.
+
+    Design goals:
+    - minimal branching in UI updates
+    - no repeated CSS string building at runtime
+    - robust to unknown steps
+    - QR rendering isolated + cached per URL
+    """
+
+    # Prebuilt styles (avoid re-allocating strings repeatedly)
+    _CSS_PENDING = (
+        "QLabel { background: #f2f2f2; border: 1px solid #d9d9d9; "
+        "border-radius: 8px; padding: 4px 8px; color: #333; }"
+    )
+    _CSS_ACTIVE = (
+        "QLabel { background: #e8f0ff; border: 1px solid #7aa7ff; "
+        "border-radius: 8px; padding: 4px 8px; color: #153e8a; font-weight: 600; }"
+    )
+    _CSS_DONE = (
+        "QLabel { background: #e9f7ef; border: 1px solid #6fcf97; "
+        "border-radius: 8px; padding: 4px 8px; color: #1b6b3a; }"
+    )
+
     def __init__(self, config: dict):
         super().__init__()
         self.config = config
@@ -34,7 +63,11 @@ class RightFrame(QFrame):
             _StepItem("BACKWASH_FINAL", "Backwash 2"),
             _StepItem("FINISHED", "Finished"),
         ]
+        self._step_keys: Tuple[str, ...] = tuple(s.key for s in self._steps)
+        self._step_index: Dict[str, int] = {k: i for i, k in enumerate(self._step_keys)}
+
         self._current_step: str = "IDLE"
+        self._qr_last_url: Optional[str] = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -48,6 +81,8 @@ class RightFrame(QFrame):
         root.addStretch(1)
 
         self.set_step("IDLE")
+
+    # ---------------- Builders ----------------
 
     def _gb(self, title: str) -> QGroupBox:
         gb = QGroupBox(title)
@@ -66,7 +101,7 @@ class RightFrame(QFrame):
             w = QLabel(st.label)
             w.setAlignment(Qt.AlignCenter)
             w.setMinimumHeight(28)
-            w.setStyleSheet(self._css_pending())
+            w.setStyleSheet(self._CSS_PENDING)
             w.setToolTip(st.key)
             self._step_widgets[st.key] = w
             lay.addWidget(w, 1)
@@ -102,7 +137,7 @@ class RightFrame(QFrame):
         )
 
         self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
+        self.progress.setRange(0, 0)  # indeterminate
         self.progress.setVisible(False)
 
         lay.addWidget(self.lbl_step)
@@ -168,51 +203,41 @@ class RightFrame(QFrame):
 
         root.addWidget(gb)
 
-    def _css_pending(self) -> str:
-        return (
-            "QLabel { background: #f2f2f2; border: 1px solid #d9d9d9; "
-            "border-radius: 8px; padding: 4px 8px; color: #333; }"
-        )
-
-    def _css_active(self) -> str:
-        return (
-            "QLabel { background: #e8f0ff; border: 1px solid #7aa7ff; "
-            "border-radius: 8px; padding: 4px 8px; color: #153e8a; font-weight: 600; }"
-        )
-
-    def _css_done(self) -> str:
-        return (
-            "QLabel { background: #e9f7ef; border: 1px solid #6fcf97; "
-            "border-radius: 8px; padding: 4px 8px; color: #1b6b3a; }"
-        )
+    # ---------------- Public API ----------------
 
     def set_step(self, step: str) -> None:
+        # Accept arbitrary step strings; only highlight known ones.
         self._current_step = step
         self.lbl_step.setText(step)
 
-        order = [s.key for s in self._steps]
-        idx = order.index(step) if step in order else -1
+        idx = self._step_index.get(step, -1)
 
-        for j, key in enumerate(order):
+        if idx < 0:
+            # Unknown step: keep everything pending (neutral state)
+            for key in self._step_keys:
+                w = self._step_widgets.get(key)
+                if w is not None:
+                    w.setStyleSheet(self._CSS_PENDING)
+            return
+
+        for j, key in enumerate(self._step_keys):
             w = self._step_widgets.get(key)
             if w is None:
                 continue
-            if idx == -1:
-                w.setStyleSheet(self._css_pending())
-            elif j < idx:
-                w.setStyleSheet(self._css_done())
+            if j < idx:
+                w.setStyleSheet(self._CSS_DONE)
             elif j == idx:
-                w.setStyleSheet(self._css_active())
+                w.setStyleSheet(self._CSS_ACTIVE)
             else:
-                w.setStyleSheet(self._css_pending())
+                w.setStyleSheet(self._CSS_PENDING)
 
     def set_status(self, status: str) -> None:
         self.lbl_status.setText(status)
-        if "Manual OK required" in status or "Waiting for OK" in status:
-            self.ok_banner.setVisible(True)
+
+        needs_ok = ("manual ok required" in status.lower()) or ("waiting for ok" in status.lower())
+        self.ok_banner.setVisible(needs_ok)
+        if needs_ok:
             self.ok_banner.setText(status)
-        else:
-            self.ok_banner.setVisible(False)
 
     def set_loss(self, loss_ml: float) -> None:
         self.lbl_loss.setText(f"Loss (Filtration+Venting): {float(loss_ml):.3f} mL")
@@ -227,10 +252,7 @@ class RightFrame(QFrame):
         p2_meas: Optional[float] = None,
         valve_state: Optional[str] = None,
     ) -> None:
-        if flow is None:
-            self.lbl_flow.setText("Flow: —")
-        else:
-            self.lbl_flow.setText(f"Flow: {float(flow):.3f}")
+        self.lbl_flow.setText("Flow: —" if flow is None else f"Flow: {float(flow):.3f}")
 
         def fmt_pair(sp: Optional[float], ms: Optional[float]) -> str:
             if sp is None and ms is None:
@@ -248,24 +270,45 @@ class RightFrame(QFrame):
         self.progress.setVisible(bool(busy))
 
     def set_qr_url(self, url: str) -> None:
+        url = str(url).strip()
         self.qr_url.setText(url)
         self.qr_label.setToolTip(url)
         self.qr_url.setToolTip(url)
 
+        # Avoid regenerating QR repeatedly for the same URL
+        if url and url == self._qr_last_url and self.qr_label.pixmap() is not None:
+            return
+        self._qr_last_url = url
+
+        if not url:
+            self.qr_label.setPixmap(QPixmap())
+            self.qr_label.setText("QR not set")
+            self.qr_hint.setText("Scan QR to open the live monitor.")
+            return
+
+        pm = self._make_qr_pixmap(url, self.qr_label.width(), self.qr_label.height())
+        if pm is None:
+            self.qr_label.setPixmap(QPixmap())
+            self.qr_label.setText("Install: pip install qrcode pillow")
+            self.qr_hint.setText("QR generation unavailable (missing dependencies).")
+            return
+
+        self.qr_label.setPixmap(pm)
+        self.qr_hint.setText("Scan QR to open the live monitor.")
+
+    # ---------------- QR helpers ----------------
+
+    def _make_qr_pixmap(self, url: str, w: int, h: int) -> Optional[QPixmap]:
+        """
+        Returns a scaled QPixmap for the given URL or None if deps missing / QR generation fails.
+        """
         try:
             import qrcode
-            from PIL.ImageQt import ImageQt
+            from PIL.ImageQt import ImageQt  # type: ignore
 
             img = qrcode.make(url)
             qimg = QImage(ImageQt(img))
-            pm = QPixmap.fromImage(qimg).scaled(
-                self.qr_label.width(),
-                self.qr_label.height(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-            self.qr_label.setPixmap(pm)
-            self.qr_hint.setText("Scan QR to open the live monitor.")
+            pm = QPixmap.fromImage(qimg).scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            return pm
         except Exception:
-            self.qr_label.setText("Install: pip install qrcode pillow")
-            self.qr_hint.setText("QR generation unavailable (missing dependencies).")
+            return None

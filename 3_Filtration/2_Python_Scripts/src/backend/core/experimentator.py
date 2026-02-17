@@ -1,13 +1,12 @@
-from __future__ import annotations
-
+#experimentator.py
 import csv
 import logging
-import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Optional
 
+from src.utils.path_utils import ensure_dir, project_root, resolve_under
 from src.backend.core.device_manager import DeviceManager
 
 logger = logging.getLogger(__name__)
@@ -43,9 +42,11 @@ class Experimentator:
         self._loop_idx = 0
         self._step_start_volume = self.volume_ml
 
-        os.makedirs(cfg.log_dir, exist_ok=True)
+        root = project_root()
+        log_dir_abs = ensure_dir(resolve_under(root, cfg.log_dir))
+
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_path = os.path.join(cfg.log_dir, f"{cfg.log_name_prefix}_{stamp}.csv")
+        self.log_path = str(resolve_under(log_dir_abs, f"{cfg.log_name_prefix}_{stamp}.csv"))
 
         self._csv_file = open(self.log_path, "w", newline="", encoding="utf-8")
         self._csv = csv.DictWriter(
@@ -89,7 +90,9 @@ class Experimentator:
         t = time.monotonic()
         if self._t_prev is None:
             self._t_prev = t
-            return 0.0, float(self.dev.read_flow())
+            v0 = float(self.dev.read_flow())
+            self._last_flow_raw = v0
+            return 0.0, v0
         dt = t - self._t_prev
         self._t_prev = t
         flow_raw = float(self.dev.read_flow())
@@ -214,9 +217,7 @@ class Experimentator:
                 return
             time.sleep(0.1)
 
-    def ramp_pressure_linear_mbar(
-        self, *, channel: int, target_mbar: float, duration_s: float
-    ) -> None:
+    def ramp_pressure_linear_mbar(self, *, channel: int, target_mbar: float, duration_s: float) -> None:
         mode = "RAMP"
         ch = int(channel)
         target_pct = self._mbar_to_percent(target_mbar)
@@ -236,14 +237,7 @@ class Experimentator:
 
         if duration_s <= 0:
             self.dev.set_pressure(target_pct, ch, ramp=False)
-            self._log_row(
-                mode,
-                0.0,
-                float("nan"),
-                float("nan"),
-                pressure_channel=ch,
-                event="RAMP_INSTANT",
-            )
+            self._log_row(mode, 0.0, float("nan"), float("nan"), pressure_channel=ch, event="RAMP_INSTANT")
             return
 
         dt = max(0.05, float(self.cfg.ramp_update_dt_s))
@@ -252,13 +246,7 @@ class Experimentator:
         for i in range(1, steps + 1):
             alpha = i / steps
             pct = start_pct + (target_pct - start_pct) * alpha
-            logger.info(
-                "RAMP STEP %d/%d channel=%d set_pct=%.3f",
-                i,
-                steps,
-                ch,
-                pct,
-            )
+            logger.info("RAMP STEP %d/%d channel=%d set_pct=%.3f", i, steps, ch, pct)
             self.dev.set_pressure(pct, ch, ramp=False)
             dt_s, flow_raw = self._sample_flow()
             net_ml_s = self._update_volume(dt_s, flow_raw, net_sign=+1.0)
@@ -273,14 +261,7 @@ class Experimentator:
             self._safety_check(mode)
             time.sleep(dt)
 
-        self._log_row(
-            mode,
-            0.0,
-            float("nan"),
-            float("nan"),
-            pressure_channel=ch,
-            event="RAMP_END",
-        )
+        self._log_row(mode, 0.0, float("nan"), float("nan"), pressure_channel=ch, event="RAMP_END")
         logger.info("RAMP END channel=%d", ch)
 
     def _run_timed_step(
@@ -300,14 +281,7 @@ class Experimentator:
         logger.info("Switching valves for %s", mode)
         set_valves()
 
-        self._log_row(
-            mode,
-            0.0,
-            float("nan"),
-            float("nan"),
-            pressure_channel=pressure_channel,
-            event=event_start,
-        )
+        self._log_row(mode, 0.0, float("nan"), float("nan"), pressure_channel=pressure_channel, event=event_start)
 
         t_end = time.monotonic() + float(duration_s)
 
@@ -351,11 +325,7 @@ class Experimentator:
 
         if pressure_mbar is not None and self.dev.pressure_controller is not None:
             pct = self._mbar_to_percent(pressure_mbar)
-            logger.info(
-                "Setting BACKWASH pressure channel=2 mbar=%.3f pct=%.3f",
-                pressure_mbar,
-                pct,
-            )
+            logger.info("Setting BACKWASH pressure channel=2 mbar=%.3f pct=%.3f", pressure_mbar, pct)
             self.dev.set_pressure(pct, channel=2, ramp=True)
 
         self._run_timed_step(
@@ -383,9 +353,7 @@ class Experimentator:
         )
 
         if ramp_duration_s <= 0:
-            ramp_duration_s = max(
-                5.0, min(30.0, abs(target_pressure_mbar) / 50.0 * 5.0)
-            )
+            ramp_duration_s = max(5.0, min(30.0, abs(target_pressure_mbar) / 50.0 * 5.0))
 
         target_pct = self._mbar_to_percent(target_pressure_mbar)
 
@@ -393,18 +361,10 @@ class Experimentator:
         self.dev.valves_filling_solution()
 
         if self.dev.pressure_controller is not None:
-            self.ramp_pressure_linear_mbar(
-                channel=1,
-                target_mbar=target_pressure_mbar,
-                duration_s=ramp_duration_s,
-            )
+            self.ramp_pressure_linear_mbar(channel=1, target_mbar=target_pressure_mbar, duration_s=ramp_duration_s)
 
         if hold_duration_s > 0 and self.dev.pressure_controller is not None:
-            logger.info(
-                "Holding pressure channel=1 pct=%.3f for %.3f s",
-                target_pct,
-                hold_duration_s,
-            )
+            logger.info("Holding pressure channel=1 pct=%.3f for %.3f s", target_pct, hold_duration_s)
             self.dev.set_pressure(target_pct, channel=1, ramp=False)
 
         self._run_timed_step(
@@ -436,16 +396,9 @@ class Experimentator:
 
         self.dev.valves_filtration()
 
-        if (
-            filtration_pressure_mbar is not None
-            and self.dev.pressure_controller is not None
-        ):
+        if filtration_pressure_mbar is not None and self.dev.pressure_controller is not None:
             pct = self._mbar_to_percent(filtration_pressure_mbar)
-            logger.info(
-                "Setting FILTRATION pressure channel=1 mbar=%.3f pct=%.3f",
-                filtration_pressure_mbar,
-                pct,
-            )
+            logger.info("Setting FILTRATION pressure channel=1 mbar=%.3f pct=%.3f", filtration_pressure_mbar, pct)
             self.dev.set_pressure(pct, channel=1, ramp=True)
 
         self._run_timed_step(
@@ -463,12 +416,13 @@ class Experimentator:
             self.dev.set_pressure(0.0, channel=1, ramp=True)
             self.dev.set_pressure(0.0, channel=2, ramp=True)
 
+        # --- PATCH: deterministic venting valve call ---
         self._run_timed_step(
             mode="VENTING",
             duration_s=venting_duration_s,
             pressure_channel=None,
             net_sign=-1.0,
-            set_valves=self.dev.venting,
+            set_valves=self.dev.valves_venting,
             event_start="START_VENTING",
             event_end="END_VENTING",
         )
@@ -477,20 +431,9 @@ class Experimentator:
         loss_ml = max(0.0, v0 - v1)
         self.last_filtration_venting_loss_ml = loss_ml
 
-        logger.info(
-            "FILTRATION+VENTING loss=%.6f mL (from %.6f to %.6f)",
-            loss_ml,
-            v0,
-            v1,
-        )
+        logger.info("FILTRATION+VENTING loss=%.6f mL (from %.6f to %.6f)", loss_ml, v0, v1)
 
-        self._log_row(
-            "LOSS",
-            0.0,
-            float("nan"),
-            float("nan"),
-            event=f"FILTRATION_VENTING_LOSS={loss_ml:.6f}",
-        )
+        self._log_row("LOSS", 0.0, float("nan"), float("nan"), event=f"FILTRATION_VENTING_LOSS={loss_ml:.6f}")
 
         return loss_ml
 
@@ -502,33 +445,17 @@ class Experimentator:
         max_duration_s: float = 300.0,
         backwash_pressure_mbar: Optional[float] = None,
     ) -> float:
-        base = (
-            float(base_remove_ml)
-            if base_remove_ml is not None
-            else self.cfg.base_backwash_remove_ml
-        )
+        base = float(base_remove_ml) if base_remove_ml is not None else self.cfg.base_backwash_remove_ml
         add = self.last_filtration_venting_loss_ml if add_previous_loss else 0.0
         target_remove_ml = max(0.0, base + add)
 
-        logger.info(
-            "Executing BACKWASH2 target_remove_ml=%.6f base=%.6f add=%.6f",
-            target_remove_ml,
-            base,
-            add,
-        )
+        logger.info("Executing BACKWASH2 target_remove_ml=%.6f base=%.6f add=%.6f", target_remove_ml, base, add)
 
         self.dev.valves_backwash()
 
-        if (
-            backwash_pressure_mbar is not None
-            and self.dev.pressure_controller is not None
-        ):
+        if backwash_pressure_mbar is not None and self.dev.pressure_controller is not None:
             pct = self._mbar_to_percent(backwash_pressure_mbar)
-            logger.info(
-                "Setting BACKWASH2 pressure channel=2 mbar=%.3f pct=%.3f",
-                backwash_pressure_mbar,
-                pct,
-            )
+            logger.info("Setting BACKWASH2 pressure channel=2 mbar=%.3f pct=%.3f", backwash_pressure_mbar, pct)
             self.dev.set_pressure(pct, channel=2, ramp=True)
 
         v_start = self.volume_ml
@@ -548,19 +475,14 @@ class Experimentator:
                 flow_raw,
                 self._flow_to_ml_per_s(flow_raw),
                 net_flow_ml_s=net_ml_s,
-                pressure_channel=2
-                if self.dev.pressure_controller is not None
-                else None,
+                pressure_channel=2 if self.dev.pressure_controller is not None else None,
                 event="",
             )
 
             self._safety_check("BACKWASH2")
 
             if removed >= target_remove_ml:
-                logger.info(
-                    "BACKWASH2 target reached removed=%.6f mL",
-                    removed,
-                )
+                logger.info("BACKWASH2 target reached removed=%.6f mL", removed)
                 break
 
             time.sleep(self.cfg.sample_period_s)
@@ -570,13 +492,9 @@ class Experimentator:
         self._log_row(
             "BACKWASH2",
             0.0,
-            self._last_flow_raw
-            if self._last_flow_raw is not None
-            else float("nan"),
+            self._last_flow_raw if self._last_flow_raw is not None else float("nan"),
             0.0,
-            pressure_channel=2
-            if self.dev.pressure_controller is not None
-            else None,
+            pressure_channel=2 if self.dev.pressure_controller is not None else None,
             event=f"END_BACKWASH2 removed_ml={removed:.6f}",
         )
 

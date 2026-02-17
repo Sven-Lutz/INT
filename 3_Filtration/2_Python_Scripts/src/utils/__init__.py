@@ -1,4 +1,16 @@
-#from .path_utils import ensure_path_exists
-#from .timer import some_timer_function  # replace with actual functions
+# src/utils/__init__.py
+from .path_utils import (
+    ensure_dir,
+    ensure_parent_dir,
+    project_root,
+    repo_root_from_file,
+    resolve_under,
+)
 
-#__all__ = ["ensure_path_exists", "some_timer_function"]
+__all__ = [
+    "ensure_dir",
+    "ensure_parent_dir",
+    "project_root",
+    "repo_root_from_file",
+    "resolve_under",
+]

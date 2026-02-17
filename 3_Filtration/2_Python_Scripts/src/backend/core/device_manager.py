@@ -1,3 +1,4 @@
+# src/backend/core/device_manager.py
 from __future__ import annotations
 
 import logging
@@ -17,12 +18,17 @@ class DeviceManagerOptions:
     enable_pressure: bool = False
     enable_flow: bool = True
     safe_valves_on_disconnect: bool = True
+    # Optional: fail fast if valves can't connect (recommended)
+    require_valves: bool = True
 
 
 class DeviceManager:
     def __init__(self, opts: DeviceManagerOptions = DeviceManagerOptions()):
         self.opts = opts
         self.cfg_mgr = ConfigManager()
+
+        # Track if relay/valves are actually connected
+        self._valves_connected: bool = False
 
         logger.info(
             "DeviceManager: initializing (pressure=%s, flow=%s)",
@@ -44,9 +50,21 @@ class DeviceManager:
         else:
             self._load_optional_cfg("flow_sensor")
 
+        # ---------------- Valves ----------------
         self.valve_controller = ValveController(valve_cfg)
         logger.info("DeviceManager: ValveController initialized")
 
+        try:
+            self.valve_controller.connect()
+            self._valves_connected = True
+            logger.info("DeviceManager: ValveController connected")
+        except Exception:
+            self._valves_connected = False
+            logger.exception("DeviceManager: ValveController connect failed")
+            if self.opts.require_valves:
+                raise
+
+        # ---------------- Pressure ----------------
         self.pressure_controller: Optional[PressureController] = None
         if opts.enable_pressure:
             assert pressure_cfg is not None
@@ -56,6 +74,7 @@ class DeviceManager:
         else:
             logger.info("DeviceManager: PressureController disabled")
 
+        # ---------------- Flow ----------------
         self.flow_sensor: Optional[FlowSensor] = None
         if opts.enable_flow:
             assert flow_cfg is not None
@@ -74,6 +93,8 @@ class DeviceManager:
             logger.info("DeviceManager: FlowSensor disabled")
 
         logger.info("DeviceManager: initialization complete")
+
+    # ---------------- config helpers ----------------
 
     def _load_required_cfg(self, name: str) -> Dict[str, Any]:
         logger.debug("DeviceManager: loading required config '%s'", name)
@@ -106,6 +127,14 @@ class DeviceManager:
             full_scale_raw=int(src.get("full_scale_raw", 32000)),
         )
 
+    # ---------------- guards ----------------
+
+    def _require_valves(self) -> None:
+        if not self._valves_connected:
+            raise RuntimeError("ValveController not connected/available (check COM port + require_valves).")
+
+    # ---------------- pressure/flow API ----------------
+
     def set_pressure(self, percent: float, channel: int, ramp: bool = True) -> None:
         if self.pressure_controller is None:
             raise RuntimeError("PressureController is not enabled/initialized.")
@@ -126,45 +155,47 @@ class DeviceManager:
             raise RuntimeError("FlowSensor is not enabled/initialized.")
         return float(self.flow_sensor.read_flow_eng())
 
+    # ---------------- valve actions ----------------
+
     def valves_filtration(self) -> None:
+        self._require_valves()
         self.valve_controller.filtration()
 
     def valves_filling_solution(self) -> None:
+        self._require_valves()
         self.valve_controller.filling_solution()
 
-    def venting(self) -> None:
+    def valves_venting(self) -> None:
+        """Canonical valve method name (matches other valves_* methods)."""
+        self._require_valves()
         self.valve_controller.venting()
 
+    def venting(self) -> None:
+        """Backward-compatible alias. Prefer valves_venting()."""
+        self.valves_venting()
+
     def all_valves_shut(self) -> None:
+        self._require_valves()
         self.valve_controller.all_shut()
 
     def all_valves_open(self) -> None:
+        self._require_valves()
         self.valve_controller.all_open()
 
     def valves_backwash(self) -> None:
-        fn = getattr(self.valve_controller, "backwash", None)
-        if callable(fn):
-            fn()
-            return
-        self.valve_controller.all_shut()
-        raise NotImplementedError("ValveController.backwash() not implemented")
+        self._require_valves()
+        self.valve_controller.backwash()
 
     def get_valve_state(self) -> str:
-        fn = getattr(self.valve_controller, "get_state", None)
-        if callable(fn):
-            return str(fn())
-        return "UNKNOWN"
+        return str(self.valve_controller.get_state())
+
+
+    # ---------------- shutdown ----------------
 
     def disconnect(self) -> None:
         logger.info("DeviceManager: disconnect requested")
 
-        if self.opts.safe_valves_on_disconnect:
-            try:
-                self.valve_controller.all_shut()
-                logger.info("DeviceManager: valves set to ALL_SHUT")
-            except Exception:
-                logger.exception("DeviceManager: failed to set valves to ALL_SHUT on disconnect")
-
+        # Close flow first (no dependence on valves)
         if self.flow_sensor is not None:
             try:
                 self.flow_sensor.close()
@@ -174,6 +205,7 @@ class DeviceManager:
             finally:
                 self.flow_sensor = None
 
+        # Then pressure (may try to ramp/shutdown internally)
         if self.pressure_controller is not None:
             try:
                 self.pressure_controller.close()
@@ -182,6 +214,24 @@ class DeviceManager:
                 logger.exception("DeviceManager: error while closing PressureController")
             finally:
                 self.pressure_controller = None
+
+        # Finally valves: do ONE deterministic safe-state transition + close relay
+        if self._valves_connected:
+            try:
+                if self.opts.safe_valves_on_disconnect:
+                    self.valve_controller.close()  # sets configured safe state + closes relay
+                else:
+                    # If you explicitly do NOT want safe-state, just close relay (best effort)
+                    try:
+                        self.valve_controller.relais.close()
+                    except Exception:
+                        logger.exception("DeviceManager: relay close failed")
+            except Exception:
+                logger.exception("DeviceManager: error while closing ValveController")
+            finally:
+                self._valves_connected = False
+        else:
+            logger.warning("DeviceManager: valves were not connected; skipping ValveController shutdown")
 
         logger.info("DeviceManager: disconnect complete")
 

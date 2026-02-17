@@ -1,34 +1,48 @@
+# src/gui/main_window.py
 from __future__ import annotations
 
-import os
+import logging
 from typing import Optional
 
 import PySide6.QtWidgets as Qtw
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtWidgets import QMessageBox
 
-from src.utils.config_manager import ConfigManager
-from src.gui.data import ExperimentWorker, RunParams
 from src.backend.core.experimentator import ExperimentConfig
+from src.gui.data import ExperimentWorker, RunParams
 from src.gui.data.parser import FillingInputs, compute_filling
 from src.gui.monitor.server import MonitorServer
+from src.utils.config_manager import ConfigManager
+from src.utils.path_utils import ensure_dir, project_root, resolve_under
 
-from .frames.top_frame import TopFrame
 from .frames.left_frame import LeftFrame
 from .frames.right_frame import RightFrame
+from .frames.top_frame import TopFrame
+
+logger = logging.getLogger(__name__)
 
 
 class MainWindow(Qtw.QMainWindow):
+    """
+    Main GUI window.
+    - Uses src.utils.path_utils to resolve project root and logs directory.
+    - LeftFrame computes filling outputs locally; MainWindow keeps in sync debounced.
+    - Robust error handling: filling compute never crashes UI.
+    - Deterministic thread lifecycle cleanup.
+    """
+
+    FILLING_DEBOUNCE_MS = 200
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Little Chonker")
         self.resize(980, 700)
 
-        # Config
+        # -------- config --------
         self.cfg_manager = ConfigManager()
         self.config = self.cfg_manager.load_config("general")
 
-        # UI root
+        # -------- UI root --------
         central = Qtw.QWidget()
         self.setCentralWidget(central)
 
@@ -49,34 +63,38 @@ class MainWindow(Qtw.QMainWindow):
         left_scroll.setWidget(self.left)
 
         splitter = Qtw.QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
         splitter.addWidget(left_scroll)
         splitter.addWidget(self.right)
-        splitter.setChildrenCollapsible(False)
         splitter.setSizes([560, 380])
         layout.addWidget(splitter, 1)
 
-        # Worker thread
+        # -------- worker thread --------
         self._thread: Optional[QThread] = None
         self._worker: Optional[ExperimentWorker] = None
 
-        # Live monitor
+        # -------- filling debounce --------
+        self._fill_timer = QTimer(self)
+        self._fill_timer.setSingleShot(True)
+        self._fill_timer.timeout.connect(self._on_fill_timer_timeout)
+
+        # -------- monitor --------
         self.monitor: Optional[MonitorServer] = None
         self._start_monitor()
 
-        # Signals
+        # -------- signals --------
         self.left.start_clicked.connect(self._start_experiment)
         self.left.ok_clicked.connect(self._send_ok)
-        self.left.compute_clicked.connect(self._compute_filling_ui)
+
+        # LeftFrame already computes locally; we use this only to keep MainWindow-side compute in sync (debounced)
+        self.left.compute_clicked.connect(self._schedule_filling_compute)
 
         self._apply_style()
 
-        # Compute initial filling helper values (non-fatal if something is missing early)
-        try:
-            self._compute_filling_ui()
-        except Exception:
-            pass
+        # Initial compute (silent; safe even if LeftFrame already did it)
+        self._compute_filling_ui(silent=True)
 
-    # ---------- UI setup helpers ----------
+    # ---------------- UI styling ----------------
 
     def _apply_style(self) -> None:
         self.setStyleSheet(
@@ -87,8 +105,9 @@ class MainWindow(Qtw.QMainWindow):
             "QFrame { background: transparent; }"
         )
 
+    # ---------------- Monitor ----------------
+
     def _start_monitor(self) -> None:
-        """Start live monitor and set QR code. Non-fatal if it fails."""
         enabled = bool(self.config.get("monitor_enabled", True))
         if not enabled:
             return
@@ -99,30 +118,73 @@ class MainWindow(Qtw.QMainWindow):
         try:
             self.monitor = MonitorServer(host=host, port=port)
             self.monitor.start()
-            self.right.set_qr_url(self.monitor.url())
+            try:
+                self.right.set_qr_url(self.monitor.url())
+            except Exception:
+                logger.exception("Monitor started, but RightFrame.set_qr_url failed.")
         except Exception:
-            # Keep UI usable even if monitor fails (e.g. port taken / missing deps)
+            logger.exception("Monitor start failed (host=%s, port=%s). Disabling monitor.", host, port)
             self.monitor = None
 
-    # ---------- Filling helper ----------
+    # ---------------- Filling helper ----------------
 
-    def _compute_filling_ui(self) -> None:
+    def _on_fill_timer_timeout(self) -> None:
+        self._compute_filling_ui(silent=True)
+
+    def _schedule_filling_compute(self, *args, **kwargs) -> None:
+        self._fill_timer.start(self.FILLING_DEBOUNCE_MS)
+
+    def _compute_filling_ui(self, *, silent: bool = False) -> None:
+        """
+        Compute filling outputs purely from UI values (no hardware).
+        This is a UI consistency feature; LeftFrame also computes locally.
+        """
         try:
+            target_sb = getattr(self.left, "sb_fill_target", None)
+            ramp_sb = getattr(self.left, "sb_fill_ramp", None)
+            hold_sb = getattr(self.left, "sb_fill_hold", None)
+            if target_sb is None or ramp_sb is None or hold_sb is None:
+                return
+
             inputs = FillingInputs(
-                target_mbar=float(self.left.sb_fill_target.value()),
-                ramp_s=float(self.left.sb_fill_ramp.value()),
-                hold_s=float(self.left.sb_fill_hold.value()),
+                target_mbar=float(target_sb.value()),
+                ramp_s=float(ramp_sb.value()),
+                hold_s=float(hold_sb.value()),
             )
+
             full_scale = float(self.config.get("pressure_full_scale_mbar", 8000.0))
+            if full_scale <= 0:
+                full_scale = 8000.0
+
             comp = compute_filling(inputs, full_scale_mbar=full_scale)
 
-            self.left.lbl_fill_target_pct.setText(f"Target %: {comp.target_pct:.3f}%")
-            self.left.lbl_fill_slope.setText(f"Ramp slope: {comp.slope_mbar_per_s:.3f} mbar/s")
-            self.left.lbl_fill_suggest.setText(f"Suggested ramp: {comp.suggested_ramp_s:.1f} s")
-        except Exception as e:
-            QMessageBox.critical(self, "Compute error", str(e))
+            if hasattr(self.left, "set_filling_outputs"):
+                self.left.set_filling_outputs(
+                    target_pct=float(comp.target_pct),
+                    slope_mbar_s=float(comp.slope_mbar_per_s),
+                    suggested_ramp_s=float(comp.suggested_ramp_s),
+                )
+            else:
+                getattr(self.left, "lbl_fill_target_pct").setText(f"Target %: {comp.target_pct:.3f}%")
+                getattr(self.left, "lbl_fill_slope").setText(f"Ramp slope: {comp.slope_mbar_per_s:.3f} mbar/s")
+                getattr(self.left, "lbl_fill_suggest").setText(f"Suggested ramp: {comp.suggested_ramp_s:.1f} s")
 
-    # ---------- Experiment config ----------
+        except Exception as e:
+            logger.exception("Filling compute failed.")
+            try:
+                if hasattr(self.left, "set_filling_outputs"):
+                    self.left.set_filling_outputs(target_pct=None, slope_mbar_s=None, suggested_ramp_s=None)
+                else:
+                    getattr(self.left, "lbl_fill_target_pct").setText("Target %: —")
+                    getattr(self.left, "lbl_fill_slope").setText("Ramp slope: —")
+                    getattr(self.left, "lbl_fill_suggest").setText("Suggested ramp: —")
+            except Exception:
+                pass
+
+            if not silent:
+                QMessageBox.critical(self, "Compute error", str(e))
+
+    # ---------------- Experiment config ----------------
 
     def _read_run_params(self) -> RunParams:
         p = self.left.params()
@@ -141,14 +203,18 @@ class MainWindow(Qtw.QMainWindow):
         )
 
     def _build_experiment_config(self) -> ExperimentConfig:
-        log_dir = os.path.join(os.path.dirname(__file__), "logs")
-        os.makedirs(log_dir, exist_ok=True)
+        # IMPORTANT: project_root expects an anchor; pass __file__ of THIS file.
+        root = project_root(__file__)
+
+        # logs folder at repo root
+        log_dir = resolve_under(root, "logs")
+        ensure_dir(log_dir)
 
         return ExperimentConfig(
             initial_volume_ml=float(self.config.get("initial_volume_ml", 0.0)),
             min_volume_ml=float(self.config.get("min_volume_ml", 0.0)),
             sample_period_s=float(self.config.get("sample_period_s", 0.2)),
-            log_dir=log_dir,
+            log_dir=str(log_dir),
             log_name_prefix="run",
             flow_is_ml_per_min=bool(self.config.get("flow_is_ml_per_min", True)),
             pressure_full_scale_mbar=float(self.config.get("pressure_full_scale_mbar", 8000.0)),
@@ -156,7 +222,7 @@ class MainWindow(Qtw.QMainWindow):
             base_backwash_remove_ml=float(self.config.get("base_backwash_remove_ml", 0.0)),
         )
 
-    # ---------- Run control ----------
+    # ---------------- Run control ----------------
 
     def _start_experiment(self) -> None:
         if self._thread is not None:
@@ -167,35 +233,42 @@ class MainWindow(Qtw.QMainWindow):
             run_params = self._read_run_params()
             exp_cfg = self._build_experiment_config()
 
-            self._thread = QThread(self)
-            self._worker = ExperimentWorker(exp_cfg)
-            self._worker.set_params(run_params)
-            self._worker.moveToThread(self._thread)
+            thread = QThread(self)
+            worker = ExperimentWorker(exp_cfg)
+            worker.set_params(run_params)
+            worker.moveToThread(thread)
 
-            self._thread.started.connect(self._worker.run)
+            thread.started.connect(worker.run)
 
-            self._worker.request_ok.connect(self._on_request_ok)
-            self._worker.status.connect(self._on_status)
-            self._worker.step_changed.connect(self._on_step_changed)
-            self._worker.loss_updated.connect(self.right.set_loss)
+            worker.request_ok.connect(self._on_request_ok)
+            worker.status.connect(self._on_status)
+            worker.step_changed.connect(self._on_step_changed)
+            worker.loss_updated.connect(self.right.set_loss)
 
-            # Optional telemetry (only connect if both exist)
-            if hasattr(self._worker, "telemetry") and hasattr(self.right, "ingest_telemetry"):
+            if hasattr(worker, "telemetry") and hasattr(self.right, "ingest_telemetry"):
                 try:
-                    self._worker.telemetry.connect(self.right.ingest_telemetry)  # type: ignore[attr-defined]
+                    worker.telemetry.connect(self.right.ingest_telemetry)  # type: ignore[attr-defined]
                 except Exception:
-                    pass
+                    logger.exception("Telemetry connect failed (non-fatal).")
 
-            self._worker.finished.connect(self._on_finished)
-            self._worker.failed.connect(self._on_failed)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+
+            worker.finished.connect(self._on_finished)
+            worker.failed.connect(self._on_failed)
+
+            self._thread = thread
+            self._worker = worker
 
             self.right.set_busy(True)
             self.left.btn_start.setEnabled(False)
             self.left.enable_ok(False)
 
-            self._thread.start()
+            thread.start()
 
         except Exception as e:
+            logger.exception("Start experiment failed.")
             QMessageBox.critical(self, "Start error", str(e))
             self._cleanup_thread()
 
@@ -208,7 +281,11 @@ class MainWindow(Qtw.QMainWindow):
         if self._worker is None:
             return
         self.left.enable_ok(False)
-        self._worker.confirm_ok()
+        try:
+            self._worker.confirm_ok()
+        except Exception:
+            logger.exception("confirm_ok failed.")
+            QMessageBox.critical(self, "Error", "Failed to send OK to the worker.")
 
     def _on_status(self, msg: str) -> None:
         self.right.set_status(msg)
@@ -228,20 +305,43 @@ class MainWindow(Qtw.QMainWindow):
         QMessageBox.critical(self, "Failed", err)
         self._cleanup_thread()
 
-    # ---------- Cleanup ----------
+    # ---------------- Cleanup ----------------
 
     def _cleanup_thread(self) -> None:
-        if self._thread is not None:
-            self._thread.quit()
-            self._thread.wait()
+        thread = self._thread
+        worker = self._worker
         self._thread = None
         self._worker = None
 
+        if worker is not None:
+            try:
+                t = worker.thread()
+                if isinstance(t, QThread):
+                    t.requestInterruption()
+            except Exception:
+                pass
+
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait(2000)
+            except Exception:
+                pass
+
     def closeEvent(self, event) -> None:
+        try:
+            self._fill_timer.stop()
+        except Exception:
+            pass
+
         self._cleanup_thread()
+
         try:
             if self.monitor is not None:
-                self.monitor.stop()
+                try:
+                    self.monitor.stop()
+                except Exception:
+                    logger.exception("Monitor stop failed (non-fatal).")
                 self.monitor = None
         finally:
             super().closeEvent(event)
