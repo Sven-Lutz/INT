@@ -4,3 +4,21 @@ logging:
 serial:
   baudrate_default: 38400
 full_scale_raw_default: 32000
+
+health:
+  comm_timeout_s: 2.0
+  idle_pressure_warn_mbar: 200.0
+  pressure_alarm_mbar: 800.0
+  flow_low_warn: 0.05
+  telemetry_stale_s: 2.0
+
+trends:
+  window_s: 3.0
+  deadband_mbar_per_s: 2.0
+
+hold:
+  hold_setpoint_rate_ms: 100
+  restore_fallback_valve_state: "FILTRATION"
+
+ui:
+  suppress_ok_modal_spam: true

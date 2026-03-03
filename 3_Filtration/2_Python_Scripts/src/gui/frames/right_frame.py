@@ -1,314 +1,363 @@
 from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
-
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QImage, QPixmap
+import logging
+from datetime import datetime
+from typing import Optional, Dict
+from PySide6.QtCore import Qt, Signal, Slot, QTimer
 from PySide6.QtWidgets import (
-    QFrame,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QProgressBar,
-    QVBoxLayout,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QProgressBar,
+    QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QTextEdit
 )
-
-# ---------- Small UI model ----------
-
-
-@dataclass(frozen=True)
-class _StepItem:
-    key: str
-    label: str
-
-
-# ---------- Right panel ----------
+from src.gui.style.phase_map import PHASE_ORDER, normalize_step, compute_phase_states
 
 
 class RightFrame(QFrame):
-    """
-    Right-side status + timeline + monitor + metrics panel.
+    start_clicked = Signal()
+    ok_clicked = Signal()
+    stop_clicked = Signal()
+    manual_vent_clicked = Signal()
 
-    Design goals:
-    - minimal branching in UI updates
-    - no repeated CSS string building at runtime
-    - robust to unknown steps
-    - QR rendering isolated + cached per URL
-    """
+    def __init__(self, config: Optional[dict] = None, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setProperty("surface", "panel")
 
-    # Prebuilt styles (avoid re-allocating strings repeatedly)
-    _CSS_PENDING = (
-        "QLabel { background: #f2f2f2; border: 1px solid #d9d9d9; "
-        "border-radius: 8px; padding: 4px 8px; color: #333; }"
-    )
-    _CSS_ACTIVE = (
-        "QLabel { background: #e8f0ff; border: 1px solid #7aa7ff; "
-        "border-radius: 8px; padding: 4px 8px; color: #153e8a; font-weight: 600; }"
-    )
-    _CSS_DONE = (
-        "QLabel { background: #e9f7ef; border: 1px solid #6fcf97; "
-        "border-radius: 8px; padding: 4px 8px; color: #1b6b3a; }"
-    )
+        self._current_step = "IDLE"
+        self._running = False
+        self._step_elapsed_s: Optional[float] = None
+        self._step_total_s: Optional[float] = None
+        self._eta_s: Optional[float] = None
 
-    def __init__(self, config: dict):
-        super().__init__()
-        self.config = config
+        self._loss_ml = 0.0
+        self._hold_removed_ml = 0.0
+        self._base_remove_ml = 0.0
 
-        self._steps: List[_StepItem] = [
-            _StepItem("BACKWASH_INITIAL", "Backwash 1"),
-            _StepItem("FILLING", "Filling"),
-            _StepItem("FILTRATION", "Filtration"),
-            _StepItem("VENTING", "Venting"),
-            _StepItem("BACKWASH_FINAL", "Backwash 2"),
-            _StepItem("FINISHED", "Finished"),
-        ]
-        self._step_keys: Tuple[str, ...] = tuple(s.key for s in self._steps)
-        self._step_index: Dict[str, int] = {k: i for i, k in enumerate(self._step_keys)}
+        self.pulse_timer = QTimer(self)
+        self.pulse_timer.timeout.connect(self._pulse_active_phase)
+        self._pulse_state = False
 
-        self._current_step: str = "IDLE"
-        self._qr_last_url: Optional[str] = None
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(10)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        self._build_timeline(root)
-        self._build_status_card(root)
-        self._build_monitor_card(root)
-        self._build_metrics_card(root)
+        self.content = QWidget()
+
+        root = QVBoxLayout(self.content)
+        root.setContentsMargins(15, 10, 15, 15)
+        root.setSpacing(15)
+
+        self._build_phase_overview(root)
+        self._build_run_state_card(root)
+        self._build_output_preview_card(root)
+        self._build_terminal_card(root)
 
         root.addStretch(1)
+        self.scroll.setWidget(self.content)
+        outer.addWidget(self.scroll, 1)
 
-        self.set_step("IDLE")
+        footer = QWidget()
+        footer.setProperty("surface", "panel")
+        footer_lay = QVBoxLayout(footer)
+        footer_lay.setContentsMargins(15, 0, 15, 15)
+        self._build_run_controls(footer_lay)
+        outer.addWidget(footer, 0)
 
-    # ---------------- Builders ----------------
+        self.reset_state()
 
-    def _gb(self, title: str) -> QGroupBox:
-        gb = QGroupBox(title)
-        gb.setStyleSheet("QGroupBox { font-weight: 600; } QLabel { padding: 2px; }")
-        return gb
+    def _card(self, title: str) -> QFrame:
+        c = QFrame()
+        c.setStyleSheet("background: #111827; border-radius: 8px; border: 1px solid #1E293B;")
+        lay = QVBoxLayout(c)
+        lay.setContentsMargins(15, 15, 15, 15)
+        lay.setSpacing(12)
 
-    def _build_timeline(self, root: QVBoxLayout) -> None:
-        gb = self._gb("Timeline")
-        lay = QHBoxLayout(gb)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(8)
+        t = QLabel(title)
+        t.setStyleSheet(
+            "font-family: 'Consolas', monospace; font-size: 11px; font-weight: bold; color: #E2E8F0; letter-spacing: 1.5px; border: none;")
+        lay.addWidget(t)
+        return c
 
-        self._step_widgets: Dict[str, QLabel] = {}
+    def _build_phase_overview(self, root: QVBoxLayout) -> None:
+        card = self._card("SEQUENCE PROGRESS")
+        lay = card.layout()
+        grid = QGridLayout();
+        grid.setHorizontalSpacing(10);
+        grid.setVerticalSpacing(10)
+        self._phase_boxes = {}
 
-        for i, st in enumerate(self._steps):
-            w = QLabel(st.label)
-            w.setAlignment(Qt.AlignCenter)
-            w.setMinimumHeight(28)
-            w.setStyleSheet(self._CSS_PENDING)
-            w.setToolTip(st.key)
-            self._step_widgets[st.key] = w
-            lay.addWidget(w, 1)
+        display_phases = [p for p in PHASE_ORDER if "HOLD" not in p]
 
-            if i < len(self._steps) - 1:
-                arrow = QLabel("→")
-                arrow.setAlignment(Qt.AlignCenter)
-                arrow.setStyleSheet("QLabel { color: #888; padding: 0 2px; }")
-                lay.addWidget(arrow, 0)
+        for i, key in enumerate(display_phases):
+            box = QFrame()
+            box.setStyleSheet("background: #050914; border-radius: 6px; border: 1px solid #1A202C; padding: 6px;")
+            bl = QVBoxLayout(box);
+            bl.setContentsMargins(8, 8, 8, 8);
+            bl.setSpacing(6)
 
-        root.addWidget(gb)
+            name = QLabel(key.replace("BACKWASH_INITIAL", "Backwash 1").replace("BACKWASH_FINAL", "Backwash 2").title())
+            name.setStyleSheet(
+                "font-family: 'Consolas', monospace; font-size: 11px; font-weight: bold; color: #A0AEC0; border: none;")
 
-    def _build_status_card(self, root: QVBoxLayout) -> None:
-        gb = self._gb("Status")
-        lay = QVBoxLayout(gb)
-        lay.setContentsMargins(12, 12, 12, 12)
-        lay.setSpacing(8)
+            pill = QLabel("IDLE")
+            pill.setAlignment(Qt.AlignCenter)
+            pill.setStyleSheet(
+                "background: transparent; color: #4A5568; font-size: 10px; font-weight: bold; font-family: 'Consolas', monospace; border: none;")
+
+            bl.addWidget(name);
+            bl.addWidget(pill, 0, Qt.AlignLeft)
+            grid.addWidget(box, i // 3, i % 3)
+            self._phase_boxes[key] = {'root': box, 'pill': pill}
+
+        lay.addLayout(grid);
+        root.addWidget(card)
+
+    def _pulse_active_phase(self):
+        self._pulse_state = not self._pulse_state
+        for key, v in self._phase_boxes.items():
+            if v['pill'].text() == "ACTIVE":
+                if self._pulse_state:
+                    # CHROMA GLOW
+                    v['root'].setStyleSheet(
+                        "background: rgba(139, 92, 246, 0.2); border-radius: 6px; border: 1px solid #8B5CF6; padding: 6px;")
+                else:
+                    v['root'].setStyleSheet(
+                        "background: rgba(139, 92, 246, 0.05); border-radius: 6px; border: 1px solid #7C3AED; padding: 6px;")
+
+    def _build_run_state_card(self, root: QVBoxLayout) -> None:
+        card = self._card("CURRENT STATUS")
+        lay = card.layout()
 
         self.lbl_step = QLabel("IDLE")
-        f = QFont()
-        f.setPointSize(16)
-        f.setBold(True)
-        self.lbl_step.setFont(f)
+        self.lbl_step.setStyleSheet(
+            "font-family: 'Consolas', monospace; font-size: 22px; font-weight: bold; color: #F8FAFC; border: none;")
 
-        self.lbl_status = QLabel("Idle")
-        self.lbl_status.setWordWrap(True)
-
-        self.ok_banner = QLabel("Manual OK required")
-        self.ok_banner.setVisible(False)
-        self.ok_banner.setWordWrap(True)
+        self.ok_box = QFrame()
+        self.ok_box.setStyleSheet(
+            "background: #111827; border: 1px solid #F59E0B; border-left: 4px solid #F59E0B; border-radius: 4px; padding: 8px;")
+        self.ok_box.setVisible(False)
+        self.ok_banner = QLabel("")
         self.ok_banner.setStyleSheet(
-            "QLabel { background: #fff3cd; border: 1px solid #ffeeba; padding: 8px; border-radius: 8px; }"
-        )
+            "color: #F59E0B; font-size: 12px; font-family: 'Consolas', monospace; font-weight: bold; border: none;")
+        self.ok_banner.setWordWrap(True)
+        QHBoxLayout(self.ok_box).addWidget(self.ok_banner)
 
         self.progress = QProgressBar()
-        self.progress.setRange(0, 0)  # indeterminate
-        self.progress.setVisible(False)
+        self.progress.setFixedHeight(8)
+        self.progress.setTextVisible(False)
+        # 🚀 CHROMA GRADIENT: Pink -> Purple -> Cyan 🚀
+        self.progress.setStyleSheet(
+            "QProgressBar { background: #050914; border: none; border-radius: 4px; } QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #EC4899, stop:0.5 #8B5CF6, stop:1 #00E5FF); border-radius: 4px; }")
 
-        lay.addWidget(self.lbl_step)
-        lay.addWidget(self.ok_banner)
-        lay.addWidget(self.lbl_status)
-        lay.addWidget(self.progress)
+        self.lbl_eta = QLabel("—")
+        self.lbl_eta.setStyleSheet(
+            "font-family: 'Consolas', monospace; font-weight: bold; color: #A0AEC0; font-size: 12px; border: none;")
 
-        root.addWidget(gb)
+        lay.addWidget(self.lbl_step);
+        lay.addWidget(self.ok_box);
+        lay.addWidget(self.progress);
+        lay.addWidget(self.lbl_eta)
+        root.addWidget(card)
 
-    def _build_monitor_card(self, root: QVBoxLayout) -> None:
-        gb = self._gb("Live Monitor (Phone)")
-        lay = QVBoxLayout(gb)
-        lay.setContentsMargins(12, 12, 12, 12)
-        lay.setSpacing(8)
+    def _build_output_preview_card(self, root: QVBoxLayout) -> None:
+        card = self._card("TELEMETRY MATH")
+        lay = card.layout()
+        host = QWidget()
+        grid = QGridLayout(host);
+        grid.setContentsMargins(0, 0, 0, 0);
+        grid.setVerticalSpacing(8)
 
-        self.qr_label = QLabel("QR not set")
-        self.qr_label.setAlignment(Qt.AlignCenter)
-        self.qr_label.setFixedSize(180, 180)
-        self.qr_label.setStyleSheet(
-            "QLabel { background: #fafafa; border: 1px solid #ddd; border-radius: 12px; }"
-        )
+        font_style = "font-family: 'Consolas', monospace; font-size: 14px; font-weight: bold; border: none;"
 
-        self.qr_hint = QLabel("Scan QR to open the live monitor.")
-        self.qr_hint.setAlignment(Qt.AlignCenter)
-        self.qr_hint.setWordWrap(True)
+        self.val_loss = QLabel("0.000 mL");
+        self.val_loss.setStyleSheet(f"{font_style} color: #F8FAFC;")
+        self.val_hold_removed = QLabel("0.000 mL");
+        self.val_hold_removed.setStyleSheet(f"{font_style} color: #F8FAFC;")
+        self.val_target_remove = QLabel("0.000 mL");
+        self.val_target_remove.setStyleSheet(f"{font_style} color: #00E5FF; font-size: 18px;")
 
-        self.qr_url = QLabel("")
-        self.qr_url.setAlignment(Qt.AlignCenter)
-        self.qr_url.setWordWrap(True)
-        self.qr_url.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        l1 = QLabel("Loss (Filt+Vent)");
+        l1.setStyleSheet(
+            "font-family: 'Consolas', monospace; color: #A0AEC0; font-size: 11px; font-weight: bold; border: none;")
+        l2 = QLabel("Manual HOLD");
+        l2.setStyleSheet(
+            "font-family: 'Consolas', monospace; color: #A0AEC0; font-size: 11px; font-weight: bold; border: none;")
+        l3 = QLabel("Target Remove");
+        l3.setStyleSheet(
+            "font-family: 'Consolas', monospace; color: #F8FAFC; font-size: 12px; font-weight: bold; border: none;")
 
-        lay.addWidget(self.qr_label, 0, Qt.AlignHCenter)
-        lay.addWidget(self.qr_hint)
-        lay.addWidget(self.qr_url)
+        grid.addWidget(l1, 0, 0);
+        grid.addWidget(self.val_loss, 0, 1)
+        grid.addWidget(l2, 1, 0);
+        grid.addWidget(self.val_hold_removed, 1, 1)
+        grid.addWidget(l3, 2, 0);
+        grid.addWidget(self.val_target_remove, 2, 1)
+        lay.addWidget(host);
+        root.addWidget(card)
 
-        root.addWidget(gb)
+    def _build_terminal_card(self, root: QVBoxLayout) -> None:
+        card = self._card("SYSTEM CONSOLE")
+        lay = card.layout()
+        self.console = QTextEdit()
+        self.console.setReadOnly(True)
+        self.console.setFixedHeight(180)
+        self.console.setStyleSheet(
+            "background-color: #050914; color: #00E5FF; font-family: 'Consolas', monospace; font-size: 12px; border: 1px solid #1A202C; border-radius: 4px; padding: 10px;")
+        lay.addWidget(self.console);
+        root.addWidget(card)
 
-    def _build_metrics_card(self, root: QVBoxLayout) -> None:
-        gb = self._gb("Metrics")
-        lay = QVBoxLayout(gb)
-        lay.setContentsMargins(12, 12, 12, 12)
-        lay.setSpacing(6)
+    def _build_run_controls(self, lay: QVBoxLayout) -> None:
+        row = QHBoxLayout();
+        row.setContentsMargins(0, 10, 0, 0);
+        row.setSpacing(12)
 
-        mono = QFont()
-        mono.setStyleHint(QFont.Monospace)
+        def _btn(text, color):
+            b = QPushButton(text)
+            b.setStyleSheet(f"""
+                QPushButton {{ 
+                    font-family: 'Consolas', monospace; font-size: 13px; font-weight: bold; letter-spacing: 1px; padding: 16px; 
+                    background-color: #111827; 
+                    border: 1px solid #1F2937; border-bottom: 3px solid {color}; 
+                    color: #F8FAFC; border-radius: 4px; 
+                }}
+                QPushButton:hover {{ background-color: #1E293B; border: 1px solid {color}; }}
+                QPushButton:disabled {{ border: 1px solid #111827; color: #4A5568; border-bottom: 3px solid #111827; background-color: #050914; }}
+            """)
+            return b
 
-        self.lbl_loss = QLabel("Loss (Filtration+Venting): 0.000 mL")
-        self.lbl_loss.setFont(mono)
+        self.btn_start = _btn("START RUN", "#8B5CF6")  # Purple
+        self.btn_ok = _btn("CONFIRM STEP", "#00E5FF")  # Cyan
+        self.btn_vent = _btn("VENT", "#A0AEC0")  # Silver
+        self.btn_stop = _btn("ABORT RUN", "#FF1744")  # Red
 
-        self.lbl_flow = QLabel("Flow: —")
-        self.lbl_flow.setFont(mono)
+        self.btn_ok.setEnabled(False)
+        self.btn_stop.setEnabled(False)
 
-        self.lbl_pressure = QLabel("Pressure ch1: —   ch2: —")
-        self.lbl_pressure.setFont(mono)
+        self.btn_start.clicked.connect(self.start_clicked.emit)
+        self.btn_ok.clicked.connect(self.ok_clicked.emit)
+        self.btn_vent.clicked.connect(self.manual_vent_clicked.emit)
+        self.btn_stop.clicked.connect(self.stop_clicked.emit)
 
-        self.lbl_valves = QLabel("Valves: —")
-        self.lbl_valves.setFont(mono)
+        row.addWidget(self.btn_start, 2)
+        row.addWidget(self.btn_ok, 2)
+        row.addWidget(self.btn_vent, 1)
+        row.addWidget(self.btn_stop, 2)
+        lay.addLayout(row)
 
-        lay.addWidget(self.lbl_loss)
-        lay.addWidget(self.lbl_flow)
-        lay.addWidget(self.lbl_pressure)
-        lay.addWidget(self.lbl_valves)
+    def append_log(self, msg: str, color: str = "#8B5CF6") -> None:
+        ts = datetime.now().strftime("%H:%M:%S")
+        self.console.append(
+            f'<span style="color: #4A5568;">[{ts}]</span> <span style="color: {color}; font-weight: bold;">{msg}</span>')
+        self.console.verticalScrollBar().setValue(self.console.verticalScrollBar().maximum())
 
-        root.addWidget(gb)
+    def reset_state(self) -> None:
+        self.set_loss_ml(0.0)
+        self.set_hold_removed_ml(0.0)
+        self.set_step("IDLE")
+        self.set_status("Idle")
+        self.progress.setValue(0)
+        self.lbl_eta.setText("—")
+        self.set_running(False)
+        self.ok_box.setVisible(False)
+        self.pulse_timer.stop()
 
-    # ---------------- Public API ----------------
+        for k, v in self._phase_boxes.items():
+            v['root'].setStyleSheet("background: #050914; border-radius: 4px; border: 1px solid #1A202C; padding: 6px;")
+            v['pill'].setStyleSheet(
+                "background: transparent; color: #4A5568; font-size: 10px; font-weight: bold; border: none;")
+            v['pill'].setText("IDLE")
+
+    @Slot(float)
+    def set_loss_ml(self, v: float):
+        self._loss_ml = float(v); self.val_loss.setText(f"{self._loss_ml:.3f} mL"); self._calc()
+
+    @Slot(float)
+    def set_hold_removed_ml(self, v: float):
+        self._hold_removed_ml = float(v); self.val_hold_removed.setText(f"{self._hold_removed_ml:.3f} mL"); self._calc()
+
+    def set_base_remove_ml(self, v: float):
+        self._base_remove_ml = float(v); self._calc()
+
+    def _calc(self):
+        self.val_target_remove.setText(
+            f"{max(0.0, self._base_remove_ml + self._loss_ml + self._hold_removed_ml):.3f} mL")
+
+    def set_running(self, running: bool):
+        self._running = running
+        self.btn_start.setEnabled(not running)
+        self.btn_stop.setEnabled(running)
+        if not running: self.btn_ok.setEnabled(False)
+
+    def enable_ok(self, e: bool):
+        self.btn_ok.setEnabled(e)
+
+    def set_status(self, s: str):
+        if s and "OK required" not in s: self.append_log(f"SYS: {s}", "#A0AEC0")
+
+    def set_ok_banner(self, *, step: str = "", reason: str = "", show: bool = True) -> None:
+        if not show:
+            self.ok_box.setVisible(False)
+            return
+        st = str(step or "").strip();
+        rs = str(reason or "").strip()
+        self.ok_banner.setText(f"> {st}: {rs}" if (st and rs) else (f"> {rs}" if rs else "> MANUAL OK REQUIRED"))
+        self.ok_box.setVisible(True)
+
+    def set_manual_state(self, **kwargs):
+        pass
 
     def set_step(self, step: str) -> None:
-        # Accept arbitrary step strings; only highlight known ones.
-        self._current_step = step
-        self.lbl_step.setText(step)
+        self._current_step = normalize_step(step) or "IDLE"
+        self.lbl_step.setText(self._current_step)
 
-        idx = self._step_index.get(step, -1)
+        if self._current_step not in ("IDLE", "FINISHED"):
+            self.append_log(f"PHASE: {self._current_step}", "#00E5FF")
 
-        if idx < 0:
-            # Unknown step: keep everything pending (neutral state)
-            for key in self._step_keys:
-                w = self._step_widgets.get(key)
-                if w is not None:
-                    w.setStyleSheet(self._CSS_PENDING)
-            return
+        if self._current_step in ("FINISHED", "DONE"):
+            states = {p: "done" for p in PHASE_ORDER}
+            self.pulse_timer.stop()
+        elif self._current_step in PHASE_ORDER:
+            states = compute_phase_states(self._current_step, set(PHASE_ORDER[:PHASE_ORDER.index(self._current_step)]),
+                                          set())
+            self.pulse_timer.start(500)
+        else:
+            states = compute_phase_states("", set(), set())
+            self.pulse_timer.stop()
 
-        for j, key in enumerate(self._step_keys):
-            w = self._step_widgets.get(key)
-            if w is None:
-                continue
-            if j < idx:
-                w.setStyleSheet(self._CSS_DONE)
-            elif j == idx:
-                w.setStyleSheet(self._CSS_ACTIVE)
+        for k, v in self._phase_boxes.items():
+            st = states.get(k, 'idle')
+            if st == 'active':
+                v['root'].setStyleSheet(
+                    "background: rgba(139, 92, 246, 0.2); border-radius: 6px; border: 1px solid #8B5CF6; padding: 6px;")
+                v['pill'].setStyleSheet(
+                    "background: #8B5CF6; color: #FFFFFF; font-size: 11px; font-weight: bold; border-radius: 3px; padding: 2px 8px;")
+            elif st == 'done':
+                v['root'].setStyleSheet(
+                    "background: #09090C; border-radius: 4px; border: 1px solid #1F2937; padding: 6px;")
+                v['pill'].setStyleSheet(
+                    "background: transparent; color: #00E5FF; font-size: 11px; font-weight: bold; border: none;")
             else:
-                w.setStyleSheet(self._CSS_PENDING)
+                v['root'].setStyleSheet(
+                    "background: #050914; border-radius: 4px; border: 1px solid #1F2937; padding: 6px;")
+                v['pill'].setStyleSheet(
+                    "background: transparent; color: #4A5568; font-size: 10px; font-weight: bold; border: none;")
+            v['pill'].setText(st.upper())
 
-    def set_status(self, status: str) -> None:
-        self.lbl_status.setText(status)
-
-        needs_ok = ("manual ok required" in status.lower()) or ("waiting for ok" in status.lower())
-        self.ok_banner.setVisible(needs_ok)
-        if needs_ok:
-            self.ok_banner.setText(status)
-
-    def set_loss(self, loss_ml: float) -> None:
-        self.lbl_loss.setText(f"Loss (Filtration+Venting): {float(loss_ml):.3f} mL")
-
-    def set_metrics(
-        self,
-        *,
-        flow: Optional[float] = None,
-        p1_set: Optional[float] = None,
-        p1_meas: Optional[float] = None,
-        p2_set: Optional[float] = None,
-        p2_meas: Optional[float] = None,
-        valve_state: Optional[str] = None,
-    ) -> None:
-        self.lbl_flow.setText("Flow: —" if flow is None else f"Flow: {float(flow):.3f}")
-
-        def fmt_pair(sp: Optional[float], ms: Optional[float]) -> str:
-            if sp is None and ms is None:
-                return "—"
-            a = "—" if sp is None else f"{float(sp):.2f}%"
-            b = "—" if ms is None else f"{float(ms):.2f}%"
-            return f"{a}/{b}"
-
-        self.lbl_pressure.setText(
-            f"Pressure ch1: {fmt_pair(p1_set, p1_meas)}   ch2: {fmt_pair(p2_set, p2_meas)}"
-        )
-        self.lbl_valves.setText(f"Valves: {valve_state or '—'}")
-
-    def set_busy(self, busy: bool) -> None:
-        self.progress.setVisible(bool(busy))
-
-    def set_qr_url(self, url: str) -> None:
-        url = str(url).strip()
-        self.qr_url.setText(url)
-        self.qr_label.setToolTip(url)
-        self.qr_url.setToolTip(url)
-
-        # Avoid regenerating QR repeatedly for the same URL
-        if url and url == self._qr_last_url and self.qr_label.pixmap() is not None:
-            return
-        self._qr_last_url = url
-
-        if not url:
-            self.qr_label.setPixmap(QPixmap())
-            self.qr_label.setText("QR not set")
-            self.qr_hint.setText("Scan QR to open the live monitor.")
+    def set_step_progress(self, *, step_elapsed_s=None, step_total_s=None, eta_s=None, text="") -> None:
+        if text: self.lbl_eta.setText(str(text))
+        if self._current_step == "BACKWASH_HOLD":
+            self.progress.setValue(0);
+            self.lbl_eta.setText("HOLD active...");
             return
 
-        pm = self._make_qr_pixmap(url, self.qr_label.width(), self.qr_label.height())
-        if pm is None:
-            self.qr_label.setPixmap(QPixmap())
-            self.qr_label.setText("Install: pip install qrcode pillow")
-            self.qr_hint.setText("QR generation unavailable (missing dependencies).")
-            return
-
-        self.qr_label.setPixmap(pm)
-        self.qr_hint.setText("Scan QR to open the live monitor.")
-
-    # ---------------- QR helpers ----------------
-
-    def _make_qr_pixmap(self, url: str, w: int, h: int) -> Optional[QPixmap]:
-        """
-        Returns a scaled QPixmap for the given URL or None if deps missing / QR generation fails.
-        """
-        try:
-            import qrcode
-            from PIL.ImageQt import ImageQt  # type: ignore
-
-            img = qrcode.make(url)
-            qimg = QImage(ImageQt(img))
-            pm = QPixmap.fromImage(qimg).scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            return pm
-        except Exception:
-            return None
+        if step_elapsed_s and step_total_s and step_total_s > 0:
+            pct = int((step_elapsed_s / step_total_s) * 100)
+            self.progress.setValue(pct)
+            calc_eta = eta_s if eta_s is not None else max(0.0, step_total_s - step_elapsed_s)
+            self.lbl_eta.setText(f"ETA: {calc_eta:.1f} s")
+        else:
+            self.progress.setValue(0)
+            if not text: self.lbl_eta.setText("—")

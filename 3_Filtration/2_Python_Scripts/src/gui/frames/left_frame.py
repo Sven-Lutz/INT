@@ -1,422 +1,281 @@
-# src/gui/frames/left_frame.py
 from __future__ import annotations
-
-import logging
-import traceback
 from dataclasses import dataclass
 from typing import Optional
-
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal, Slot, Qt
 from PySide6.QtWidgets import (
-    QAbstractSpinBox,
-    QDoubleSpinBox,
-    QFrame,
-    QGridLayout,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QVBoxLayout,
+    QFrame, QVBoxLayout, QHBoxLayout, QLabel,
+    QDoubleSpinBox, QPushButton, QWidget, QSizePolicy, QGridLayout
 )
-
-# Local, UI-only compute fallback (must never require hardware)
-from src.gui.data.parser import FillingInputs, compute_filling
-
-logger = logging.getLogger(__name__)
+from src.gui.data.worker import RunParams
+from src.gui.widgets.hold_button import HoldButton
 
 
-@dataclass(frozen=True)
-class _Ranges:
-    max_seconds: float = 24 * 60 * 60
-    max_mbar: float = 8000.0
-    max_ml: float = 5000.0
+class NudgeSpinBox(QWidget):
+    valueChanged = Signal(float)
+
+    def __init__(self, minimum: float, maximum: float, decimals: int, step: float, suffix: str, value: float):
+        super().__init__()
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+
+        self.spin = QDoubleSpinBox()
+        self.spin.setRange(minimum, maximum)
+        self.spin.setDecimals(decimals)
+        self.spin.setSingleStep(step)
+        self.spin.setSuffix(suffix)
+        self.spin.setValue(value)
+        self.spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        self.spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.spin.setFocusPolicy(Qt.ClickFocus)
+
+        self.spin.setStyleSheet("""
+            QDoubleSpinBox { 
+                background: #050914; 
+                border: 1px solid #1F2937; 
+                color: #F8FAFC;
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-family: 'Consolas', monospace;
+                font-weight: bold;
+                font-size: 13px;
+            } 
+            QDoubleSpinBox:focus { border: 1px solid #8B5CF6; }
+        """)
+
+        btn_style = """
+            QPushButton { 
+                background-color: #111827; 
+                color: #A0AEC0; 
+                border: 1px solid #2D3748; 
+                border-radius: 4px; 
+                font-family: Arial, sans-serif; 
+                font-size: 18px; 
+                font-weight: bold;
+                padding: 0px;
+                margin: 0px;
+            } 
+            QPushButton:hover { background-color: #2D3748; color: #FFFFFF; border-color: #8B5CF6; }
+            QPushButton:pressed { background-color: #8B5CF6; color: #FFFFFF; border-color: #8B5CF6; }
+            QPushButton:disabled { color: #4A5568; background-color: #050914; border-color: #111827; }
+        """
+
+        self.btn_m = QPushButton("-")
+        self.btn_m.setFixedSize(30, 30)
+        self.btn_m.setFocusPolicy(Qt.NoFocus)
+        self.btn_m.setStyleSheet(btn_style)
+
+        self.btn_p = QPushButton("+")
+        self.btn_p.setFixedSize(30, 30)
+        self.btn_p.setFocusPolicy(Qt.NoFocus)
+        self.btn_p.setStyleSheet(btn_style)
+
+        lay.addWidget(self.spin)
+        lay.addWidget(self.btn_m)
+        lay.addWidget(self.btn_p)
+
+        self.btn_m.clicked.connect(lambda: self.spin.setValue(self.spin.value() - self.spin.singleStep()))
+        self.btn_p.clicked.connect(lambda: self.spin.setValue(self.spin.value() + self.spin.singleStep()))
+        self.spin.valueChanged.connect(self.valueChanged.emit)
+
+    def value(self) -> float: return self.spin.value()
+
+    def setValue(self, val: float): self.spin.setValue(val)
+
+    def setEnabled(self, val: bool):
+        super().setEnabled(val)
+        self.spin.setEnabled(val)
+        self.btn_m.setEnabled(val)
+        self.btn_p.setEnabled(val)
 
 
-@dataclass(frozen=True)
-class _SpinSpec:
-    decimals: int
-    min_v: float
-    max_v: float
-    default: float
-    step: float
-    suffix: str
+@dataclass
+class LeftFrameDefaults:
+    bw1_dur: float = 20.0;
+    bw1_p: float = 600.0
+    fill_t: float = 600.0;
+    fill_r: float = 10.0;
+    fill_h: float = 30.0
+    filt_dur: float = 60.0;
+    filt_p: float = 1200.0
+    vent_dur: float = 20.0
+    bw2_base: float = 0.0;
+    bw2_p: float = 600.0;
+    bw2_max: float = 180.0
+    hold_p: float = 600.0;
+    hold_max: float = 1.0
 
 
 class LeftFrame(QFrame):
-    start_clicked = Signal()
-    ok_clicked = Signal()
-    compute_clicked = Signal()
+    params_changed = Signal(RunParams)
 
-    _LABEL_MIN_W = 170
-    _GB_STYLE = "QGroupBox { font-weight: 600; } QLabel { padding: 2px; }"
+    def __init__(self, config=None, parent=None, defaults=None):
+        super().__init__(parent)
+        self.setProperty("surface", "panel")
+        self.defaults = defaults or LeftFrameDefaults()
 
-    def __init__(self, config: dict):
-        super().__init__()
-        self.config = config
-
-        self.ranges = _Ranges(
-            max_seconds=float(config.get("max_seconds", _Ranges.max_seconds)),
-            max_mbar=float(config.get("pressure_full_scale_mbar", _Ranges.max_mbar)),
-            max_ml=float(config.get("max_ml", _Ranges.max_ml)),
-        )
+        self._hold_active = False
+        self._hold_allowed = True
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(15, 15, 15, 15)
+        root.setSpacing(15)
 
-        self._build_backwash1(root)
-        self._build_filling(root)
-        self._build_filtration(root)
-        self._build_venting(root)
-        self._build_backwash2(root)
-        self._build_controls(root)
+        hold_card = self._card("MANUAL HOLD", accent="#EC4899")
+        hold_lay = hold_card.layout()
 
-        root.addStretch(1)
+        self.sp_hold_pressure = NudgeSpinBox(0, 8000, 0, 25, " mbar", self.defaults.hold_p)
+        self.sp_hold_max = NudgeSpinBox(1.0, 36000, 1, 1, " s", self.defaults.hold_max)
 
-        # Auto compute + local fallback
-        self._wire_filling_autocompute()
-        self._compute_filling_local(silent=True)
+        grid_hold = QGridLayout();
+        grid_hold.setSpacing(10)
+        l1 = QLabel("Setpoint");
+        l1.setStyleSheet("color: #A0AEC0; font-size: 11px; font-family: 'Consolas', monospace;")
+        l2 = QLabel("Max Time");
+        l2.setStyleSheet("color: #A0AEC0; font-size: 11px; font-family: 'Consolas', monospace;")
+        grid_hold.addWidget(l1, 0, 0);
+        grid_hold.addWidget(self.sp_hold_pressure, 0, 1)
+        grid_hold.addWidget(l2, 1, 0);
+        grid_hold.addWidget(self.sp_hold_max, 1, 1)
+        hold_lay.addLayout(grid_hold)
 
-    # -------------------- UI helpers --------------------
+        self.btn_hold = HoldButton("SYSTEM IDLE")
+        self.btn_hold.setFocusPolicy(Qt.NoFocus)
+        self.set_hold_active(False)
+        hold_lay.addWidget(self.btn_hold)
+        root.addWidget(hold_card)
 
-    def _gb(self, title: str) -> QGroupBox:
-        gb = QGroupBox(title)
-        gb.setStyleSheet(self._GB_STYLE)
-        return gb
+        t2 = QLabel("SEQUENCE PARAMETERS")
+        t2.setStyleSheet("font-weight: bold; color: #4A5568; font-size: 10px; letter-spacing: 2px; padding-top: 5px;")
+        root.addWidget(t2)
 
-    def _mk_grid(self, parent: QGroupBox) -> QGridLayout:
-        grid = QGridLayout(parent)
-        grid.setColumnStretch(1, 1)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(6)
-        return grid
+        self.sp_bw1_dur = NudgeSpinBox(1.0, 3600, 1, 1, " s", self.defaults.bw1_dur)
+        self.sp_bw1_p = NudgeSpinBox(0, 8000, 0, 50, " mbar", self.defaults.bw1_p)
+        root.addWidget(self._param_card("BACKWASH 1", [("Duration", self.sp_bw1_dur), ("Pressure", self.sp_bw1_p)]))
 
-    def _row(self, grid: QGridLayout, r: int, label: str, w) -> None:
-        lab = QLabel(label)
-        lab.setMinimumWidth(self._LABEL_MIN_W)
-        grid.addWidget(lab, r, 0)
-        grid.addWidget(w, r, 1)
+        self.sp_fill_t = NudgeSpinBox(0, 8000, 0, 50, " mbar", self.defaults.fill_t)
+        self.sp_fill_r = NudgeSpinBox(1.0, 600, 1, 1, " s", self.defaults.fill_r)
+        self.sp_fill_h = NudgeSpinBox(1.0, 3600, 1, 1, " s", self.defaults.fill_h)
+        fill_card = self._param_card("FILLING",
+                                     [("Target", self.sp_fill_t), ("Ramp", self.sp_fill_r), ("Hold", self.sp_fill_h)])
 
-    def _spin(self, spec: _SpinSpec) -> QDoubleSpinBox:
-        sb = QDoubleSpinBox()
-        sb.setDecimals(int(spec.decimals))
-        sb.setRange(float(spec.min_v), float(spec.max_v))
-        sb.setValue(float(spec.default))
-        sb.setSingleStep(float(spec.step))
-        sb.setSuffix(spec.suffix)
+        self.lbl_fill_out = QLabel("Auto-Calc: —")
+        self.lbl_fill_out.setStyleSheet(
+            "color: #00E5FF; font-family: 'Consolas', monospace; font-size: 10px; border: none; padding-top: 4px;")
+        fill_card.layout().addWidget(self.lbl_fill_out)
+        root.addWidget(fill_card)
 
-        sb.setAccelerated(True)
-        sb.setKeyboardTracking(False)
-        sb.setButtonSymbols(QAbstractSpinBox.UpDownArrows)
-        sb.setCorrectionMode(QAbstractSpinBox.CorrectToNearestValue)
+        self.sp_filt_dur = NudgeSpinBox(1.0, 86400, 1, 5, " s", self.defaults.filt_dur)
+        self.sp_filt_p = NudgeSpinBox(0, 8000, 0, 50, " mbar", self.defaults.filt_p)
+        root.addWidget(self._param_card("FILTRATION", [("Duration", self.sp_filt_dur), ("Pressure", self.sp_filt_p)]))
 
-        try:
-            sb.setGroupSeparatorShown(False)
-        except Exception:
-            pass
+        self.sp_vent_dur = NudgeSpinBox(1.0, 3600, 1, 1, " s", self.defaults.vent_dur)
+        root.addWidget(self._param_card("VENTING", [("Duration", self.sp_vent_dur)]))
 
-        sb.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        sb.setFocusPolicy(Qt.StrongFocus)
-        sb.setStyleSheet("")  # do not break arrow hitboxes on Windows
-        return sb
+        self.sp_bw2_base = NudgeSpinBox(0.0, 1000, 3, 0.1, " mL", self.defaults.bw2_base)
+        self.sp_bw2_p = NudgeSpinBox(0, 8000, 0, 50, " mbar", self.defaults.bw2_p)
+        self.sp_bw2_max = NudgeSpinBox(1.0, 3600, 1, 5, " s", self.defaults.bw2_max)
+        root.addWidget(self._param_card("BACKWASH 2", [("Base Remove", self.sp_bw2_base), ("Pressure", self.sp_bw2_p),
+                                                       ("Max duration", self.sp_bw2_max)]))
 
-    def _spin_s(
-        self,
-        *,
-        default: float,
-        min_v: float = 0.0,
-        max_v: Optional[float] = None,
-        decimals: int = 1,
-        step: float = 1.0,
-    ) -> QDoubleSpinBox:
-        return self._spin(
-            _SpinSpec(
-                decimals=int(decimals),
-                min_v=float(min_v),
-                max_v=float(self.ranges.max_seconds if max_v is None else max_v),
-                default=float(default),
-                step=float(step),
-                suffix=" s",
-            )
+        root.addStretch()
+        self._wire()
+
+    def _card(self, title: str, accent: str = "#E2E8F0") -> QFrame:
+        c = QFrame()
+        c.setStyleSheet(
+            f"background: #111827; border-radius: 6px; border: 1px solid #1F2937; border-top: 3px solid {accent};")
+        l = QVBoxLayout(c);
+        l.setContentsMargins(15, 12, 15, 15);
+        l.setSpacing(12)
+        t = QLabel(title);
+        t.setStyleSheet(
+            f"font-size: 11px; font-weight: bold; color: {accent}; letter-spacing: 1.5px; border: none; font-family: 'Consolas', monospace;")
+        l.addWidget(t)
+        return c
+
+    def _param_card(self, title: str, items: list) -> QFrame:
+        c = self._card(title, accent="#4A5568")
+        l = c.layout()
+        g = QGridLayout();
+        g.setSpacing(10)
+        for i, (label, widget) in enumerate(items):
+            lbl = QLabel(label);
+            lbl.setStyleSheet("color: #A0AEC0; font-size: 11px; font-family: 'Consolas', monospace; border: none;")
+            g.addWidget(lbl, i, 0);
+            g.addWidget(widget, i, 1)
+        l.addLayout(g)
+        return c
+
+    def _wire(self):
+        widgets = [
+            self.sp_hold_pressure, self.sp_hold_max, self.sp_bw1_dur, self.sp_bw1_p,
+            self.sp_fill_t, self.sp_fill_r, self.sp_fill_h, self.sp_filt_dur,
+            self.sp_filt_p, self.sp_vent_dur, self.sp_bw2_base, self.sp_bw2_p,
+            self.sp_bw2_max
+        ]
+        for w in widgets:
+            w.valueChanged.connect(self._on_any_change)
+
+    @Slot()
+    def _on_any_change(self):
+        self.params_changed.emit(self.get_run_params())
+
+    def get_run_params(self) -> RunParams:
+        return RunParams(
+            backwash1_duration_s=self.sp_bw1_dur.value(),
+            backwash1_pressure_mbar=self.sp_bw1_p.value(),
+            filling_target_mbar=self.sp_fill_t.value(),
+            filling_ramp_s=self.sp_fill_r.value(),
+            filling_hold_s=self.sp_fill_h.value(),
+            filtration_duration_s=self.sp_filt_dur.value(),
+            filtration_pressure_mbar=self.sp_filt_p.value(),
+            venting_duration_s=self.sp_vent_dur.value(),
+            backwash2_base_remove_ml=self.sp_bw2_base.value(),
+            backwash2_pressure_mbar=self.sp_bw2_p.value(),
+            backwash2_max_duration_s=self.sp_bw2_max.value()
         )
 
-    def _spin_mbar(
-        self,
-        *,
-        default: float,
-        min_v: float = 0.0,
-        max_v: Optional[float] = None,
-        decimals: int = 0,
-        step: float = 10.0,
-    ) -> QDoubleSpinBox:
-        return self._spin(
-            _SpinSpec(
-                decimals=int(decimals),
-                min_v=float(min_v),
-                max_v=float(self.ranges.max_mbar if max_v is None else max_v),
-                default=float(default),
-                step=float(step),
-                suffix=" mbar",
-            )
-        )
+    def get_backwash_hold_pressure_mbar(self) -> float:
+        return self.sp_hold_pressure.value()
 
-    def _spin_ml(
-        self,
-        *,
-        default: float,
-        min_v: float = 0.0,
-        max_v: Optional[float] = None,
-        decimals: int = 2,
-        step: float = 0.5,
-    ) -> QDoubleSpinBox:
-        return self._spin(
-            _SpinSpec(
-                decimals=int(decimals),
-                min_v=float(min_v),
-                max_v=float(self.ranges.max_ml if max_v is None else max_v),
-                default=float(default),
-                step=float(step),
-                suffix=" mL",
-            )
-        )
+    def set_filling_outputs(self, *, target_pct: Optional[float] = None, slope_mbar_s: Optional[float] = None,
+                            suggested_ramp_s: Optional[float] = None):
+        t = f"{target_pct:.1f}%" if target_pct is not None else "—"
+        s = f"{slope_mbar_s:.1f} mbar/s" if slope_mbar_s is not None else "—"
+        self.lbl_fill_out.setText(f"Target: {t} | Slope: {s}")
 
-    # -------------------- Filling compute wiring --------------------
+    @Slot(bool)
+    def set_hold_active(self, active: bool):
+        self._hold_active = active
+        self._update_hold_style()
 
-    def _wire_filling_autocompute(self) -> None:
-        """
-        Avoid lambdas here: PySide signal overloads can behave oddly on Windows.
-        Directly connect to the slot.
-        """
-        for sb in (self.sb_fill_target, self.sb_fill_ramp, self.sb_fill_hold):
-            try:
-                sb.valueChanged.connect(self._on_compute_clicked)  # type: ignore[arg-type]
-            except Exception:
-                pass
+    def set_hold_affordance(self, allowed: bool, hint: str):
+        self._hold_allowed = allowed
+        if not self._hold_active:
+            self._update_hold_style()
 
-    def _on_compute_clicked(self) -> None:
-        """
-        Always do local compute, and then (optionally) notify MainWindow.
-        """
-        logger.info("LeftFrame: Compute Filling Output triggered")
+    def _update_hold_style(self):
+        base_style = "font-family: 'Consolas', monospace; font-size: 11px; font-weight: bold; letter-spacing: 2px; padding: 12px; border-radius: 4px; "
+        if self._hold_active:
+            self.btn_hold.setText(">>> BACKWASH ACTIVE <<<")
+            # 🚀 CHROMA GRADIENT: Pink -> Purple 🚀
+            self.btn_hold.setStyleSheet(
+                base_style + "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #EC4899, stop:1 #8B5CF6); border: none; color: #FFFFFF;")
+        elif not self._hold_allowed:
+            self.btn_hold.setText("MANUAL CONTROL UNAVAILABLE")
+            self.btn_hold.setStyleSheet(base_style + "background: #000000; border: 1px solid #1F2937; color: #4A5568;")
+        else:
+            self.btn_hold.setText("HOLD (SPACE / CLICK) TO BACKWASH")
+            self.btn_hold.setStyleSheet(
+                base_style + "background-color: #111827; border: 1px solid #2D3748; color: #EC4899;")
 
-        # 1) local compute (guaranteed)
-        self._compute_filling_local(silent=False)
-
-        # 2) notify MainWindow (optional hook)
-        try:
-            self.compute_clicked.emit()
-        except Exception:
-            pass
-
-    def _compute_filling_local(self, *, silent: bool) -> None:
-        try:
-            inputs = FillingInputs(
-                target_mbar=float(self.sb_fill_target.value()),
-                ramp_s=float(self.sb_fill_ramp.value()),
-                hold_s=float(self.sb_fill_hold.value()),
-            )
-            full_scale = float(self.ranges.max_mbar if self.ranges.max_mbar > 0 else 8000.0)
-            comp = compute_filling(inputs, full_scale_mbar=full_scale)
-
-            self.set_filling_outputs(
-                target_pct=float(comp.target_pct),
-                slope_mbar_s=float(comp.slope_mbar_per_s),
-                suggested_ramp_s=float(comp.suggested_ramp_s),
-            )
-        except Exception:
-            # Never throw UI exceptions for this feature
-            self.set_filling_outputs(target_pct=None, slope_mbar_s=None, suggested_ramp_s=None)
-            if not silent:
-                logger.error("LeftFrame: compute_filling failed:\n%s", traceback.format_exc())
-
-    # -------------------- Sections --------------------
-
-    def _build_backwash1(self, root: QVBoxLayout) -> None:
-        gb = self._gb("1) Initial Backwash (manual OK before start)")
-        grid = self._mk_grid(gb)
-
-        self.sb_backwash1_duration = self._spin_s(
-            default=float(self.config.get("backwash1_duration_s", 10.0)),
-            min_v=0.1,
-            decimals=1,
-        )
-        self.sb_backwash1_pressure = self._spin_mbar(
-            default=float(self.config.get("backwash1_pressure_mbar", 0.0)),
-            min_v=0.0,
-            decimals=0,
-        )
-
-        self._row(grid, 0, "Duration", self.sb_backwash1_duration)
-        self._row(grid, 1, "Pressure (0 = none)", self.sb_backwash1_pressure)
-
-        root.addWidget(gb)
-
-    def _build_filling(self, root: QVBoxLayout) -> None:
-        gb = self._gb("2) Filling (linear pressure ramp)")
-        grid = self._mk_grid(gb)
-
-        self.sb_fill_target = self._spin_mbar(
-            default=float(self.config.get("filling_target_mbar", 300.0)),
-            min_v=0.0,
-            decimals=0,
-            step=10.0,
-        )
-        self.sb_fill_ramp = self._spin_s(
-            default=float(self.config.get("filling_ramp_s", 10.0)),
-            min_v=0.0,
-            decimals=1,
-            step=1.0,
-        )
-        self.sb_fill_hold = self._spin_s(
-            default=float(self.config.get("filling_hold_s", 10.0)),
-            min_v=0.0,
-            decimals=1,
-            step=1.0,
-        )
-
-        self._row(grid, 0, "Target pressure", self.sb_fill_target)
-        self._row(grid, 1, "Ramp duration", self.sb_fill_ramp)
-        self._row(grid, 2, "Hold duration", self.sb_fill_hold)
-
-        self.lbl_fill_target_pct = QLabel("Target %: —")
-        self.lbl_fill_slope = QLabel("Ramp slope: —")
-        self.lbl_fill_suggest = QLabel("Suggested ramp: —")
-
-        grid.addWidget(self.lbl_fill_target_pct, 3, 0, 1, 2)
-        grid.addWidget(self.lbl_fill_slope, 4, 0, 1, 2)
-        grid.addWidget(self.lbl_fill_suggest, 5, 0, 1, 2)
-
-        root.addWidget(gb)
-
-    def _build_filtration(self, root: QVBoxLayout) -> None:
-        gb = self._gb("3) Filtration")
-        grid = self._mk_grid(gb)
-
-        self.sb_filtration_duration = self._spin_s(
-            default=float(self.config.get("filtration_duration_s", 30.0)),
-            min_v=0.0,
-            decimals=1,
-        )
-        self.sb_filtration_pressure = self._spin_mbar(
-            default=float(self.config.get("filtration_pressure_mbar", 300.0)),
-            min_v=0.0,
-            decimals=0,
-        )
-
-        self._row(grid, 0, "Duration", self.sb_filtration_duration)
-        self._row(grid, 1, "Pressure (0 = none)", self.sb_filtration_pressure)
-
-        root.addWidget(gb)
-
-    def _build_venting(self, root: QVBoxLayout) -> None:
-        gb = self._gb("4) Venting")
-        grid = self._mk_grid(gb)
-
-        self.sb_venting_duration = self._spin_s(
-            default=float(self.config.get("venting_duration_s", 10.0)),
-            min_v=0.0,
-            decimals=1,
-        )
-
-        self._row(grid, 0, "Duration", self.sb_venting_duration)
-        root.addWidget(gb)
-
-    def _build_backwash2(self, root: QVBoxLayout) -> None:
-        gb = self._gb("5) Final Backwash (base + loss)")
-        grid = self._mk_grid(gb)
-
-        self.sb_backwash2_base_remove = self._spin_ml(
-            default=float(self.config.get("backwash2_base_remove_ml", 0.0)),
-            min_v=0.0,
-            decimals=2,
-            step=0.5,
-        )
-        self.sb_backwash2_pressure = self._spin_mbar(
-            default=float(self.config.get("backwash2_pressure_mbar", 0.0)),
-            min_v=0.0,
-            decimals=0,
-        )
-        self.sb_backwash2_max_duration = self._spin_s(
-            default=float(self.config.get("backwash2_max_duration_s", 300.0)),
-            min_v=0.0,
-            max_v=self.ranges.max_seconds,
-            decimals=1,
-            step=1.0,
-        )
-
-        self._row(grid, 0, "Base remove", self.sb_backwash2_base_remove)
-        self._row(grid, 1, "Pressure (0 = none)", self.sb_backwash2_pressure)
-        self._row(grid, 2, "Max duration", self.sb_backwash2_max_duration)
-
-        root.addWidget(gb)
-
-    def _build_controls(self, root: QVBoxLayout) -> None:
-        box = self._gb("Run")
-        lay = QHBoxLayout(box)
-        lay.setContentsMargins(10, 10, 10, 10)
-        lay.setSpacing(10)
-
-        self.btn_compute = QPushButton("Compute Filling Output")
-        self.btn_start = QPushButton("Start")
-        self.btn_ok = QPushButton("OK / Proceed")
-        self.btn_ok.setEnabled(False)
-
-        # Direct connections (avoid lambdas)
-        self.btn_compute.clicked.connect(self._on_compute_clicked)
-        self.btn_start.clicked.connect(self.start_clicked.emit)
-        self.btn_ok.clicked.connect(self.ok_clicked.emit)
-
-        lay.addWidget(self.btn_compute, 2)
-        lay.addWidget(self.btn_start, 1)
-        lay.addWidget(self.btn_ok, 1)
-
-        root.addWidget(box)
-
-    # -------------------- Public helpers --------------------
-
-    def enable_ok(self, enabled: bool) -> None:
-        self.btn_ok.setEnabled(bool(enabled))
-
-    def set_filling_outputs(
-        self,
-        *,
-        target_pct: Optional[float] = None,
-        slope_mbar_s: Optional[float] = None,
-        suggested_ramp_s: Optional[float] = None,
-    ) -> None:
-        self.lbl_fill_target_pct.setText(self._fmt_target_pct(target_pct))
-        self.lbl_fill_slope.setText(self._fmt_slope(slope_mbar_s))
-        self.lbl_fill_suggest.setText(self._fmt_suggested_ramp(suggested_ramp_s))
-
-    def params(self) -> dict:
-        return {
-            "backwash1_duration_s": float(self.sb_backwash1_duration.value()),
-            "backwash1_pressure_mbar": self._opt_zero(self.sb_backwash1_pressure.value()),
-            "filling_target_mbar": float(self.sb_fill_target.value()),
-            "filling_ramp_s": float(self.sb_fill_ramp.value()),
-            "filling_hold_s": float(self.sb_fill_hold.value()),
-            "filtration_duration_s": float(self.sb_filtration_duration.value()),
-            "filtration_pressure_mbar": self._opt_zero(self.sb_filtration_pressure.value()),
-            "venting_duration_s": float(self.sb_venting_duration.value()),
-            "backwash2_base_remove_ml": float(self.sb_backwash2_base_remove.value()),
-            "backwash2_pressure_mbar": self._opt_zero(self.sb_backwash2_pressure.value()),
-            "backwash2_max_duration_s": float(self.sb_backwash2_max_duration.value()),
-        }
-
-    # -------------------- Formatting helpers --------------------
-
-    @staticmethod
-    def _opt_zero(v: float) -> Optional[float]:
-        return None if abs(float(v)) < 1e-12 else float(v)
-
-    @staticmethod
-    def _fmt_target_pct(v: Optional[float]) -> str:
-        return "Target %: —" if v is None else f"Target %: {float(v):.3f}%"
-
-    @staticmethod
-    def _fmt_slope(v: Optional[float]) -> str:
-        return "Ramp slope: —" if v is None else f"Ramp slope: {float(v):.3f} mbar/s"
-
-    @staticmethod
-    def _fmt_suggested_ramp(v: Optional[float]) -> str:
-        return "Suggested ramp: —" if v is None else f"Suggested ramp: {float(v):.1f} s"
+    def set_running(self, running: bool):
+        widgets = [
+            self.sp_hold_pressure, self.sp_hold_max, self.sp_bw1_dur, self.sp_bw1_p,
+            self.sp_fill_t, self.sp_fill_r, self.sp_fill_h, self.sp_filt_dur,
+            self.sp_filt_p, self.sp_vent_dur, self.sp_bw2_base, self.sp_bw2_p,
+            self.sp_bw2_max
+        ]
+        for w in widgets:
+            w.setEnabled(not running)

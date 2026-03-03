@@ -1,6 +1,4 @@
-# src/config/defaults/pressure_controller.yaml
-backend: elveflow
-
+# src/config/runtime/pressure_controller.yaml
 device_name: "ASRL10::INSTR"
 regulator_types: [5, 0, 0, 0]
 

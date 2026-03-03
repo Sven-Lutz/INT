@@ -1,37 +1,38 @@
+# requirements.txt
+# PelliKAn / Little Chonker — GUI + hardware control stack
+# Notes:
+# - Pin only where hardware/protocol compatibility matters.
+# - qdarktheme is optional; keep it if you actually import it.
+
 # ==============================
 # CORE RUNTIME DEPENDENCIES
 # ==============================
 
-# Qt GUI Framework
 PySide6>=6.6
-
-# YAML configuration management
 PyYAML>=6.0
 
-# Serial communication (RS-232 / ProPar)
+# Serial comms / device protocols
 pyserial>=3.5
-
-# Bronkhorst ProPar protocol
 propar>=1.2
 
-# Optional numerical utilities (simulation, volume integration)
+# Numeric utilities (volume integration / helpers)
 numpy>=1.26
 
-# ==============================
-# LOGGING & UTILITIES
-# ==============================
+# Optional plotting / live graphs (only if your GUI uses it)
+pyqtgraph>=0.13
 
-# (stdlib logging is used — no extra package required)
+# Optional theming (only if you import it)
+qdarktheme>=2.1
 
 # ==============================
-# DEVELOPMENT & TESTING
+# DEVELOPMENT & TESTING (optional)
 # ==============================
 
 pytest>=8.0
 pytest-qt>=4.4
 
 # ==============================
-# BUILD / PACKAGING
+# BUILD / PACKAGING (optional)
 # ==============================
 
 pyinstaller>=6.0

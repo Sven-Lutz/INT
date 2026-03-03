@@ -2,59 +2,720 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+import time
+import random
+import math
+from collections import deque
+from typing import Deque, Optional, Set, Tuple
 
 import PySide6.QtWidgets as Qtw
-from PySide6.QtCore import Qt, QThread, QTimer
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtCore import (
+    QObject, QEvent, Qt, QThread, QTimer, Signal,
+    QPropertyAnimation, QByteArray, QEasingCurve, Property, QRectF
+)
+from PySide6.QtGui import (
+    QAction, QMouseEvent, QColor, QPainter, QPixmap,
+    QLinearGradient, QBrush, QPen, QRadialGradient, QPainterPath
+)
+from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtWidgets import QMessageBox, QGraphicsBlurEffect, QGraphicsOpacityEffect, QGraphicsDropShadowEffect
 
 from src.backend.core.experimentator import ExperimentConfig
 from src.gui.data import ExperimentWorker, RunParams
 from src.gui.data.parser import FillingInputs, compute_filling
 from src.gui.monitor.server import MonitorServer
+from src.gui.health import HealthEvaluator, HealthRules
+from src.gui.style.theme import apply_theme
 from src.utils.config_manager import ConfigManager
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
 
 from .frames.left_frame import LeftFrame
 from .frames.right_frame import RightFrame
 from .frames.top_frame import TopFrame
+from .frames.analysis_frame import AnalysisFrame
 
 logger = logging.getLogger(__name__)
 
+MAIN_CH = 1
+BACKWASH_CH = 2
 
+
+# =========================================================================
+# 🚀 UTILS & HELPER CLASSES
+# =========================================================================
+
+def _get_nested(d: dict, path: str, default=None):
+    cur = d
+    for key in (path or "").split("."):
+        if not isinstance(cur, dict) or key not in cur: return default
+        cur = cur[key]
+    return cur
+
+
+def _first_present(*vals, default=None):
+    for v in vals:
+        if v is not None: return v
+    return default
+
+
+# =========================================================================
+# 🚀 GLOBAL INPUT FILTER
+# =========================================================================
+class _GlobalInputFilter(QObject):
+    hold_started = Signal()
+    hold_stopped = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._space_down = False
+        self.main_window = parent
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseMove:
+            if hasattr(self.main_window, 'hud') and self.main_window.hud.isVisible():
+                pos = event.globalPosition()
+                w = self.main_window.width()
+                h = self.main_window.height()
+                if w > 0 and h > 0:
+                    dx = (w / 2 - pos.x()) / (w / 2)
+                    dy = (h / 2 - pos.y()) / (h / 2)
+                    self.main_window.hud.target_dx = dx * 20
+                    self.main_window.hud.target_dy = dy * 20
+
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Space and not event.isAutoRepeat():
+            if not self._space_down:
+                self._space_down = True
+                self.hold_started.emit()
+            return True
+        if event.type() == QEvent.KeyRelease and event.key() == Qt.Key_Space and not event.isAutoRepeat():
+            if self._space_down:
+                self._space_down = False
+                self.hold_stopped.emit()
+            return True
+        return False
+
+    def force_release(self):
+        if self._space_down:
+            self._space_down = False
+            self.hold_stopped.emit()
+
+
+class CustomTitleBar(Qtw.QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(32)
+        self.setStyleSheet("background-color: #050914; border-bottom: 1px solid #1F2937;")
+        lay = Qtw.QHBoxLayout(self)
+        lay.setContentsMargins(14, 0, 0, 0)
+
+        lbl_title = Qtw.QLabel("LITTLE CHONKER // COMMAND NODE")
+        lbl_title.setStyleSheet(
+            "color: #64748B; font-size: 11px; font-weight: bold; letter-spacing: 1.5px; border: none;")
+        lay.addWidget(lbl_title)
+        lay.addStretch(1)
+
+        btn_style = "QPushButton { background: transparent; border: none; color: #64748B; font-size: 16px; } QPushButton:hover { background: #111827; color: #F8FAFC; }"
+        close_style = "QPushButton { background: transparent; border: none; color: #64748B; font-size: 16px; } QPushButton:hover { background: #FF1744; color: #F8FAFC; }"
+
+        self.btn_min = Qtw.QPushButton("—")
+        self.btn_min.setFixedSize(46, 32)
+        self.btn_min.setStyleSheet(btn_style)
+        self.btn_min.clicked.connect(self.window().showMinimized)
+
+        self.btn_max = Qtw.QPushButton("◻")
+        self.btn_max.setFixedSize(46, 32)
+        self.btn_max.setStyleSheet(btn_style)
+        self.btn_max.clicked.connect(self._toggle_maximize)
+
+        self.btn_close = Qtw.QPushButton("✕")
+        self.btn_close.setFixedSize(46, 32)
+        self.btn_close.setStyleSheet(close_style)
+        self.btn_close.clicked.connect(self.window().close)
+
+        lay.addWidget(self.btn_min)
+        lay.addWidget(self.btn_max)
+        lay.addWidget(self.btn_close)
+        self._drag_pos = None
+
+    def _toggle_maximize(self):
+        if self.window().isMaximized():
+            self.window().showNormal()
+            self.btn_max.setText("◻")
+        else:
+            self.window().showMaximized()
+            self.btn_max.setText("❐")
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint()
+            event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        if self._drag_pos is not None:
+            delta = event.globalPosition().toPoint() - self._drag_pos
+            self.window().move(self.window().pos() + delta)
+            self._drag_pos = event.globalPosition().toPoint()
+            event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        self._drag_pos = None
+        event.accept()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            self._toggle_maximize()
+            event.accept()
+
+
+# =========================================================================
+# 🚀 SCHOCKWELLEN EFFEKT 🚀
+# =========================================================================
+class ShockwaveOverlay(Qtw.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._radius = 0.0
+        self._opacity = 0.0
+
+    def get_radius(self): return self._radius
+
+    def set_radius(self, v): self._radius = v; self.update()
+
+    radius = Property(float, get_radius, set_radius)
+
+    def get_opacity(self): return self._opacity
+
+    def set_opacity(self, v): self._opacity = v; self.update()
+
+    op = Property(float, get_opacity, set_opacity)
+
+    def start_pulse(self):
+        self.anim_group = QPropertyAnimation(self, b"radius")
+        self.anim_group.setDuration(1200)
+        self.anim_group.setStartValue(0)
+        self.anim_group.setEndValue(max(self.width(), self.height()) * 1.5)
+        self.anim_group.setEasingCurve(QEasingCurve.OutCubic)
+
+        self.anim_op = QPropertyAnimation(self, b"op")
+        self.anim_op.setDuration(1200)
+        self.anim_op.setStartValue(1.0)
+        self.anim_op.setEndValue(0.0)
+        self.anim_op.setEasingCurve(QEasingCurve.OutQuad)
+
+        self.anim_group.start()
+        self.anim_op.start()
+
+    def paintEvent(self, e):
+        if self._opacity > 0 and self._radius > 0:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setOpacity(self._opacity)
+            p.setPen(QPen(QColor(0, 229, 255, 150), 30))
+            p.drawEllipse(QRectF(self.width() / 2 - self._radius, self.height() / 2 - self._radius, self._radius * 2,
+                                 self._radius * 2))
+            p.setPen(QPen(QColor(255, 255, 255, 255), 4))
+            p.drawEllipse(QRectF(self.width() / 2 - self._radius, self.height() / 2 - self._radius, self._radius * 2,
+                                 self._radius * 2))
+            p.end()
+
+
+# =========================================================================
+# 🚀 HOLOGRAPHISCHE CRT SCANLINES (OHNE EIGENEN TIMER) 🚀
+# =========================================================================
+class ScanlineOverlay(Qtw.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.pix = QPixmap(10, 8)
+        self.pix.fill(Qt.transparent)
+        p = QPainter(self.pix)
+        p.setPen(QColor(0, 229, 255, 20))
+        p.drawLine(0, 0, 10, 0)
+        p.end()
+        self._offset = 0
+
+    def tick(self):
+        # Wird vom Master-Timer aufgerufen!
+        self._offset = (self._offset + 1) % 8
+        self.update()
+
+    def paintEvent(self, e):
+        if self.width() > 0 and self.height() > 0:
+            p = QPainter(self)
+            p.drawTiledPixmap(0, self._offset, self.width(), self.height(), self.pix)
+            p.end()
+
+
+# =========================================================================
+# 🚀 DATEN-PARTIKEL & DER KANTIGE "BÖSE" PELLIKAN 🚀
+# =========================================================================
+class Particle:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.start_x = x
+        self.vy = random.uniform(-1.0, -3.0)
+        self.size = random.uniform(3, 7)
+        base_color = random.choice(["#FFFFFF", "#00E5FF", "#EC4899", "#8B5CF6", "#00FF66"])
+        self.color = QColor(base_color)
+        self.color.setAlpha(random.randint(150, 255))
+        self.phase = random.uniform(0, math.pi * 2)
+        self.speed = random.uniform(0.05, 0.15)
+        self.drift = random.uniform(-0.5, 0.5)
+
+
+class LiquidPelicanWidget(Qtw.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(500, 380)
+        self._fill_lvl = 0.0
+        self._phase = 0.0
+        self.particles = []
+
+        polygons = """
+        <polygon points="130,60 145,55 195,80 140,90 120,80" />
+        <polygon points="120,80 110,110 60,110 80,75" />
+        <polygon points="80,75 30,10 50,55 65,85" />
+        <polygon points="65,85 20,40 45,75 60,95" />
+        <polygon points="60,110 30,125 40,130 75,115" />
+        """
+
+        svg_empty = f"""
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 150">
+          <g stroke="#1E293B" stroke-width="2" fill="none" stroke-linejoin="round">
+            {polygons}
+          </g>
+        </svg>
+        """
+
+        svg_full = f"""
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 150">
+          <defs>
+            <linearGradient id="vibrantGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+              <stop offset="0%" style="stop-color:#EC4899;stop-opacity:0.95" />
+              <stop offset="40%" style="stop-color:#8B5CF6;stop-opacity:0.95" />
+              <stop offset="70%" style="stop-color:#00E5FF;stop-opacity:0.95" />
+              <stop offset="100%" style="stop-color:#00FF66;stop-opacity:0.95" />
+            </linearGradient>
+          </defs>
+          <g stroke="#00E5FF" stroke-width="2.5" fill="url(#vibrantGrad)" stroke-linejoin="round">
+            {polygons}
+          </g>
+        </svg>
+        """
+
+        svg_mask = f"""
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 150">
+          <g stroke="#FFFFFF" stroke-width="2.5" fill="#FFFFFF" stroke-linejoin="round">
+            {polygons}
+          </g>
+        </svg>
+        """
+
+        self.pix_empty = QPixmap(self.size());
+        self.pix_empty.fill(Qt.transparent)
+        QSvgRenderer(QByteArray(svg_empty.encode())).render(QPainter(self.pix_empty))
+
+        self.pix_full = QPixmap(self.size());
+        self.pix_full.fill(Qt.transparent)
+        QSvgRenderer(QByteArray(svg_full.encode())).render(QPainter(self.pix_full))
+
+        self.pix_mask = QPixmap(self.size());
+        self.pix_mask.fill(Qt.transparent)
+        QSvgRenderer(QByteArray(svg_mask.encode())).render(QPainter(self.pix_mask))
+
+        self.anim = QPropertyAnimation(self, b"fill_level")
+
+    def get_fill(self) -> float:
+        return self._fill_lvl
+
+    def set_fill(self, val: float):
+        self._fill_lvl = val
+        self.update()
+
+    fill_level = Property(float, get_fill, set_fill)
+
+    def target_fill(self, duration: int):
+        self.anim.stop()
+        self.anim.setDuration(duration)
+        self.anim.setStartValue(self._fill_lvl)
+        self.anim.setEndValue(1.0)
+        self.anim.setEasingCurve(QEasingCurve.InOutQuad)
+        self.anim.start()
+
+    def update_physics(self):
+        # Wird vom Master-Timer aufgerufen!
+        self._phase += 0.1
+        if self._fill_lvl <= 0.01 or not self.isVisible(): return
+
+        y_base = self.height() * (1.0 - self._fill_lvl)
+
+        if len(self.particles) < 80:  # Weniger Partikel, bessere Performance
+            spawn_rate = 4 if self._fill_lvl < 1.0 else 1
+            for _ in range(spawn_rate):
+                if random.random() < 0.5:
+                    px = random.uniform(60, 440)
+                    py = random.uniform(y_base + 30, self.height() - 20)
+                    self.particles.append(Particle(px, py))
+
+        alive = []
+        for p in self.particles:
+            p.x = p.start_x + math.sin(p.phase + p.y * p.speed) * 10 + p.drift
+            p.y += p.vy
+            wave_y = y_base + math.sin((p.x * 0.02) + self._phase) * 10
+            if p.y > wave_y:
+                alive.append(p)
+
+        self.particles = alive
+        self.update()
+
+    def paintEvent(self, event):
+        if self.width() <= 0 or self.height() <= 0: return
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+
+        p.drawPixmap(0, 0, self.pix_empty)
+        if self._fill_lvl <= 0.0:
+            p.end()
+            return
+
+        y_base = self.height() * (1.0 - self._fill_lvl)
+
+        clip_path = QPainterPath()
+        clip_path.moveTo(0, self.height())
+        clip_path.lineTo(0, y_base)
+        for x in range(0, self.width() + 10, 20):  # Optimierte Welle
+            wave_y = y_base + math.sin((x * 0.02) + self._phase) * 10
+            clip_path.lineTo(x, wave_y)
+        clip_path.lineTo(self.width(), self.height())
+        clip_path.closeSubpath()
+
+        p.save()
+        p.setClipPath(clip_path)
+        p.drawPixmap(0, 0, self.pix_full)
+
+        part_layer = QPixmap(self.size())
+        part_layer.fill(Qt.transparent)
+        pp = QPainter(part_layer)
+        pp.setRenderHint(QPainter.Antialiasing)
+
+        pp.setPen(Qt.NoPen)
+        for pt in self.particles:
+            grad = QRadialGradient(pt.x, pt.y, pt.size)
+            grad.setColorAt(0.0, QColor(255, 255, 255, 255))
+            grad.setColorAt(0.4, pt.color)
+            grad.setColorAt(1.0, QColor(pt.color.red(), pt.color.green(), pt.color.blue(), 0))
+            pp.setBrush(QBrush(grad))
+            pp.drawEllipse(QRectF(pt.x - pt.size * 1.5, pt.y - pt.size * 1.5, pt.size * 3, pt.size * 3))
+
+        pp.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+        pp.drawPixmap(0, 0, self.pix_mask)
+        pp.end()
+
+        p.setCompositionMode(QPainter.CompositionMode_Plus)
+        p.drawPixmap(0, 0, part_layer)
+        p.restore()
+
+        if 0.01 < self._fill_lvl < 0.99:
+            surface_path = QPainterPath()
+            surface_path.moveTo(0, y_base + math.sin(self._phase) * 10)
+            for x in range(0, self.width() + 10, 20):
+                wave_y = y_base + math.sin((x * 0.02) + self._phase) * 10
+                surface_path.lineTo(x, wave_y)
+
+            p.setCompositionMode(QPainter.CompositionMode_Plus)
+            p.setPen(QPen(QColor(236, 72, 153, 90), 12, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            p.drawPath(surface_path)
+            p.setPen(QPen(QColor(255, 255, 255), 2))
+            p.drawPath(surface_path)
+
+        p.end()
+
+
+# =========================================================================
+# 🚀 THE DIRECTOR's CUT HUD (MASTER TIMER ARCHITEKTUR) 🚀
+# =========================================================================
+class PelicanHUD(Qtw.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+        self.target_dx = 0.0
+        self.target_dy = 0.0
+        self.current_dx = 0.0
+        self.current_dy = 0.0
+
+        self.box = Qtw.QFrame(self)
+        self.box.setFixedSize(650, 520)
+        self.box.setStyleSheet("""
+            QFrame {
+                background-color: rgba(5, 9, 20, 230); 
+                border: 2px solid rgba(236, 72, 153, 60); 
+                border-radius: 12px;
+            }
+        """)
+
+        self.scanlines = ScanlineOverlay(self.box)
+        self.scanlines.setFixedSize(650, 520)
+
+        # Kinetische Telemetrie
+        self.tel_locked = False
+        tel_style = "color: #0284C7; font-family: 'Consolas'; font-size: 10px; font-weight: bold; background: transparent; border: none;"
+
+        self.tel_tl = Qtw.QLabel(self.box);
+        self.tel_tl.setStyleSheet(tel_style);
+        self.tel_tl.move(25, 25)
+        self.tel_tr = Qtw.QLabel(self.box);
+        self.tel_tr.setStyleSheet(tel_style);
+        self.tel_tr.move(530, 25)
+        self.tel_bl = Qtw.QLabel(self.box);
+        self.tel_bl.setStyleSheet(tel_style);
+        self.tel_bl.move(25, 480)
+        self.tel_br = Qtw.QLabel(self.box);
+        self.tel_br.setStyleSheet(tel_style);
+        self.tel_br.move(530, 480)
+
+        box_lay = Qtw.QVBoxLayout(self.box)
+        box_lay.setContentsMargins(75, 60, 75, 60)
+        box_lay.setSpacing(25)
+
+        self.logo = LiquidPelicanWidget()
+
+        self.title = Qtw.QLabel("PELLIKAN // OS")
+        self.title.setStyleSheet(
+            "color: #F8FAFC; font-family: 'Consolas', monospace; font-size: 32px; font-weight: 900; letter-spacing: 12px; background: transparent; border: none;")
+        self.title.setAlignment(Qt.AlignCenter)
+
+        self.bar = Qtw.QProgressBar()
+        self.bar.setFixedSize(500, 4)
+        self.bar.setTextVisible(False)
+        self.bar.setStyleSheet("""
+            QProgressBar { background: rgba(17, 24, 39, 200); border: none; } 
+            QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #EC4899, stop:0.4 #8B5CF6, stop:0.7 #00E5FF, stop:1 #00FF66); }
+        """)
+
+        self.status = Qtw.QLabel("")
+        self.status.setStyleSheet(
+            "color: #00E5FF; font-family: 'Consolas', monospace; font-size: 13px; font-weight: bold; letter-spacing: 2px; background: transparent; border: none;")
+        self.status.setAlignment(Qt.AlignCenter)
+
+        box_lay.addWidget(self.logo, 0, Qt.AlignCenter)
+        box_lay.addWidget(self.title, 0, Qt.AlignCenter)
+        box_lay.addWidget(self.bar, 0, Qt.AlignCenter)
+        box_lay.addWidget(self.status, 0, Qt.AlignCenter)
+
+        self.op_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.op_effect)
+        self.op_effect.setOpacity(0.0)
+
+        self.anim_fade_in = QPropertyAnimation(self.op_effect, b"opacity")
+        self.anim_fade_in.setDuration(1000)
+        self.anim_fade_in.setStartValue(0.0)
+        self.anim_fade_in.setEndValue(1.0)
+        self.anim_fade_in.setEasingCurve(QEasingCurve.OutCubic)
+
+        # 🚀 DER MASTER TIMER (Sichert die Performance) 🚀
+        self._master_timer = QTimer(self)
+        self._master_timer.timeout.connect(self._master_tick)
+        self._master_tick_counter = 0
+
+        self._tw_target = ""
+        self._tw_current = ""
+        self._tw_idx = 0
+        self._cursor_visible = True
+
+    def play_intro(self):
+        self.anim_fade_in.start()
+        # Starte den Heartbeat mit stabilen 30fps
+        self._master_timer.start(33)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.box.move(int((self.width() - self.box.width()) / 2), int((self.height() - self.box.height()) / 2))
+
+    def _master_tick(self):
+        self._master_tick_counter += 1
+
+        # 1. Update Parallax (Jeden Tick)
+        self.current_dx += (self.target_dx - self.current_dx) * 0.1
+        self.current_dy += (self.target_dy - self.current_dy) * 0.1
+
+        w, h = self.width(), self.height()
+        if w > 100 and h > 100:
+            base_x = (w - self.box.width()) / 2
+            base_y = (h - self.box.height()) / 2
+            self.box.move(int(base_x + self.current_dx), int(base_y + self.current_dy))
+
+        # 2. Update Pelican Physics (Jeden Tick)
+        self.logo.update_physics()
+
+        # 3. Update Scanlines (Jeden 2. Tick)
+        if self._master_tick_counter % 2 == 0:
+            self.scanlines.tick()
+
+        # 4. Update Telemetry (Jeden 3. Tick)
+        if self._master_tick_counter % 3 == 0 and not self.tel_locked:
+            self.tel_tl.setText(f"MEM: 0x{random.randint(0x1000, 0xFFFF):04X}")
+            self.tel_tr.setText(f"FLOW: {random.uniform(0, 9.99):.3f}")
+            self.tel_bl.setText(f"INT: {random.uniform(90, 99.9):.2f}%")
+            self.tel_br.setText(f"NET: {random.randint(10, 99)}ms")
+
+        # 5. Update Typewriter (Jeden Tick)
+        if self._tw_idx < len(self._tw_target):
+            self._tw_current += self._tw_target[self._tw_idx]
+            self._tw_idx += 1
+            self._render_text()
+
+        # 6. Blink Cursor (Jeden 10. Tick)
+        if self._master_tick_counter % 10 == 0:
+            self._cursor_visible = not self._cursor_visible
+            self._render_text()
+
+    def lock_telemetry(self):
+        self.tel_locked = True
+        self.tel_tl.setText("MEM: [LOCKED]")
+        self.tel_tr.setText("FLOW: [STABLE]")
+        self.tel_bl.setText("INT: [100%]")
+        self.tel_br.setText("NET: [SECURE]")
+
+    def _render_text(self):
+        cursor = " █" if self._cursor_visible else "  "
+        self.status.setText(self._tw_current + cursor)
+
+    def start_smooth_fill(self, duration: int):
+        self.anim_bar = QPropertyAnimation(self.bar, b"value")
+        self.anim_bar.setDuration(duration)
+        self.anim_bar.setStartValue(0)
+        self.anim_bar.setEndValue(100)
+        self.anim_bar.setEasingCurve(QEasingCurve.InOutQuad)
+        self.anim_bar.start()
+        self.logo.target_fill(duration)
+        QTimer.singleShot(duration, self.lock_telemetry)
+
+    def update_text(self, text):
+        self._tw_target = text.upper()
+        self._tw_current = ""
+        self._tw_idx = 0
+
+    def stop(self):
+        self._master_timer.stop()
+
+
+# =========================================================================
+# 🚀 MAIN WINDOW (MIT GRIDLAYOUT Z-ORDER FIX) 🚀
+# =========================================================================
 class MainWindow(Qtw.QMainWindow):
-    """
-    Main GUI window.
-    - Uses src.utils.path_utils to resolve project root and logs directory.
-    - LeftFrame computes filling outputs locally; MainWindow keeps in sync debounced.
-    - Robust error handling: filling compute never crashes UI.
-    - Deterministic thread lifecycle cleanup.
-    """
-
     FILLING_DEBOUNCE_MS = 200
+    REALTIME_POLL_MS = 200
+    HOLD_SETPOINT_RATE_MS = 100
+    DEFAULT_TREND_WINDOW_S = 3.0
+    DEFAULT_TREND_DEADBAND = 2.0
+    HISTORY_MAX_SECONDS = 8.0
+    MANUAL_STATE_LOG_THROTTLE_S = 2.0
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Little Chonker")
-        self.resize(980, 700)
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
+        self.showMaximized()
+        self.setMouseTracking(True)
 
-        # -------- config --------
+        self.central_bg = Qtw.QWidget()
+        self.central_bg.setMouseTracking(True)
+        self.setCentralWidget(self.central_bg)
+
+        # 🚀 DER ULTIMATIVE Z-ORDER FIX: QGridLayout auf (0,0) 🚀
+        self.master_grid = Qtw.QGridLayout(self.central_bg)
+        self.master_grid.setContentsMargins(0, 0, 0, 0)
+
+        # ----------------------------------------------------
+        # SCHICHT 0: DASHBOARD
+        # ----------------------------------------------------
+        self.main_container = Qtw.QWidget()
+        self.main_container.setMouseTracking(True)
+        self.main_layout = Qtw.QVBoxLayout(self.main_container)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+
+        self.title_bar = CustomTitleBar(self)
+        self.main_layout.addWidget(self.title_bar)
+
+        content_wrapper = Qtw.QWidget()
+        content_wrapper.setMouseTracking(True)
+        content_layout = Qtw.QVBoxLayout(content_wrapper)
+        content_layout.setContentsMargins(8, 8, 8, 8)
+        content_layout.setSpacing(0)
+
+        try:
+            self.setStatusBar(Qtw.QStatusBar(self))
+            self.statusBar().setStyleSheet(
+                "QStatusBar { background: transparent; color: #64748B; font-family: 'Consolas', monospace; font-weight: bold; border: none; font-size: 11px; }")
+        except Exception:
+            pass
+
         self.cfg_manager = ConfigManager()
-        self.config = self.cfg_manager.load_config("general")
+        self.config = self.cfg_manager.load_config("general") or {}
 
-        # -------- UI root --------
-        central = Qtw.QWidget()
-        self.setCentralWidget(central)
+        self.dev = None
+        self._simulation_mode = False
+        self._last_valve_state: Optional[str] = None
+        self._init_device_manager_best_effort()
 
-        layout = Qtw.QVBoxLayout(central)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        self._thread: Optional[QThread] = None
+        self._worker: Optional[ExperimentWorker] = None
+        self._current_step: str = "IDLE"
+        self._hold_active: bool = False
+        self._hold_sources: Set[str] = set()
+        self._hold_last_pressure_mbar: Optional[float] = None
+        self._last_good_comm_ts: Optional[float] = None
+        self._is_booting = True
 
-        self.top = TopFrame(self.config)
-        self.left = LeftFrame(self.config)
-        self.right = RightFrame(self.config)
+        health_cfg = _get_nested(self.config, "health", {})
+        if not isinstance(health_cfg, dict): health_cfg = {}
 
-        layout.addWidget(self.top)
+        full_scale_default = float(self.config.get("pressure_full_scale_mbar", 8000.0) or 8000.0)
+        alarm_default = float(
+            health_cfg.get("pressure_alarm_mbar") or self.config.get("pressure_alarm_mbar") or full_scale_default)
+
+        self._health = HealthEvaluator(
+            HealthRules(
+                idle_pressure_warn_mbar=float(_first_present(health_cfg.get("idle_pressure_warn_mbar"),
+                                                             self.config.get("idle_pressure_warn_mbar"),
+                                                             default=200.0)),
+                pressure_alarm_mbar=float(alarm_default),
+                flow_low_warn=_first_present(health_cfg.get("flow_low_warn"), self.config.get("flow_low_warn"),
+                                             default=0.05),
+                comm_timeout_s=float(
+                    _first_present(health_cfg.get("comm_timeout_s"), self.config.get("comm_timeout_s"), default=2.0)),
+            )
+        )
+
+        self._last_error_short = ""
+        self._last_error_full = ""
+        self._safe_state_forced = False
+        self._rt_p1 = self._rt_p2 = self._rt_flow = self._rt_valves = None
+        self._p1_hist: Deque[Tuple[float, float]] = deque(maxlen=256)
+        self._p2_hist: Deque[Tuple[float, float]] = deque(maxlen=256)
+        self._last_trend_mode: Tuple[bool, bool, str, str] = (False, False, "—", "—")
+        self._last_manual_state_fp = None
+        self._last_manual_state_log_ts: float = 0.0
+
+        self.tabs = Qtw.QTabWidget()
+        self.tabs.setMouseTracking(True)
+        content_layout.addWidget(self.tabs)
+        self.main_layout.addWidget(content_wrapper)
+
+        self.tab_live = Qtw.QWidget()
+        self.tab_live.setProperty("surface", "panel")
+        layout_live = Qtw.QVBoxLayout(self.tab_live)
+        layout_live.setContentsMargins(8, 12, 8, 8)
+        layout_live.setSpacing(10)
+
+        self.top = self._construct_frame(TopFrame, self.config)
+        self.left = self._construct_frame(LeftFrame, self.config)
+        self.right = self._construct_frame(RightFrame, self.config)
+
+        layout_live.addWidget(self.top)
 
         left_scroll = Qtw.QScrollArea()
         left_scroll.setWidgetResizable(True)
@@ -66,147 +727,168 @@ class MainWindow(Qtw.QMainWindow):
         splitter.setChildrenCollapsible(False)
         splitter.addWidget(left_scroll)
         splitter.addWidget(self.right)
-        splitter.setSizes([560, 380])
-        layout.addWidget(splitter, 1)
+        splitter.setSizes(_get_nested(self.config, "ui.splitter_sizes", [450, 750]))
 
-        # -------- worker thread --------
-        self._thread: Optional[QThread] = None
-        self._worker: Optional[ExperimentWorker] = None
+        layout_live.addWidget(splitter, 1)
+        self.tabs.addTab(self.tab_live, "LIVE CONTROL")
 
-        # -------- filling debounce --------
+        self.tab_analysis = AnalysisFrame()
+        self.tabs.addTab(self.tab_analysis, "RUN ANALYSIS")
+
+        apply_theme(self, "dark")
+
+        self.master_grid.addWidget(self.main_container, 0, 0)  # EBENE 0
+
+        # ----------------------------------------------------
+        # SCHICHT 1: EISSCHICHT
+        # ----------------------------------------------------
+        self.frozen_overlay = Qtw.QWidget()
+        self.frozen_overlay.setStyleSheet("background-color: rgba(2, 6, 23, 220);")
+        self.frozen_overlay.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.overlay_op = QGraphicsOpacityEffect(self.frozen_overlay)
+        self.frozen_overlay.setGraphicsEffect(self.overlay_op)
+
+        self.master_grid.addWidget(self.frozen_overlay, 0, 0)  # EBENE 1
+
+        # ----------------------------------------------------
+        # SCHICHT 2: SCHOCKWELLE
+        # ----------------------------------------------------
+        self.shockwave = ShockwaveOverlay()
+        self.shockwave.hide()
+
+        self.master_grid.addWidget(self.shockwave, 0, 0)  # EBENE 2
+
+        # ----------------------------------------------------
+        # SCHICHT 3: HUD OVERLAY (UNANTASTBAR GANZ OBEN)
+        # ----------------------------------------------------
+        self.hud = PelicanHUD()
+        self.hud.setMouseTracking(True)
+
+        self.master_grid.addWidget(self.hud, 0, 0)  # EBENE 3
+
+        self.left.setEnabled(False)
+        self.right.btn_start.setEnabled(False)
+
+        # System Timers
         self._fill_timer = QTimer(self)
         self._fill_timer.setSingleShot(True)
         self._fill_timer.timeout.connect(self._on_fill_timer_timeout)
 
-        # -------- monitor --------
+        # Polling erst starten, wenn der Screen da ist!
+        self._rt_timer = QTimer(self)
+        self._rt_timer.timeout.connect(self._poll_realtime)
+
+        self._hold_setpoint_timer = QTimer(self)
+        self._hold_setpoint_timer.setSingleShot(True)
+        self._hold_setpoint_timer.timeout.connect(self._push_hold_setpoint_now)
+
         self.monitor: Optional[MonitorServer] = None
         self._start_monitor()
 
-        # -------- signals --------
-        self.left.start_clicked.connect(self._start_experiment)
-        self.left.ok_clicked.connect(self._send_ok)
+        self._global_filter = _GlobalInputFilter(self)
+        app = Qtw.QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self._global_filter)
+            self._global_filter.hold_started.connect(self._on_space_pressed)
+            self._global_filter.hold_stopped.connect(self._on_space_released)
 
-        # LeftFrame already computes locally; we use this only to keep MainWindow-side compute in sync (debounced)
-        self.left.compute_clicked.connect(self._schedule_filling_compute)
-
-        self._apply_style()
-
-        # Initial compute (silent; safe even if LeftFrame already did it)
-        self._compute_filling_ui(silent=True)
-
-    # ---------------- UI styling ----------------
-
-    def _apply_style(self) -> None:
-        self.setStyleSheet(
-            "QMainWindow { background: #f6f7fb; }"
-            "QGroupBox { background: white; border: 1px solid #e5e7eb; border-radius: 10px; margin-top: 8px; }"
-            "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 6px; }"
-            "QScrollArea { background: transparent; }"
-            "QFrame { background: transparent; }"
-        )
-
-    # ---------------- Monitor ----------------
-
-    def _start_monitor(self) -> None:
-        enabled = bool(self.config.get("monitor_enabled", True))
-        if not enabled:
-            return
-
-        host = str(self.config.get("monitor_host", "0.0.0.0"))
-        port = int(self.config.get("monitor_port", 8765))
+        self.right.start_clicked.connect(self._start_experiment)
+        self.right.ok_clicked.connect(self._send_ok)
+        self.right.stop_clicked.connect(self._abort_run)
+        self.right.manual_vent_clicked.connect(self._request_manual_vent)
+        self.left.btn_hold.hold_started.connect(lambda: self._hold_source_set("mouse", True))
+        self.left.btn_hold.hold_ended.connect(lambda: self._hold_source_set("mouse", False))
 
         try:
-            self.monitor = MonitorServer(host=host, port=port)
-            self.monitor.start()
-            try:
-                self.right.set_qr_url(self.monitor.url())
-            except Exception:
-                logger.exception("Monitor started, but RightFrame.set_qr_url failed.")
+            self.left.params_changed.connect(self._schedule_filling_compute)
+            self.left.params_changed.connect(lambda p: self.right.set_base_remove_ml(p.backwash2_base_remove_ml))
+            self.left.sp_hold_pressure.valueChanged.connect(self._schedule_hold_setpoint_push)
         except Exception:
-            logger.exception("Monitor start failed (host=%s, port=%s). Disabling monitor.", host, port)
-            self.monitor = None
+            pass
 
-    # ---------------- Filling helper ----------------
-
-    def _on_fill_timer_timeout(self) -> None:
         self._compute_filling_ui(silent=True)
+        self._set_running_ui(False, reason="init")
+        self._render_manual_state(reason="init")
+        self._update_health_banner()
 
-    def _schedule_filling_compute(self, *args, **kwargs) -> None:
-        self._fill_timer.start(self.FILLING_DEBOUNCE_MS)
+        # Startverzögerung für sauberen Fensteraufbau
+        QTimer.singleShot(100, self.hud.play_intro)
+        QTimer.singleShot(1000, self._play_boot_sequence)
 
-    def _compute_filling_ui(self, *, silent: bool = False) -> None:
-        """
-        Compute filling outputs purely from UI values (no hardware).
-        This is a UI consistency feature; LeftFrame also computes locally.
-        """
-        try:
-            target_sb = getattr(self.left, "sb_fill_target", None)
-            ramp_sb = getattr(self.left, "sb_fill_ramp", None)
-            hold_sb = getattr(self.left, "sb_fill_hold", None)
-            if target_sb is None or ramp_sb is None or hold_sb is None:
-                return
+    # =========================================================================
+    # 🚀 COLD BOOT SEQUENCE 🚀
+    # =========================================================================
+    def _play_boot_sequence(self):
+        duration = 8000
+        self.hud.start_smooth_fill(duration)
 
-            inputs = FillingInputs(
-                target_mbar=float(target_sb.value()),
-                ramp_s=float(ramp_sb.value()),
-                hold_s=float(hold_sb.value()),
-            )
+        steps = [
+            ("Initializing Quantum Core", 0, "#64748B"),
+            ("Energizing Containment Field", 1500, "#EC4899"),
+            ("Calibrating Flow Dynamics", 3000, "#8B5CF6"),
+            (f"Sim-Link: {'ACTIVE' if self._simulation_mode else 'OFF'}", 4500, "#00E5FF"),
+            ("Verifying Data Integrity", 6000, "#00E5FF"),
+            ("System Online", 7500, "#00E676")
+        ]
 
-            full_scale = float(self.config.get("pressure_full_scale_mbar", 8000.0))
-            if full_scale <= 0:
-                full_scale = 8000.0
+        for text, delay, col in steps:
+            QTimer.singleShot(delay, lambda t=text, c=col: self._boot_step_text(t, c))
 
-            comp = compute_filling(inputs, full_scale_mbar=full_scale)
+        QTimer.singleShot(duration + 1200, self._finish_boot)
 
-            if hasattr(self.left, "set_filling_outputs"):
-                self.left.set_filling_outputs(
-                    target_pct=float(comp.target_pct),
-                    slope_mbar_s=float(comp.slope_mbar_per_s),
-                    suggested_ramp_s=float(comp.suggested_ramp_s),
-                )
-            else:
-                getattr(self.left, "lbl_fill_target_pct").setText(f"Target %: {comp.target_pct:.3f}%")
-                getattr(self.left, "lbl_fill_slope").setText(f"Ramp slope: {comp.slope_mbar_per_s:.3f} mbar/s")
-                getattr(self.left, "lbl_fill_suggest").setText(f"Suggested ramp: {comp.suggested_ramp_s:.1f} s")
+    def _boot_step_text(self, text, col):
+        self.hud.update_text(text)
+        self.right.append_log(f"=> {text.upper()}", col)
 
-        except Exception as e:
-            logger.exception("Filling compute failed.")
-            try:
-                if hasattr(self.left, "set_filling_outputs"):
-                    self.left.set_filling_outputs(target_pct=None, slope_mbar_s=None, suggested_ramp_s=None)
-                else:
-                    getattr(self.left, "lbl_fill_target_pct").setText("Target %: —")
-                    getattr(self.left, "lbl_fill_slope").setText("Ramp slope: —")
-                    getattr(self.left, "lbl_fill_suggest").setText("Suggested ramp: —")
-            except Exception:
-                pass
+    def _finish_boot(self):
+        self._is_booting = False
+        self.hud.stop()  # Beendet den Master Timer, spart sofort CPU
 
-            if not silent:
-                QMessageBox.critical(self, "Compute error", str(e))
+        self.shockwave.show()
+        self.shockwave.start_pulse()
 
-    # ---------------- Experiment config ----------------
+        self.fade_hud = QPropertyAnimation(self.hud.op_effect, b"opacity")
+        self.fade_hud.setDuration(800)
+        self.fade_hud.setStartValue(1.0)
+        self.fade_hud.setEndValue(0.0)
 
+        self.fade_overlay = QPropertyAnimation(self.overlay_op, b"opacity")
+        self.fade_overlay.setDuration(1200)
+        self.fade_overlay.setStartValue(1.0)
+        self.fade_overlay.setEndValue(0.0)
+
+        self.fade_hud.finished.connect(self.hud.hide)
+        self.fade_overlay.finished.connect(self.frozen_overlay.hide)
+        self.fade_overlay.finished.connect(self.shockwave.hide)
+
+        self.fade_hud.start()
+        self.fade_overlay.start()
+
+        self.left.setEnabled(True)
+        self.right.btn_start.setEnabled(True)
+        self.right.append_log("PELLIKAN OS ONLINE.", "#00E676")
+
+        if self._simulation_mode:
+            self.right.append_log(">>> WARNING: RUNNING IN VIRTUAL SIMULATION MODE <<<", "#F59E0B")
+
+        # Jetzt erst fangen wir an, die Sensoren aktiv abzufragen!
+        self._rt_timer.start(self.REALTIME_POLL_MS)
+
+    def _on_space_pressed(self):
+        if self.left.btn_hold.isEnabled():
+            self._hold_source_set("space", True)
+
+    def _on_space_released(self):
+        self._hold_source_set("space", False)
+
+    # =========================================================================
+    # Hardware Worker Integration
+    # =========================================================================
     def _read_run_params(self) -> RunParams:
-        p = self.left.params()
-        return RunParams(
-            backwash1_duration_s=float(p["backwash1_duration_s"]),
-            backwash1_pressure_mbar=p["backwash1_pressure_mbar"],
-            filling_target_mbar=float(p["filling_target_mbar"]),
-            filling_ramp_s=float(p["filling_ramp_s"]),
-            filling_hold_s=float(p["filling_hold_s"]),
-            filtration_duration_s=float(p["filtration_duration_s"]),
-            filtration_pressure_mbar=p["filtration_pressure_mbar"],
-            venting_duration_s=float(p["venting_duration_s"]),
-            backwash2_base_remove_ml=float(p["backwash2_base_remove_ml"]),
-            backwash2_pressure_mbar=p["backwash2_pressure_mbar"],
-            backwash2_max_duration_s=float(p["backwash2_max_duration_s"]),
-        )
+        return self.left.get_run_params()
 
     def _build_experiment_config(self) -> ExperimentConfig:
-        # IMPORTANT: project_root expects an anchor; pass __file__ of THIS file.
         root = project_root(__file__)
-
-        # logs folder at repo root
         log_dir = resolve_under(root, "logs")
         ensure_dir(log_dir)
 
@@ -222,126 +904,670 @@ class MainWindow(Qtw.QMainWindow):
             base_backwash_remove_ml=float(self.config.get("base_backwash_remove_ml", 0.0)),
         )
 
-    # ---------------- Run control ----------------
+    def _attach_device_manager_to_worker(self, worker: ExperimentWorker) -> None:
+        if self.dev is None: return
+        try:
+            if hasattr(worker, 'set_device'):
+                worker.set_device(self.dev)
+            elif hasattr(worker, 'set_device_manager'):
+                worker.set_device_manager(self.dev)
+            else:
+                worker.dev = self.dev
+        except Exception as e:
+            logger.warning(f"Could not attach hardware device to worker: {e}")
 
     def _start_experiment(self) -> None:
-        if self._thread is not None:
-            QMessageBox.warning(self, "Already running", "An experiment is already running.")
-            return
+        if self._experiment_running(): return
+
+        self._force_release_all("start")
+        self.reset_safe_state()
+
+        self.right.reset_state()
+        self.left._loss_ml = 0.0
 
         try:
-            run_params = self._read_run_params()
-            exp_cfg = self._build_experiment_config()
+            self.right.append_log(">>> INITIATING SEQUENCE <<<", "#10B981")
+        except Exception:
+            pass
+
+        try:
+            worker = ExperimentWorker(self._build_experiment_config())
+            worker.set_params(self._read_run_params())
+            self._attach_device_manager_to_worker(worker)
 
             thread = QThread(self)
-            worker = ExperimentWorker(exp_cfg)
-            worker.set_params(run_params)
             worker.moveToThread(thread)
-
             thread.started.connect(worker.run)
 
             worker.request_ok.connect(self._on_request_ok)
             worker.status.connect(self._on_status)
             worker.step_changed.connect(self._on_step_changed)
-            worker.loss_updated.connect(self.right.set_loss)
 
-            if hasattr(worker, "telemetry") and hasattr(self.right, "ingest_telemetry"):
-                try:
-                    worker.telemetry.connect(self.right.ingest_telemetry)  # type: ignore[attr-defined]
-                except Exception:
-                    logger.exception("Telemetry connect failed (non-fatal).")
+            worker.loss_updated.connect(self.right.set_loss_ml)
+            worker.loss_updated.connect(
+                lambda v: self.top.set_results(v, self.left.get_run_params().backwash2_base_remove_ml + v))
 
-            worker.finished.connect(thread.quit)
-            worker.finished.connect(worker.deleteLater)
-            thread.finished.connect(thread.deleteLater)
+            try:
+                worker.telemetry.connect(self.tab_analysis.plot_widget.plot)
+            except Exception:
+                pass
 
             worker.finished.connect(self._on_finished)
             worker.failed.connect(self._on_failed)
 
-            self._thread = thread
             self._worker = worker
-
-            self.right.set_busy(True)
-            self.left.btn_start.setEnabled(False)
-            self.left.enable_ok(False)
-
+            self._thread = thread
+            self._set_running_ui(True)
             thread.start()
 
         except Exception as e:
-            logger.exception("Start experiment failed.")
-            QMessageBox.critical(self, "Start error", str(e))
-            self._cleanup_thread()
+            QMessageBox.critical(self, "Error", str(e))
 
-    def _on_request_ok(self, step: str, reason: str) -> None:
-        self.right.set_status(f"Manual OK required: {reason}")
-        self.left.enable_ok(True)
-        QMessageBox.information(self, f"OK required: {step}", reason)
-
-    def _send_ok(self) -> None:
-        if self._worker is None:
-            return
-        self.left.enable_ok(False)
+    def _on_request_ok(self, step, reason):
+        self.right.set_ok_banner(step=str(step), reason=str(reason), show=True)
+        self._set_ok_enabled(True)
         try:
-            self._worker.confirm_ok()
-        except Exception:
-            logger.exception("confirm_ok failed.")
-            QMessageBox.critical(self, "Error", "Failed to send OK to the worker.")
-
-    def _on_status(self, msg: str) -> None:
-        self.right.set_status(msg)
-
-    def _on_step_changed(self, step: str) -> None:
-        self.right.set_step(step)
-
-    def _on_finished(self) -> None:
-        self.right.set_busy(False)
-        self.left.btn_start.setEnabled(True)
-        QMessageBox.information(self, "Finished", "Process finished successfully.")
-        self._cleanup_thread()
-
-    def _on_failed(self, err: str) -> None:
-        self.right.set_busy(False)
-        self.left.btn_start.setEnabled(True)
-        QMessageBox.critical(self, "Failed", err)
-        self._cleanup_thread()
-
-    # ---------------- Cleanup ----------------
-
-    def _cleanup_thread(self) -> None:
-        thread = self._thread
-        worker = self._worker
-        self._thread = None
-        self._worker = None
-
-        if worker is not None:
-            try:
-                t = worker.thread()
-                if isinstance(t, QThread):
-                    t.requestInterruption()
-            except Exception:
-                pass
-
-        if thread is not None:
-            try:
-                thread.quit()
-                thread.wait(2000)
-            except Exception:
-                pass
-
-    def closeEvent(self, event) -> None:
-        try:
-            self._fill_timer.stop()
+            self.right.append_log(f"ACTION REQUIRED: {reason}", "#F59E0B")
         except Exception:
             pass
 
-        self._cleanup_thread()
+    def _send_ok(self):
+        self._set_ok_enabled(False)
+        if self._worker: self._worker.confirm_ok()
+        self.right.set_ok_banner(step="", reason="", show=False)
+
+    def _on_status(self, msg):
+        self.right.set_status(msg)
+        if self.monitor: self.monitor.update_status(msg)
+
+    def _on_step_changed(self, step):
+        self._current_step = step
+        self.right.set_step(step)
+        if self.monitor: self.monitor.update_step(step)
+        self._render_manual_state()
+
+    def _on_finished(self):
+        try:
+            self.right.append_log("=== SEQUENCE COMPLETE ===", "#0EA5E9")
+        except Exception:
+            pass
+        self._set_running_ui(False)
+        self._thread.quit()
+
+    def _on_failed(self, err):
+        self._stop_deterministic(reason=str(err))
+        QMessageBox.critical(self, "Error", str(err))
+
+    def _abort_run(self) -> None:
+        try:
+            self.right.append_log("!!! ABORT TRIGGERED !!!", "#FF1744")
+        except Exception:
+            pass
+
+        # Entferne die Bestätigungs-Aufforderung (falls aktiv)
+        self.right.set_ok_banner(step="", reason="", show=False)
+        self._set_ok_enabled(False)
+
+        if self._thread is None:
+            self._toast("Stop: forcing SAFE_STATE.")
+            try:
+                self._force_safe_state_now()
+            except Exception:
+                pass
+            return
+
+        self._toast("STOP: aborting + SAFE_STATE")
+        self._stop_deterministic(reason="User abort")
+
+        self.right.reset_state()
+
+        # UI wieder auf IDLE / Standardwerte zurücksetzen
+        self._current_step = "IDLE"
+        self.right.set_step("IDLE")
+        self._render_manual_state()
 
         try:
-            if self.monitor is not None:
+            self.top.set_results(0.0, self.left.get_run_params().backwash2_base_remove_ml)
+        except Exception:
+            pass
+
+    def _stop_deterministic(self, *, reason: str) -> None:
+        self._set_running_ui(False, reason=f"stop_deterministic: {reason}")
+        if self._worker is not None:
+            try:
+                self._worker.stop(reason)
+            except Exception:
+                pass
+        if self._thread is not None:
+            try:
+                self._thread.quit()
+                self._thread.wait(1000)
+            except Exception:
+                pass
+        self._worker = None
+        self._thread = None
+        try:
+            self._force_safe_state_now()
+        except Exception:
+            pass
+
+    def _request_manual_vent(self) -> None:
+        try:
+            self.right.append_log("MANUAL VENT TRIGGERED.", "#94A3B8")
+        except Exception:
+            pass
+        if self._worker is not None:
+            try:
+                self._worker.manual_vent()
+            except Exception:
+                pass
+        else:
+            try:
+                self._force_safe_state_now()
+            except Exception:
+                pass
+            self._toast("Manual vent requested (Idle State).")
+
+    # =========================================================================
+    # Context & General Handling
+    # =========================================================================
+    def event(self, e):
+        try:
+            if e.type() == QEvent.WindowDeactivate:
+                self._force_release_all("window_deactivate")
+            elif e.type() == QEvent.KeyPress:
+                if getattr(e, "key", None) and e.key() == Qt.Key_Escape and not e.isAutoRepeat():
+                    self._force_release_all("esc")
+                    return True
+        except Exception:
+            pass
+        return super().event(e)
+
+    def _on_app_state_changed(self, state) -> None:
+        try:
+            if state != Qt.ApplicationActive:
+                self._force_release_all("app_inactive")
+        except Exception:
+            pass
+
+    def _construct_frame(self, cls, config):
+        try:
+            return cls(config)
+        except TypeError:
+            return cls()
+
+    def _install_theme_menu(self) -> None:
+        pass
+
+    def _theme_key(self) -> str:
+        t = _get_nested(self.config, "ui.theme", None)
+        if t is None: t = self.config.get("ui_theme", None)
+        k = str(t or "dark").strip().lower()
+        return "dark" if "dark" in k else k
+
+    def _set_theme(self, theme: str) -> None:
+        try:
+            theme = str(theme or "").strip().lower()
+            if not theme: return
+            if isinstance(self.config.get("ui"), dict):
+                self.config["ui"]["theme"] = theme
+            else:
+                self.config["ui_theme"] = theme
+            self._apply_theme_from_config()
+            fn = getattr(self.cfg_manager, "save_runtime_override", None)
+            if callable(fn):
                 try:
-                    self.monitor.stop()
+                    fn("general", self.config)
                 except Exception:
-                    logger.exception("Monitor stop failed (non-fatal).")
-                self.monitor = None
-        finally:
-            super().closeEvent(event)
+                    pass
+        except Exception:
+            pass
+
+    def _apply_theme_from_config(self) -> None:
+        key = self._theme_key()
+        try:
+            apply_theme(Qtw.QApplication.instance() or self, "light" if key == "light" else "dark")
+        except Exception:
+            pass
+
+    def _set_running_ui(self, running: bool, *, reason: str = "") -> None:
+        try:
+            self.left.set_running(bool(running))
+        except Exception:
+            pass
+        try:
+            self.right.set_running(bool(running))
+        except Exception:
+            pass
+        try:
+            self.right.enable_ok(False)
+        except Exception:
+            pass
+        if reason: logger.info("UI running=%s (%s)", running, reason)
+        self._render_manual_state(reason="running_ui")
+        self._update_health_banner()
+
+    def _set_ok_enabled(self, enabled: bool) -> None:
+        try:
+            self.right.enable_ok(bool(enabled))
+        except Exception:
+            pass
+
+    def _experiment_running(self) -> bool:
+        return self._thread is not None and self._thread.isRunning()
+
+    def _toast(self, msg: str, *, ms: int = 2500) -> None:
+        try:
+            sb = self.statusBar()
+            if sb is not None: sb.showMessage(msg, ms)
+        except Exception:
+            pass
+
+    # =========================================================================
+    # Hardware Safety & State Control
+    # =========================================================================
+    def reset_safe_state(self) -> None:
+        self._safe_state_forced = False
+        try:
+            self._health.reset_safe_state()
+        except Exception:
+            pass
+        self._update_health_banner()
+
+    def _force_safe_state_now(self) -> None:
+        self._safe_state_forced = True
+        self._update_health_banner()
+        if self.dev is None: return
+        try:
+            fn = getattr(self.dev, "vent_all", None)
+            if callable(fn):
+                fn()
+                return
+        except Exception:
+            pass
+        try:
+            self._dev_set_pressure_setpoint_best_effort(channel=MAIN_CH, value_mbar=0.0, ramp=True)
+        except Exception:
+            pass
+        try:
+            self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=0.0, ramp=True)
+        except Exception:
+            pass
+        try:
+            self._dev_set_valve_state("VENTING")
+        except Exception:
+            pass
+
+    def _hold_is_allowed_now(self) -> bool:
+        if not self._experiment_running(): return True
+        step = (self._current_step or "").strip().upper()
+        # Erlaube die Leertaste (Hold) auch im initialen Schritt!
+        return step in ("BACKWASH_HOLD", "BACKWASH_INITIAL")
+
+    def _manual_reason_hint(self) -> Tuple[bool, str, str]:
+        allowed = self._hold_is_allowed_now()
+        if self._hold_active: return True, "ACTIVE", "Release SPACE to stop HOLD."
+        if allowed:
+            if self._experiment_running(): return True, "Allowed", "Hold SPACE to manually run backwash."
+            return True, "Allowed", "Hold SPACE to manually control backwash (idle)."
+        if self._experiment_running(): return False, "Blocked", "HOLD only allowed in BACKWASH_HOLD step."
+        return True, "Allowed", "Hold SPACE to manually control backwash (idle)."
+
+    def _manual_state_fingerprint(self, *, allowed: bool, active: bool, reason: str, hint: str) -> Tuple[
+        bool, bool, str, str]:
+        return (bool(allowed), bool(active), str(reason), str(hint))
+
+    def _log_manual_state_if_needed(self, *, fp: Tuple[bool, bool, str, str], reason_tag: str) -> None:
+        try:
+            now = time.monotonic()
+            if fp != self._last_manual_state_fp:
+                self._last_manual_state_fp = fp
+                self._last_manual_state_log_ts = now
+                logger.info("ManualState (%s): allowed=%s active=%s reason=%s", reason_tag, fp[0], fp[1], fp[2])
+                return
+            if (now - self._last_manual_state_log_ts) >= float(self.MANUAL_STATE_LOG_THROTTLE_S):
+                self._last_manual_state_log_ts = now
+                logger.info("ManualState (throttle/%s): allowed=%s active=%s reason=%s", reason_tag, fp[0], fp[1],
+                            fp[2])
+        except Exception:
+            pass
+
+    def _render_manual_state(self, *, reason: str = "") -> None:
+        allowed, r, hint = self._manual_reason_hint()
+        active = bool(self._hold_active)
+        try:
+            self.left.set_hold_active(active)
+            self.left.set_hold_affordance(bool(allowed), str(hint if not active else "MANUAL HOLD ACTIVE"))
+        except Exception:
+            pass
+        fp = self._manual_state_fingerprint(allowed=allowed, active=active, reason=str(r), hint=str(hint))
+        self._log_manual_state_if_needed(fp=fp, reason_tag=str(reason or "-"))
+
+    def _trend_window_s(self) -> float:
+        trends_cfg = _get_nested(self.config, "trends", {})
+        raw = _first_present(trends_cfg.get("trend_window_s"), self.config.get("trend_window_s"),
+                             trends_cfg.get("window_s"), default=self.DEFAULT_TREND_WINDOW_S)
+        try:
+            return float(min(5.0, max(2.0, float(raw))))
+        except Exception:
+            return self.DEFAULT_TREND_WINDOW_S
+
+    def _trend_deadband(self) -> float:
+        trends_cfg = _get_nested(self.config, "trends", {})
+        raw = _first_present(trends_cfg.get("trend_deadband_mbar_s"), self.config.get("trend_deadband_mbar_s"),
+                             trends_cfg.get("deadband_mbar_per_s"), default=self.DEFAULT_TREND_DEADBAND)
+        try:
+            return float(max(0.0, float(raw)))
+        except Exception:
+            return self.DEFAULT_TREND_DEADBAND
+
+    def _trim_history(self, hist: Deque[Tuple[float, float]], *, now: float) -> None:
+        cutoff = now - float(self.HISTORY_MAX_SECONDS)
+        while hist and hist[0][0] < cutoff: hist.popleft()
+
+    def _push_hist(self, hist: Deque[Tuple[float, float]], *, t: float, v: Optional[float]) -> None:
+        if v is None: return
+        try:
+            hist.append((float(t), float(v)))
+        except Exception:
+            return
+        self._trim_history(hist, now=float(t))
+
+    def _slope_over_window(self, hist: Deque[Tuple[float, float]], *, window_s: float) -> Optional[float]:
+        if len(hist) < 2: return None
+        t_end, v_end = hist[-1]
+        t_start_min = t_end - float(window_s)
+        idx = None
+        for i in range(len(hist) - 1, -1, -1):
+            if hist[i][0] <= t_start_min:
+                idx = i
+                break
+        t0, v0 = hist[idx if idx is not None else 0]
+        dt = float(t_end - t0)
+        return float((v_end - v0) / dt) if dt > 1e-6 else None
+
+    def _update_trend_arrows(self) -> None:
+        try:
+            window_s = self._trend_window_s()
+            dead = self._trend_deadband()
+            hist = self._p2_hist if bool(self._hold_active) else self._p1_hist
+            slope = self._slope_over_window(hist, window_s=window_s)
+
+            if slope is None:
+                mode = (False, False, "—", "—")
+            elif slope > dead:
+                mode = (True, False, f"{slope:+.1f} mbar/s", "—")
+            elif slope < -dead:
+                mode = (False, True, "—", f"{slope:+.1f} mbar/s")
+            else:
+                mode = (False, False, "—", "—")
+
+            if mode != self._last_trend_mode:
+                self._last_trend_mode = mode
+        except Exception:
+            pass
+
+    def _update_health_banner(self, *, new_run_started: bool = False) -> None:
+        try:
+            snap = self._health.evaluate(device_ok=self.dev is not None or self._simulation_mode,
+                                         worker_running=self._experiment_running(),
+                                         safe_state_forced=self._safe_state_forced, manual_hold=bool(self._hold_active),
+                                         last_error_short=self._last_error_short, last_error_full=self._last_error_full,
+                                         p1_mbar=self._rt_p1, p2_mbar=self._rt_p2, flow=self._rt_flow,
+                                         valves=self._rt_valves, last_good_comm_ts=self._last_good_comm_ts,
+                                         now_monotonic=time.monotonic(), new_run_started=bool(new_run_started))
+            try:
+                self.top.set_health_snapshot(snap)
+            except Exception:
+                pass
+            self._render_manual_state(reason="health")
+            self._update_trend_arrows()
+        except Exception:
+            pass
+
+    def _ui_backwash_pressure_mbar(self) -> float:
+        try:
+            return float(max(0.0, self.left.get_backwash_hold_pressure_mbar()))
+        except Exception:
+            return 0.0
+
+    def _init_device_manager_best_effort(self) -> None:
+        try:
+            from src.backend.core.device_manager import DeviceManager
+            self.dev = DeviceManager()
+            self._simulation_mode = False
+        except Exception as e:
+            logger.warning(f"Could not load hardware. Entering simulation mode. Error: {e}")
+            self._simulation_mode = True
+            self.dev = None
+
+    def _dev_set_valve_state(self, state: str) -> None:
+        if self._simulation_mode: return
+        if self.dev is None: raise RuntimeError("DeviceManager not available")
+        st = (state or "").strip().upper()
+        fn = getattr(self.dev, "set_valve_state", None)
+        if callable(fn): return fn(st)
+        if st in ("VENTING", "VENT"):
+            for n in ("venting", "valves_venting"):
+                f = getattr(self.dev, n, None)
+                if callable(f): return f()
+        raise AttributeError(f"No valve handler for '{state}'")
+
+    def _dev_set_pressure_setpoint(self, *, channel: int, value_mbar: float, ramp: bool = True) -> None:
+        if self._simulation_mode: return
+        if self.dev is None: raise RuntimeError("DeviceManager not available")
+        fn = getattr(self.dev, "set_pressure_setpoint_mbar", None)
+        if callable(fn): return fn(channel=int(channel), setpoint_mbar=float(value_mbar), ramp=bool(ramp))
+        raise AttributeError("No pressure set method")
+
+    def _dev_set_pressure_setpoint_best_effort(self, *, channel: int, value_mbar: float, ramp: bool = True) -> int:
+        if self._simulation_mode: return channel
+        try:
+            self._dev_set_pressure_setpoint(channel=channel, value_mbar=value_mbar, ramp=ramp)
+            return channel
+        except Exception:
+            if channel != 1:
+                self._dev_set_pressure_setpoint(channel=1, value_mbar=value_mbar, ramp=ramp)
+                return 1
+            raise
+
+    def _dev_read_pressure(self, *, channel: int) -> float:
+        if self._simulation_mode: return 0.0
+        if self.dev is None: raise RuntimeError("DeviceManager not available")
+        fn = getattr(self.dev, "get_pressure_mbar", None)
+        if callable(fn): return float(fn(int(channel)))
+        raise AttributeError("No readable pressure source")
+
+    def _hold_source_set(self, source: str, active: bool) -> None:
+        if str(source).lower() not in ("space", "mouse"): return
+
+        before = bool(self._hold_sources)
+        if active:
+            self._hold_sources.add(str(source).lower())
+        else:
+            self._hold_sources.discard(str(source).lower())
+
+        after = bool(self._hold_sources)
+        if (not before) and after:
+            if not self._hold_is_allowed_now():
+                self._hold_sources.clear()
+                self._hold_active = False
+                self._toast("HOLD blocked")
+                return
+            self._begin_manual_hold()
+        elif before and (not after):
+            self._end_manual_hold()
+        elif self._hold_active:
+            self._schedule_hold_setpoint_push()
+
+    def _begin_manual_hold(self) -> None:
+        self._hold_active = True
+        self._render_manual_state(reason="hold_down")
+
+        def _do():
+            try:
+                self._hold_begin_actions()
+                self._push_hold_setpoint_now()
+                self._toast("HOLD active")
+            except Exception:
+                self._hold_active = False
+                self._render_manual_state(reason="failed")
+
+        QTimer.singleShot(0, _do)
+
+    def _end_manual_hold(self) -> None:
+        self._hold_active = False
+        self._render_manual_state(reason="hold_up")
+        QTimer.singleShot(0, lambda: self._hold_end_actions())
+
+    def _force_release_all(self, reason: str) -> None:
+        self._hold_sources.clear()
+        try:
+            self._global_filter.force_release()
+        except Exception:
+            pass
+        if self._hold_active: self._end_manual_hold()
+
+    def _hold_begin_actions(self) -> None:
+        p = self._ui_backwash_pressure_mbar()
+        if self._experiment_running():
+            if self._worker is not None: self._worker_hold_start_best_effort(self._worker, p)
+        else:
+            self._dev_set_valve_state("BACKWASH")
+            self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=p)
+
+    def _hold_end_actions(self) -> None:
+        if self._experiment_running():
+            if self._worker is not None: self._worker_hold_stop_best_effort(self._worker)
+        else:
+            self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=0.0)
+            self._dev_set_valve_state("FILTRATION")
+
+    def _schedule_hold_setpoint_push(self, *args) -> None:
+        if self._hold_active and not self._hold_setpoint_timer.isActive():
+            self._hold_setpoint_timer.start(self.HOLD_SETPOINT_RATE_MS)
+
+    def _push_hold_setpoint_now(self) -> None:
+        if not self._hold_active: return
+        p = self._ui_backwash_pressure_mbar()
+        if self._experiment_running() and self._worker:
+            self._worker_hold_update_pressure_best_effort(self._worker, p)
+        else:
+            self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=p)
+
+    def _worker_hold_start_best_effort(self, w, p):
+        fn = getattr(w, "start_backwash_hold", None)
+        return fn(float(p)) if callable(fn) else None
+
+    def _worker_hold_stop_best_effort(self, w):
+        fn = getattr(w, "stop_backwash_hold", None)
+        return fn() if callable(fn) else None
+
+    def _worker_hold_update_pressure_best_effort(self, w, p):
+        fn = getattr(w, "update_backwash_hold_pressure", None)
+        return fn(float(p)) if callable(fn) else None
+
+    def _start_monitor(self) -> None:
+        if not bool(self.config.get("monitor_enabled", True)): return
+        try:
+            self.monitor = MonitorServer(host=str(self.config.get("monitor_host", "0.0.0.0")),
+                                         port=int(self.config.get("monitor_port", 8765)))
+            self.monitor.start()
+            try:
+                self.top.set_monitor_url(self.monitor.url())
+            except Exception:
+                pass
+        except Exception:
+            self.monitor = None
+
+    def _poll_realtime(self) -> None:
+        if getattr(self, '_is_booting', False):
+            return  # Block hardware comms during boot to save CPU and Z-Order
+
+        now = time.monotonic()
+
+        if self.dev is None and not self._simulation_mode:
+            self._rt_p1 = self._rt_p2 = self._rt_flow = self._rt_valves = None
+            try:
+                self.top.set_pressure(p1=None, p2=None)
+            except Exception:
+                pass
+            self._update_health_banner()
+            return
+
+        try:
+            if self._simulation_mode:
+                self._last_good_comm_ts = now
+                if getattr(self.right, '_running', False):
+                    self._rt_p1 = random.uniform(1190, 1210)
+                    self._rt_p2 = random.uniform(0, 5)
+                    self._rt_flow = random.uniform(1.2, 1.3)
+                    self._rt_valves = "FILTRATION"
+                elif self._hold_active:
+                    self._rt_p1 = random.uniform(0, 5)
+                    self._rt_p2 = self._ui_backwash_pressure_mbar() + random.uniform(-5, 5)
+                    self._rt_flow = random.uniform(-2.5, -2.4)
+                    self._rt_valves = "BACKWASH"
+                else:
+                    self._rt_p1 = random.uniform(0, 5)
+                    self._rt_p2 = random.uniform(0, 5)
+                    self._rt_flow = random.uniform(-0.01, 0.01)
+                    self._rt_valves = "SIM: IDLE"
+            else:
+                # KORREKTUR: "channel=" MUSS zwingend geschrieben werden wegen des Sternchens * in der def
+                p1 = self._dev_read_pressure(channel=1)
+                p2 = self._dev_read_pressure(channel=2)
+
+                self._last_good_comm_ts = now
+                self._rt_p1, self._rt_p2 = p1, p2
+                try:
+                    self._rt_flow = float(self.dev.read_flow())
+                except Exception:
+                    self._rt_flow = None
+                try:
+                    self._rt_valves = str(self.dev.get_valve_state())
+                except Exception:
+                    self._rt_valves = None
+
+            self._push_hist(self._p1_hist, t=now, v=self._rt_p1)
+            self._push_hist(self._p2_hist, t=now, v=self._rt_p2)
+
+            try:
+                self.top.set_kpis(p1_mbar=self._rt_p1, p2_mbar=self._rt_p2, flow=self._rt_flow, valves=self._rt_valves)
+                params = self.left.get_run_params()
+                self.top.set_results(self.right._loss_ml, params.backwash2_base_remove_ml + self.right._loss_ml)
+            except Exception:
+                pass
+
+            self._update_health_banner()
+
+        except Exception as e:
+            # KORREKTUR: Wenn der Thread crasht, schreibe es ins Log, damit wir nicht blind raten müssen!
+            logger.error(f"Polling error in _poll_realtime: {e}")
+
+    def _on_fill_timer_timeout(self) -> None:
+        self._compute_filling_ui(silent=True)
+
+    def _schedule_filling_compute(self, *args) -> None:
+        self._fill_timer.start(self.FILLING_DEBOUNCE_MS)
+
+    def _compute_filling_ui(self, *, silent: bool = False) -> None:
+        try:
+            comp = compute_filling(FillingInputs(target_mbar=float(self.left.sp_fill_target.value()),
+                                                 ramp_s=float(self.left.sp_fill_ramp.value()),
+                                                 hold_s=float(self.left.sp_fill_hold.value())),
+                                   full_scale_mbar=float(self.config.get("pressure_full_scale_mbar", 8000.0)))
+            self.left.set_filling_outputs(target_pct=float(comp.target_pct), slope_mbar_s=float(comp.slope_mbar_per_s),
+                                          suggested_ramp_s=float(comp.suggested_ramp_s))
+        except Exception as e:
+            if not silent: QMessageBox.critical(self, "Error", str(e))
+
+    def closeEvent(self, event):
+        if hasattr(self, '_fill_timer'): self._fill_timer.stop()
+        if hasattr(self, '_rt_timer'): self._rt_timer.stop()
+        if hasattr(self, '_hold_setpoint_timer'): self._hold_setpoint_timer.stop()
+        self._force_release_all("close")
+        if getattr(self, '_thread', None): self._stop_deterministic(reason="close")
+        if getattr(self, 'monitor', None): self.monitor.stop()
+        if getattr(self, 'dev', None): self.dev.disconnect()
+        super().closeEvent(event)

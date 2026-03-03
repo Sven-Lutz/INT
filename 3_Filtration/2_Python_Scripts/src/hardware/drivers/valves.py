@@ -1,4 +1,4 @@
-# hardware/drivers/valves.py
+# src/hardware/drivers/valves.py
 from __future__ import annotations
 
 import logging
@@ -28,6 +28,8 @@ class RelayConfig:
     baudrate: int = 9600
     timeout_s: float = 1.0
     write_delay_s: float = 0.05
+    # PATCH: if True, try to lock COM port exclusively (can raise PermissionError if a second instance runs)
+    exclusive: bool = False
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "RelayConfig":
@@ -41,18 +43,29 @@ class RelayConfig:
         baud = d.get("Baud Rate") or d.get("baud_rate") or d.get("baudrate") or 9600
         timeout_s = d.get("timeout_s", 1.0)
         write_delay_s = d.get("write_delay_s", 0.05)
+
+        # PATCH: accept exclusive in config (defaults to False to avoid PermissionError during dev)
+        exclusive_raw = d.get("exclusive", d.get("serial_exclusive", False))
+
         return RelayConfig(
-            port=str(port),
+            port=str(port).strip() or "COM6",
             baudrate=int(baud),
             timeout_s=float(timeout_s),
             write_delay_s=float(write_delay_s),
+            exclusive=bool(exclusive_raw),
         )
 
 
 class RelayController:
     """
     Minimal controller for a rly02-style 2-relay module with single-byte commands.
-    Assumption: RELAY ON == VALVE OPEN.
+
+    PATCHES vs previous:
+    - optional 'exclusive' lock is configurable (default False to reduce PermissionError surprises)
+    - thread-safe-ish: serialize writes with a simple in-instance lock-free guard via connect requirement
+      (real threading safety should be handled above this layer)
+    - safe reconnect: if port open fails, leave self.serial=None and raise cleanly
+    - fewer stale-byte issues: reset_input_buffer before *and* after reads where reasonable
     """
 
     def __init__(self, cfg: RelayConfig):
@@ -78,28 +91,97 @@ class RelayController:
     def connect(self) -> None:
         if self.serial is not None:
             return
+
         logger.info(
-            "RelayController: connecting (port=%s baud=%s)",
+            "RelayController: connecting (port=%s baud=%s timeout=%ss exclusive=%s)",
             self.cfg.port,
             self.cfg.baudrate,
+            self.cfg.timeout_s,
+            self.cfg.exclusive,
         )
-        self.serial = serial.Serial(self.cfg.port, self.cfg.baudrate, timeout=self.cfg.timeout_s)
+
+        try:
+            kwargs = dict(
+                timeout=self.cfg.timeout_s,
+                write_timeout=self.cfg.timeout_s,
+            )
+
+            # On pyserial for Windows, exclusive can prevent multiple opens, but can also cause PermissionError
+            if self.cfg.exclusive:
+                try:
+                    self.serial = serial.Serial(self.cfg.port, self.cfg.baudrate, exclusive=True, **kwargs)  # type: ignore[arg-type]
+                except TypeError:
+                    # pyserial without 'exclusive' support
+                    self.serial = serial.Serial(self.cfg.port, self.cfg.baudrate, **kwargs)
+            else:
+                self.serial = serial.Serial(self.cfg.port, self.cfg.baudrate, **kwargs)
+
+            # Clear any boot noise / stale bytes
+            try:
+                self.serial.reset_input_buffer()
+                self.serial.reset_output_buffer()
+            except Exception:
+                pass
+
+        except Exception as e:
+            # Ensure we never leave a half-initialized handle around
+            self.serial = None
+            logger.exception("RelayController: failed to open %s (%s)", self.cfg.port, e)
+            raise
 
     def _require_connected(self) -> None:
         if self.serial is None:
             raise RuntimeError("RelayController not connected. Call connect() first.")
 
-    def _send_command(self, cmd: int, *, read_response: bool = False) -> Optional[bytes]:
+    def _send_command(self, cmd: int, *, read_response: bool = False, n: int = 1) -> Optional[bytes]:
         self._require_connected()
         assert self.serial is not None
+
         try:
+            # Prevent stale bytes from being interpreted as reply
+            try:
+                self.serial.reset_input_buffer()
+            except Exception:
+                pass
+
             self.serial.write(bytes([int(cmd) & 0xFF]))
+            try:
+                self.serial.flush()
+            except Exception:
+                pass
+
             if self.cfg.write_delay_s > 0:
                 time.sleep(self.cfg.write_delay_s)
-            return self.serial.read(1) if read_response else None
+
+            if not read_response:
+                return None
+
+            data = self.serial.read(int(n))
+
+            # Clear trailing bytes (some boards may send more than requested)
+            try:
+                self.serial.reset_input_buffer()
+            except Exception:
+                pass
+
+            return data if data else b""
         except Exception:
             logger.exception("RelayController: send command failed (cmd=0x%02X)", cmd)
             raise
+
+    def get_relay_states(self) -> Optional[int]:
+        """
+        Best-effort read. Many boards return 1 byte bitmask:
+          bit0 -> relay1, bit1 -> relay2.
+        Returns None if not available.
+        """
+        try:
+            res = self._send_command(self.commands["relay_states"], read_response=True, n=1)
+            if not res:
+                return None
+            return int(res[0])
+        except Exception:
+            return None
 
     def turn_relay_1_on(self) -> None:
         self._send_command(self.commands["relay_1_on"])
@@ -114,14 +196,19 @@ class RelayController:
         self._send_command(self.commands["relay_2_off"])
 
     def close(self) -> None:
-        if self.serial is None:
+        ser = self.serial
+        self.serial = None
+        if ser is None:
             return
         try:
-            self.serial.close()
+            try:
+                ser.flush()
+            except Exception:
+                pass
+            ser.close()
         except Exception:
             logger.exception("RelayController: error while closing serial")
         finally:
-            self.serial = None
             logger.info("RelayController: disconnected")
 
 
@@ -138,6 +225,13 @@ class ValveControllerConfig:
     venting_r1_on: bool = False
     venting_r2_on: bool = True
 
+    # explicit backwash mapping
+    backwash_r1_on: bool = True
+    backwash_r2_on: bool = True
+
+    # optional debounce / write batching
+    settle_delay_s: float = 0.0
+
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "ValveControllerConfig":
         """
@@ -151,14 +245,12 @@ class ValveControllerConfig:
         if isinstance(nested, dict):
             cfg_src = nested
 
-        # allow both flat configs and nested "relay:"
         relay_dict = cfg_src.get("relay")
         if isinstance(relay_dict, dict):
             relay_cfg = RelayConfig.from_dict(relay_dict)
         else:
             relay_cfg = RelayConfig.from_dict(cfg_src)
 
-        # accept aliases: safe_state_on_disconnect OR safe_state
         safe_raw = cfg_src.get("safe_state_on_disconnect", cfg_src.get("safe_state", "VENTING"))
         safe = str(safe_raw).upper()
         safe_mode = ValveMode.__members__.get(safe, ValveMode.VENTING)
@@ -172,6 +264,9 @@ class ValveControllerConfig:
             filling_r2_on=bool(cfg_src.get("filling_r2_on", True)),
             venting_r1_on=bool(cfg_src.get("venting_r1_on", False)),
             venting_r2_on=bool(cfg_src.get("venting_r2_on", True)),
+            backwash_r1_on=bool(cfg_src.get("backwash_r1_on", True)),
+            backwash_r2_on=bool(cfg_src.get("backwash_r2_on", True)),
+            settle_delay_s=float(cfg_src.get("settle_delay_s", 0.0)),
         )
 
 
@@ -182,6 +277,10 @@ class ValveController:
     Confirmed mapping:
       - Relay ON  -> Valve OPEN
       - Relay OFF -> Valve CLOSED
+
+    PATCHES vs previous:
+    - tracks last relay outputs to avoid unnecessary writes (reduces serial traffic and relay wear)
+    - still keeps idempotent state transitions by ValveMode
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -189,34 +288,60 @@ class ValveController:
         self.relais = RelayController(self.cfg.relay)
         self._state: ValveMode = ValveMode.UNKNOWN
 
+        # PATCH: track last relay outputs (None = unknown)
+        self._r1_on: Optional[bool] = None
+        self._r2_on: Optional[bool] = None
+
         logger.info(
-            "ValveController initialized (port=%s, baud=%s, safe=%s)",
+            "ValveController initialized (port=%s, baud=%s, safe=%s, exclusive=%s)",
             self.cfg.relay.port,
             self.cfg.relay.baudrate,
             self.cfg.safe_state_on_disconnect.value,
+            self.cfg.relay.exclusive,
         )
 
     def connect(self) -> None:
         self.relais.connect()
 
-    def _set_relays(self, *, r1_on: bool, r2_on: bool, state: ValveMode) -> None:
-        logger.debug("ValveController: set state=%s (R1=%s, R2=%s)", state.value, r1_on, r2_on)
-
-        if r1_on:
+    def _apply_relay_1(self, on: bool) -> None:
+        if self._r1_on is not None and self._r1_on == bool(on):
+            return
+        if on:
             self.relais.turn_relay_1_on()
         else:
             self.relais.turn_relay_1_off()
+        self._r1_on = bool(on)
 
-        if r2_on:
+    def _apply_relay_2(self, on: bool) -> None:
+        if self._r2_on is not None and self._r2_on == bool(on):
+            return
+        if on:
             self.relais.turn_relay_2_on()
         else:
             self.relais.turn_relay_2_off()
+        self._r2_on = bool(on)
+
+    def _set_relays(self, *, r1_on: bool, r2_on: bool, state: ValveMode) -> None:
+        # idempotent: avoid spamming serial (also reduces relay wear / EMI)
+        if self._state == state:
+            return
+
+        logger.debug("ValveController: set state=%s (R1=%s, R2=%s)", state.value, r1_on, r2_on)
+
+        # Deterministic write order
+        self._apply_relay_1(bool(r1_on))
+        self._apply_relay_2(bool(r2_on))
+
+        if self.cfg.settle_delay_s > 0:
+            time.sleep(self.cfg.settle_delay_s)
 
         self._state = state
         logger.info("ValveController: state -> %s", self._state.value)
 
     def get_state(self) -> str:
         return self._state.value
+
+    # ---- High-level actions ----
 
     def filtration(self) -> None:
         self._set_relays(
@@ -240,7 +365,11 @@ class ValveController:
         )
 
     def backwash(self) -> None:
-        self._set_relays(r1_on=True, r2_on=True, state=ValveMode.BACKWASH)
+        self._set_relays(
+            r1_on=self.cfg.backwash_r1_on,
+            r2_on=self.cfg.backwash_r2_on,
+            state=ValveMode.BACKWASH,
+        )
 
     def all_shut(self) -> None:
         self._set_relays(r1_on=False, r2_on=False, state=ValveMode.ALL_SHUT)
@@ -248,15 +377,50 @@ class ValveController:
     def all_open(self) -> None:
         self._set_relays(r1_on=True, r2_on=True, state=ValveMode.ALL_OPEN)
 
+    # ---- Unified setter (useful for UI manual controls) ----
+
+    def set_state(self, state: str | ValveMode) -> None:
+        """
+        Single entry point for external layers (UI/DeviceManager).
+        Accepts ValveMode or string (case-insensitive).
+        """
+        if isinstance(state, ValveMode):
+            mode = state
+        else:
+            s = str(state).strip().upper()
+            mode = ValveMode.__members__.get(s, ValveMode.UNKNOWN)
+
+        if mode == ValveMode.FILTRATION:
+            self.filtration()
+        elif mode == ValveMode.FILLING:
+            self.filling_solution()
+        elif mode == ValveMode.VENTING:
+            self.venting()
+        elif mode == ValveMode.BACKWASH:
+            self.backwash()
+        elif mode == ValveMode.ALL_SHUT:
+            self.all_shut()
+        elif mode == ValveMode.ALL_OPEN:
+            self.all_open()
+        else:
+            raise ValueError(f"Unknown valve state: {state!r}")
+
+    # ---- Shutdown ----
+
     def disconnect(self) -> None:
         logger.info("ValveController: disconnect -> safe state %s", self.cfg.safe_state_on_disconnect.value)
         try:
+            # Always try to move to safe state first (best effort)
             if self.cfg.safe_state_on_disconnect == ValveMode.ALL_SHUT:
                 self.all_shut()
             elif self.cfg.safe_state_on_disconnect == ValveMode.ALL_OPEN:
                 self.all_open()
             elif self.cfg.safe_state_on_disconnect == ValveMode.BACKWASH:
                 self.backwash()
+            elif self.cfg.safe_state_on_disconnect == ValveMode.FILLING:
+                self.filling_solution()
+            elif self.cfg.safe_state_on_disconnect == ValveMode.FILTRATION:
+                self.filtration()
             else:
                 self.venting()
         except Exception:
@@ -266,6 +430,11 @@ class ValveController:
                 self.relais.close()
             except Exception:
                 logger.exception("ValveController: relay close failed")
+
+            # PATCH: clear cached outputs, so a future reconnect writes deterministically
+            self._r1_on = None
+            self._r2_on = None
+            self._state = ValveMode.UNKNOWN
 
     def close(self) -> None:
         self.disconnect()
