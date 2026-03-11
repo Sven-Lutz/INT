@@ -1,38 +1,12 @@
-# requirements.txt
-# PelliKAn / Little Chonker — GUI + hardware control stack
-# Notes:
-# - Pin only where hardware/protocol compatibility matters.
-# - qdarktheme is optional; keep it if you actually import it.
-
-# ==============================
-# CORE RUNTIME DEPENDENCIES
-# ==============================
-
 PySide6>=6.6
 PyYAML>=6.0
-
-# Serial comms / device protocols
 pyserial>=3.5
 propar>=1.2
-
-# Numeric utilities (volume integration / helpers)
 numpy>=1.26
-
-# Optional plotting / live graphs (only if your GUI uses it)
 pyqtgraph>=0.13
-
-# Optional theming (only if you import it)
 qdarktheme>=2.1
-
-# ==============================
-# DEVELOPMENT & TESTING (optional)
-# ==============================
-
 pytest>=8.0
 pytest-qt>=4.4
-
-# ==============================
-# BUILD / PACKAGING (optional)
-# ==============================
-
 pyinstaller>=6.0
+pandas>=2.0
+matplotlib>=3.7

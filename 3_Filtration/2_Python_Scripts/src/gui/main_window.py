@@ -39,11 +39,6 @@ logger = logging.getLogger(__name__)
 MAIN_CH = 1
 BACKWASH_CH = 2
 
-
-# =========================================================================
-# 🚀 UTILS & HELPER CLASSES
-# =========================================================================
-
 def _get_nested(d: dict, path: str, default=None):
     cur = d
     for key in (path or "").split("."):
@@ -51,16 +46,11 @@ def _get_nested(d: dict, path: str, default=None):
         cur = cur[key]
     return cur
 
-
 def _first_present(*vals, default=None):
     for v in vals:
         if v is not None: return v
     return default
 
-
-# =========================================================================
-# 🚀 GLOBAL INPUT FILTER
-# =========================================================================
 class _GlobalInputFilter(QObject):
     hold_started = Signal()
     hold_stopped = Signal()
@@ -166,10 +156,6 @@ class CustomTitleBar(Qtw.QFrame):
             self._toggle_maximize()
             event.accept()
 
-
-# =========================================================================
-# 🚀 SCHOCKWELLEN EFFEKT 🚀
-# =========================================================================
 class ShockwaveOverlay(Qtw.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -218,10 +204,6 @@ class ShockwaveOverlay(Qtw.QWidget):
                                  self._radius * 2))
             p.end()
 
-
-# =========================================================================
-# 🚀 HOLOGRAPHISCHE CRT SCANLINES (OHNE EIGENEN TIMER) 🚀
-# =========================================================================
 class ScanlineOverlay(Qtw.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -235,7 +217,6 @@ class ScanlineOverlay(Qtw.QWidget):
         self._offset = 0
 
     def tick(self):
-        # Wird vom Master-Timer aufgerufen!
         self._offset = (self._offset + 1) % 8
         self.update()
 
@@ -245,10 +226,6 @@ class ScanlineOverlay(Qtw.QWidget):
             p.drawTiledPixmap(0, self._offset, self.width(), self.height(), self.pix)
             p.end()
 
-
-# =========================================================================
-# 🚀 DATEN-PARTIKEL & DER KANTIGE "BÖSE" PELLIKAN 🚀
-# =========================================================================
 class Particle:
     def __init__(self, x, y):
         self.x = x

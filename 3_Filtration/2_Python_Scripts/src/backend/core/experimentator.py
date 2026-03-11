@@ -605,6 +605,101 @@ class Experimentator:
             event_end="END_FILLING",
         )
         return float(target_pct), float(ramp_duration_s)
+    
+    def step_staircase_ramp(
+        self,
+        *,
+        target_pressure_mbar: float,
+        step_size_mbar: float,
+        step_time_s: float,
+        wait_for_ok_fn: Optional[Callable[[str], None]] = None
+    ) -> float:
+        """Phase A: Führt eine Treppen-Rampe aus und gibt das gefilterte Volumen zurück."""
+        logger.info("STAIRCASE RAMP to %.1f mbar (step: %.1f, time: %.1fs)", target_pressure_mbar, step_size_mbar, step_time_s)
+
+        ch = int(self.cfg.main_pressure_channel)
+        
+        try:
+            self.dev.valves_filtration()
+        except Exception:
+            pass
+
+        if step_size_mbar <= 0 or target_pressure_mbar <= 0:
+            return 0.0
+
+        current_target = 0.0
+        v0 = float(self.volume_ml)
+
+        while current_target < target_pressure_mbar:
+            current_target += step_size_mbar
+            if current_target > target_pressure_mbar:
+                current_target = target_pressure_mbar
+
+            # Manueller Stopp-Gate (Blockiert den Ablauf, bis UI "OK" sendet)
+            if wait_for_ok_fn:
+                wait_for_ok_fn(f"Confirm ramp step to {current_target:.0f} mbar")
+
+            if getattr(self.dev, "pressure_controller", None) is not None:
+                self._set_pressure_mbar(channel=ch, mbar=current_target, ramp=True)
+
+            # Halten & Messen für die Zeit des aktuellen Schritts
+            self._run_timed_step(
+                mode="PHASE_A_RAMP",
+                duration_s=float(step_time_s),
+                pressure_channel=ch if getattr(self.dev, "pressure_controller", None) is not None else None,
+                net_sign=-1.0, 
+                set_valves=self.dev.valves_filtration,
+                event_start=f"RAMP_STEP_{current_target:.0f}_START",
+                event_end=f"RAMP_STEP_{current_target:.0f}_END",
+            )
+
+        loss_ml = max(0.0, v0 - float(self.volume_ml))
+        return float(loss_ml)
+
+    def step_steady_state_volume_target(
+        self,
+        *,
+        target_volume_ml_to_remove: float,
+        pressure_mbar: float,
+        max_duration_s: float = 86400.0, 
+    ) -> float:
+        """Phase B: Hält den Druck, bis das exakte Zielvolumen durchgelaufen ist."""
+        logger.info("STEADY STATE at %.1f mbar until %.4f mL removed", pressure_mbar, target_volume_ml_to_remove)
+        
+        ch = int(self.cfg.main_pressure_channel)
+        try:
+            self.dev.valves_filtration()
+        except Exception:
+            pass
+
+        if getattr(self.dev, "pressure_controller", None) is not None:
+            self._set_pressure_mbar(channel=ch, mbar=pressure_mbar, ramp=True)
+
+        v_start = float(self.volume_ml)
+        mode = "PHASE_B_STEADY"
+        self._log_row(mode, 0.0, float("nan"), float("nan"), pressure_channel=ch, event="START_STEADY_STATE")
+
+        t_end = time.monotonic() + float(max(0.0, max_duration_s))
+
+        while time.monotonic() < t_end:
+            dt_s, flow_raw = self._sample_flow()
+            flow_ml_s = self._flow_to_ml_per_s(flow_raw)
+            net_ml_s = self._update_volume(dt_s, flow_raw, net_sign=-1.0) 
+
+            removed = max(0.0, v_start - float(self.volume_ml))
+
+            self._log_row(mode, dt_s, flow_raw, flow_ml_s, net_flow_ml_s=net_ml_s, pressure_channel=ch)
+            self._safety_check(mode)
+
+            if removed >= target_volume_ml_to_remove:
+                logger.info("STEADY STATE Target volume reached (%.4f / %.4f ml)", removed, target_volume_ml_to_remove)
+                break
+
+            time.sleep(float(self.cfg.sample_period_s))
+
+        removed = max(0.0, v_start - float(self.volume_ml))
+        self._log_row(mode, 0.0, float("nan"), 0.0, pressure_channel=ch, event=f"END_STEADY_STATE removed={removed:.4f}")
+        return removed
 
     def step_filtration_and_venting_track_loss(
         self,

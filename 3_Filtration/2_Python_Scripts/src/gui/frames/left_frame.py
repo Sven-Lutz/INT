@@ -4,105 +4,27 @@ from typing import Optional
 from PySide6.QtCore import Signal, Slot, Qt
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
-    QDoubleSpinBox, QPushButton, QWidget, QSizePolicy, QGridLayout
+    QDoubleSpinBox, QPushButton, QWidget, QSizePolicy, QGridLayout, QLayout
 )
 from src.gui.data.worker import RunParams
 from src.gui.widgets.hold_button import HoldButton
-
-
-class NudgeSpinBox(QWidget):
-    valueChanged = Signal(float)
-
-    def __init__(self, minimum: float, maximum: float, decimals: int, step: float, suffix: str, value: float):
-        super().__init__()
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
-
-        self.spin = QDoubleSpinBox()
-        self.spin.setRange(minimum, maximum)
-        self.spin.setDecimals(decimals)
-        self.spin.setSingleStep(step)
-        self.spin.setSuffix(suffix)
-        self.spin.setValue(value)
-        self.spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-        self.spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.spin.setFocusPolicy(Qt.ClickFocus)
-
-        self.spin.setStyleSheet("""
-            QDoubleSpinBox { 
-                background: #050914; 
-                border: 1px solid #1F2937; 
-                color: #F8FAFC;
-                border-radius: 4px;
-                padding: 6px 10px;
-                font-family: 'Consolas', monospace;
-                font-weight: bold;
-                font-size: 13px;
-            } 
-            QDoubleSpinBox:focus { border: 1px solid #8B5CF6; }
-        """)
-
-        btn_style = """
-            QPushButton { 
-                background-color: #111827; 
-                color: #A0AEC0; 
-                border: 1px solid #2D3748; 
-                border-radius: 4px; 
-                font-family: Arial, sans-serif; 
-                font-size: 18px; 
-                font-weight: bold;
-                padding: 0px;
-                margin: 0px;
-            } 
-            QPushButton:hover { background-color: #2D3748; color: #FFFFFF; border-color: #8B5CF6; }
-            QPushButton:pressed { background-color: #8B5CF6; color: #FFFFFF; border-color: #8B5CF6; }
-            QPushButton:disabled { color: #4A5568; background-color: #050914; border-color: #111827; }
-        """
-
-        self.btn_m = QPushButton("-")
-        self.btn_m.setFixedSize(30, 30)
-        self.btn_m.setFocusPolicy(Qt.NoFocus)
-        self.btn_m.setStyleSheet(btn_style)
-
-        self.btn_p = QPushButton("+")
-        self.btn_p.setFixedSize(30, 30)
-        self.btn_p.setFocusPolicy(Qt.NoFocus)
-        self.btn_p.setStyleSheet(btn_style)
-
-        lay.addWidget(self.spin)
-        lay.addWidget(self.btn_m)
-        lay.addWidget(self.btn_p)
-
-        self.btn_m.clicked.connect(lambda: self.spin.setValue(self.spin.value() - self.spin.singleStep()))
-        self.btn_p.clicked.connect(lambda: self.spin.setValue(self.spin.value() + self.spin.singleStep()))
-        self.spin.valueChanged.connect(self.valueChanged.emit)
-
-    def value(self) -> float: return self.spin.value()
-
-    def setValue(self, val: float): self.spin.setValue(val)
-
-    def setEnabled(self, val: bool):
-        super().setEnabled(val)
-        self.spin.setEnabled(val)
-        self.btn_m.setEnabled(val)
-        self.btn_p.setEnabled(val)
-
+from src.gui.widgets.calculators import ExperimentSetupWidget
+from src.gui.widgets.nudge_spinbox import NudgeSpinBox
 
 @dataclass
 class LeftFrameDefaults:
-    bw1_dur: float = 20.0;
+    bw1_dur: float = 20.0
     bw1_p: float = 600.0
-    fill_t: float = 600.0;
-    fill_r: float = 10.0;
+    fill_t: float = 600.0
+    fill_r: float = 10.0
     fill_h: float = 30.0
-    filt_dur: float = 60.0;
+    filt_dur: float = 60.0
     filt_p: float = 1200.0
     vent_dur: float = 20.0
-    bw2_base: float = 0.0;
-    bw2_p: float = 600.0;
+    bw2_base: float = 0.0
+    bw2_p: float = 600.0
     bw2_max: float = 180.0
-    hold_p: float = 600.0;
+    hold_p: float = 600.0
     hold_max: float = 1.0
 
 
@@ -121,26 +43,31 @@ class LeftFrame(QFrame):
         root.setContentsMargins(15, 15, 15, 15)
         root.setSpacing(15)
 
+        self.setup_calc = ExperimentSetupWidget()
+        root.addWidget(self.setup_calc)
+
         hold_card = self._card("MANUAL HOLD", accent="#EC4899")
         hold_lay = hold_card.layout()
+        assert isinstance(hold_lay, QVBoxLayout) # Hilft Pylance
 
         self.sp_hold_pressure = NudgeSpinBox(0, 8000, 0, 25, " mbar", self.defaults.hold_p)
         self.sp_hold_max = NudgeSpinBox(1.0, 36000, 1, 1, " s", self.defaults.hold_max)
 
-        grid_hold = QGridLayout();
+        grid_hold = QGridLayout()
         grid_hold.setSpacing(10)
-        l1 = QLabel("Setpoint");
+        l1 = QLabel("Setpoint")
         l1.setStyleSheet("color: #A0AEC0; font-size: 11px; font-family: 'Consolas', monospace;")
-        l2 = QLabel("Max Time");
+        l2 = QLabel("Max Time")
         l2.setStyleSheet("color: #A0AEC0; font-size: 11px; font-family: 'Consolas', monospace;")
-        grid_hold.addWidget(l1, 0, 0);
+        grid_hold.addWidget(l1, 0, 0)
         grid_hold.addWidget(self.sp_hold_pressure, 0, 1)
-        grid_hold.addWidget(l2, 1, 0);
+        grid_hold.addWidget(l2, 1, 0)
         grid_hold.addWidget(self.sp_hold_max, 1, 1)
         hold_lay.addLayout(grid_hold)
 
         self.btn_hold = HoldButton("SYSTEM IDLE")
-        self.btn_hold.setFocusPolicy(Qt.NoFocus)
+        # ---> KORREKTUR: Voll qualifiziertes Enum
+        self.btn_hold.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.set_hold_active(False)
         hold_lay.addWidget(self.btn_hold)
         root.addWidget(hold_card)
@@ -162,7 +89,10 @@ class LeftFrame(QFrame):
         self.lbl_fill_out = QLabel("Auto-Calc: —")
         self.lbl_fill_out.setStyleSheet(
             "color: #00E5FF; font-family: 'Consolas', monospace; font-size: 10px; border: none; padding-top: 4px;")
-        fill_card.layout().addWidget(self.lbl_fill_out)
+        
+        fill_lay = fill_card.layout()
+        assert isinstance(fill_lay, QVBoxLayout) # Hilft Pylance
+        fill_lay.addWidget(self.lbl_fill_out)
         root.addWidget(fill_card)
 
         self.sp_filt_dur = NudgeSpinBox(1.0, 86400, 1, 5, " s", self.defaults.filt_dur)
@@ -185,10 +115,10 @@ class LeftFrame(QFrame):
         c = QFrame()
         c.setStyleSheet(
             f"background: #111827; border-radius: 6px; border: 1px solid #1F2937; border-top: 3px solid {accent};")
-        l = QVBoxLayout(c);
-        l.setContentsMargins(15, 12, 15, 15);
+        l = QVBoxLayout(c)
+        l.setContentsMargins(15, 12, 15, 15)
         l.setSpacing(12)
-        t = QLabel(title);
+        t = QLabel(title)
         t.setStyleSheet(
             f"font-size: 11px; font-weight: bold; color: {accent}; letter-spacing: 1.5px; border: none; font-family: 'Consolas', monospace;")
         l.addWidget(t)
@@ -197,12 +127,13 @@ class LeftFrame(QFrame):
     def _param_card(self, title: str, items: list) -> QFrame:
         c = self._card(title, accent="#4A5568")
         l = c.layout()
-        g = QGridLayout();
+        assert isinstance(l, QVBoxLayout) # Hilft Pylance
+        g = QGridLayout()
         g.setSpacing(10)
         for i, (label, widget) in enumerate(items):
-            lbl = QLabel(label);
+            lbl = QLabel(label)
             lbl.setStyleSheet("color: #A0AEC0; font-size: 11px; font-family: 'Consolas', monospace; border: none;")
-            g.addWidget(lbl, i, 0);
+            g.addWidget(lbl, i, 0)
             g.addWidget(widget, i, 1)
         l.addLayout(g)
         return c
@@ -217,12 +148,19 @@ class LeftFrame(QFrame):
         for w in widgets:
             w.valueChanged.connect(self._on_any_change)
 
+        self.setup_calc.setup_changed.connect(self._on_any_change)
+
     @Slot()
     def _on_any_change(self):
         self.params_changed.emit(self.get_run_params())
 
     def get_run_params(self) -> RunParams:
         return RunParams(
+            v_bnnt_ml=self.setup_calc.get_v_bnnt_ml(),
+            v_h2o_ml=self.setup_calc.sp_h2o.value(),
+            phase_a_target_mbar=self.setup_calc.sp_target_p.value(),
+            phase_a_step_mbar=self.setup_calc.sp_step_size.value(),
+            phase_a_time_min=self.setup_calc.sp_step_time.value(),
             backwash1_duration_s=self.sp_bw1_dur.value(),
             backwash1_pressure_mbar=self.sp_bw1_p.value(),
             filling_target_mbar=self.sp_fill_t.value(),
@@ -259,7 +197,6 @@ class LeftFrame(QFrame):
         base_style = "font-family: 'Consolas', monospace; font-size: 11px; font-weight: bold; letter-spacing: 2px; padding: 12px; border-radius: 4px; "
         if self._hold_active:
             self.btn_hold.setText(">>> BACKWASH ACTIVE <<<")
-            # 🚀 CHROMA GRADIENT: Pink -> Purple 🚀
             self.btn_hold.setStyleSheet(
                 base_style + "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #EC4899, stop:1 #8B5CF6); border: none; color: #FFFFFF;")
         elif not self._hold_allowed:
@@ -271,6 +208,9 @@ class LeftFrame(QFrame):
                 base_style + "background-color: #111827; border: 1px solid #2D3748; color: #EC4899;")
 
     def set_running(self, running: bool):
+
+        self.setup_calc.setEnabled(not running)
+
         widgets = [
             self.sp_hold_pressure, self.sp_hold_max, self.sp_bw1_dur, self.sp_bw1_p,
             self.sp_fill_t, self.sp_fill_r, self.sp_fill_h, self.sp_filt_dur,
