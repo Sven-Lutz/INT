@@ -224,6 +224,7 @@ class ExperimentWorker(QObject):
 
         self._ensure_t0()
         now = time.monotonic()
+        assert self._t0 is not None
         t_s = now - float(self._t0)
 
         step_elapsed_s = (now - self._step_t0) if self._step_t0 is not None else None
@@ -241,9 +242,12 @@ class ExperimentWorker(QObject):
         p1_set = p1_meas = p2_set = p2_meas = None
         if getattr(dev, "pressure_controller", None) is not None:
             try:
-                p1_set = float(dev.get_pressure_setpoint_mbar(1)) if hasattr(dev,
-                                                                             "get_pressure_setpoint_mbar") else float(
-                    dev.get_pressure_setpoint(1))
+                if hasattr(dev, "get_pressure_setpoint_mbar"):
+                    _val = dev.get_pressure_setpoint_mbar(1) # type: ignore
+                    p1_set = float(_val) if _val is not None else None
+                else:
+                    _val = dev.get_pressure_setpoint(1)
+                    p1_set = float(_val) if _val is not None else None
             except Exception:
                 p1_set = None
             try:
@@ -623,7 +627,7 @@ class ExperimentWorker(QObject):
 
             self._raise_if_abort()
 
-            self._exp = Experimentator(dev, self.cfg)
+            self._exp = Experimentator(dev, self.cfg) # type: ignore
             self._t0 = None
 
             try:

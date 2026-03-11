@@ -16,3 +16,5 @@ def setup_gui_logging(log_dir: str, filename: str = "app.log", level: int = logg
             logging.FileHandler(log_file, mode="w", encoding="utf-8"),
         ],
     )
+
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
