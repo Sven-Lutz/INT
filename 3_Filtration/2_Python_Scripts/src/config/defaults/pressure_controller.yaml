@@ -2,7 +2,7 @@
 backend: elveflow
 
 device_name: "ASRL10::INSTR"
-regulator_types: [5, 0, 0, 0]
+regulator_types: [5, 5, 0, 0]
 
 calib_path: "C:\\Users\\Operator\\PelliKAn\\3_Filtration\\4_Config\\Calibration\\OB1_Calib_latest.txt"
 autoload_calib: true
