@@ -41,7 +41,7 @@ class FlowSensorConfig:
 class FlowSensor:
     """
     Elite FlowSensor: Nutzt exakt die funktionierende Logik deines alten Codes, 
-    liefert aber saubere Typen für das neue PelliKAn OS.
+    ist aber optimiert für High-Frequency Polling ohne Memory Leaks und Log-Spam.
     """
     def __init__(self, cfg: FlowSensorConfig | Dict[str, Any]):
         if isinstance(cfg, dict):
@@ -49,22 +49,36 @@ class FlowSensor:
         else:
             self.cfg = cfg
             
-        # 🚀 KORREKTUR: 'Any' statt 'Optional[object]', damit Pylance aufhört zu meckern!
         self.flow_sensor: Any = None
         self.Instr_ID: Any = None
+        
+        # 🚀 ELITE TWEAK 1: Pre-compiled Request (Verhindert Memory Allocation im Loop)
+        self._cached_request = [{
+            "proc_nr": self.cfg.proc_nr,
+            "parm_nr": self.cfg.parm_nr,
+            "parm_type": self.cfg.parm_type
+        }]
+        
+        # 🚀 ELITE TWEAK 2: State Tracking für Anti-Jitter und Log-Drosselung
+        self._last_good_flow: float = 0.0
+        self._error_count: int = 0
 
     def connect(self) -> None:
-        """Stellt die Verbindung exakt wie in deinem alten Code her."""
+        """Stellt die serielle Verbindung zum Bronkhorst-Sensor her."""
         if self.flow_sensor is not None:
             return
 
         logger.info(f"FlowSensor: connecting to {self.cfg.port}")
         
         try:
-            # WICHTIG: Keine Baudrate/Address erzwingen, lass propar das machen!
+            # WICHTIG: Keine Baudrate/Address erzwingen, lass propar das automatisch aushandeln
             self.flow_sensor = propar.instrument(self.cfg.port)
             self.Instr_ID = self.flow_sensor.id
             logger.info(f"FlowSensor: communication successfully started (ID: {self.Instr_ID})")
+            
+            # Reset Error State bei erfolgreichem Connect
+            self._error_count = 0
+            self._last_good_flow = 0.0
         except Exception as e:
             logger.error(f"FlowSensor: connection failed -> {e}")
             self.flow_sensor = None
@@ -72,44 +86,53 @@ class FlowSensor:
 
     def get_flow(self) -> float:
         """
-        Liest den Flow exakt wie dein alter Code, extrahiert aber 
-        direkt einen Float (statt der 'pint' Einheit ml/min).
+        Liest den Flow. Nutzt Fallbacks und Fehlerdrosselung, um das UI
+        niemals abstürzen zu lassen oder Spikes in Graphen zu erzeugen.
         """
         if self.flow_sensor is None:
-            raise RuntimeError("FlowSensor not connected.")
-
-        # Exakt dein altes Dictionary Format!
-        param_info = {
-            "proc_nr": self.cfg.proc_nr,
-            "parm_nr": self.cfg.parm_nr,
-            "parm_type": self.cfg.parm_type
-        }
+            # Fallback, wenn Disconnect aufgerufen wurde, aber Polling noch läuft
+            return 0.0
 
         try:
-            # Exakt dein alter Call!
-            values = self.flow_sensor.read_parameters([param_info])
+            # Exakt dein alter Call, aber extrem performant mit pre-compiled List
+            values = self.flow_sensor.read_parameters(self._cached_request)
             
-            # Fehlerbehandlung, falls propar Quatsch zurückgibt
+            # Strikte Gültigkeitsprüfung
             if not values or not isinstance(values, list) or len(values) == 0:
-                logger.warning("FlowSensor: Empty response from propar")
-                return 0.0
+                raise ValueError("Empty response from propar")
 
             data = values[0].get("data")
             if data is None:
-                logger.warning(f"FlowSensor: No data in response: {values[0]}")
-                return 0.0
+                raise ValueError(f"No data in response: {values[0]}")
             
-            return float(data)
+            # Versuche sauberen Float-Cast (Sicherheitshalber)
+            current_flow = float(data)
+            
+            # Wenn wir hier sind, war der Read 100% erfolgreich
+            if self._error_count > 0:
+                logger.info("FlowSensor: Connection recovered.")
+                self._error_count = 0
+                
+            self._last_good_flow = current_flow
+            return current_flow
 
         except Exception as e:
-            logger.warning(f"FlowSensor: read error -> {e}")
-            # Um das UI nicht abstürzen zu lassen, geben wir im Fehlerfall 0.0 zurück
-            return 0.0
+            self._error_count += 1
+            
+            # 🚀 ELITE TWEAK 3: Log Spam Throttling. Loggt nur den 1., 10., 50., 100. Fehler
+            if self._error_count in (1, 10) or self._error_count % 50 == 0:
+                logger.warning(f"FlowSensor: read error -> {e} (Consecutive failures: {self._error_count})")
+            
+            # 🚀 ELITE TWEAK 4: Signal Smoothing. Wir geben den letzten guten Wert zurück.
+            # Wenn der Sensor nur einen kurzen USB-Hänger hat, zuckt der Graph dadurch nicht auf 0 runter!
+            # Wenn der Sensor dauerhaft weg ist, wird er langfristig die Konstante zeichnen.
+            return self._last_good_flow
 
     def close(self) -> None:
-        """Schließt die Verbindung, falls der Treiber das anbietet."""
+        """Schließt die Verbindung sicher."""
         if self.flow_sensor is None:
             return
+            
         logger.info("FlowSensor: disconnecting")
         try:
             if hasattr(self.flow_sensor, "close"):
@@ -118,3 +141,4 @@ class FlowSensor:
             logger.warning(f"FlowSensor: error during disconnect -> {e}")
         finally:
             self.flow_sensor = None
+            self.Instr_ID = None

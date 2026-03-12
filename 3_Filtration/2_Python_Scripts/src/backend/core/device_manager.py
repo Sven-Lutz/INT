@@ -140,73 +140,59 @@ class DeviceManager:
         return self.flow_sensor
 
     # =====================================================================
-    # 🚀 ADAPTER: KORREKTE API AUFRUFE FÜR DEINE ALTEN TREIBER
+    # 🚀 ADAPTER: STRIKTE AUFRUFE DER KLASSEN-METHODEN
     # =====================================================================
 
     def set_pressure_setpoint_mbar(self, *, channel: int, setpoint_mbar: float, ramp: bool = True) -> None:
+        """
+        Ruft direkt die Methode 'set_pressure_mbar(ch, value)' auf dem PressureController auf.
+        Kein Raten mehr!
+        """
         pc = self._require_pressure()
-        
-        # 🚀 SUCHT JETZT NACH DEN KORREKTEN NEUEN METHODEN
-        for method_name in ("set_pressure_mbar", "set_pressure", "write_pressure"):
-            fn: Any = getattr(pc, method_name, None)
-            if callable(fn):
-                try:
-                    # Versucht zuerst die aktuelle Signatur
-                    fn(ch=int(channel), value_mbar=float(setpoint_mbar))
-                    return
-                except TypeError:
-                    try:
-                        # Versucht die Fallback Signatur (channel, value)
-                        fn(channel=int(channel), value=float(setpoint_mbar))
-                        return
-                    except TypeError:
-                        # Positional Arguments
-                        fn(int(channel), float(setpoint_mbar))
-                        return
-                        
-        raise RuntimeError("PressureController hat keine bekannte Methode zum Setzen des Drucks.")
+        try:
+            pc.set_pressure_mbar(int(channel), float(setpoint_mbar))
+        except Exception as e:
+            logger.error(f"DeviceManager: Failed to set pressure on channel {channel} to {setpoint_mbar} mbar. Error: {e}")
+            raise
 
     def get_pressure_mbar(self, channel: int) -> float:
+        """
+        Ruft direkt die Methode 'get_pressure_mbar(ch)' auf dem PressureController auf.
+        """
         pc = self._require_pressure()
-        
-        # 🚀 SUCHT JETZT NACH DEN KORREKTEN NEUEN METHODEN
-        for method_name in ("get_pressure_mbar", "read_pressure", "get_pressure"):
-            fn: Any = getattr(pc, method_name, None)
-            if callable(fn):
-                try:
-                    v: Any = fn(ch=int(channel))
-                except TypeError:
-                    try:
-                        v: Any = fn(channel=int(channel))
-                    except TypeError:
-                        v: Any = fn(int(channel))
-                
-                if v is None: 
-                    return 0.0 # Safety Fallback
-                if hasattr(v, "magnitude"): 
-                    return float(v.magnitude)
-                return float(v)
-                
-        raise RuntimeError(f"PressureController hat keine bekannte Methode zum Lesen des Drucks. Verfügbare Attribute: {dir(pc)}")
+        try:
+            v = pc.get_pressure_mbar(int(channel))
+            if v is None:
+                return 0.0
+            return float(v)
+        except Exception as e:
+            logger.error(f"DeviceManager: Failed to read pressure on channel {channel}. Error: {e}")
+            return 0.0
 
     def get_pressure_setpoint_mbar(self, channel: int) -> float:
+        # Der alte Treiber hat keine Funktion, um den Setpoint zu lesen.
+        # Wir geben als Fallback einfach den aktuellen Druck zurück.
         return self.get_pressure_mbar(channel)
 
     def read_flow(self) -> float:
+        """
+        Ruft direkt die Methode 'get_flow()' auf dem FlowSensor auf.
+        """
         fs = self._require_flow()
-        fn: Any = getattr(fs, "get_flow", None)
-        
-        if callable(fn):
-            v: Any = fn()
+        try:
+            v = fs.get_flow()
             if v is None: 
                 return 0.0
-            if hasattr(v, "magnitude"): 
+            # Just in case some pint object still slips through
+            if hasattr(v, "magnitude") and not isinstance(v, (float, int)): 
                 return float(v.magnitude)
             return float(v)
-            
-        raise RuntimeError("FlowSensor hat keine get_flow Methode.")
+        except Exception as e:
+            logger.error(f"DeviceManager: Failed to read flow. Error: {e}")
+            return 0.0
 
     def set_valve_state(self, state: str) -> None:
+        """Mappt unsere standardisierten Namen auf die deines alten ValveControllers."""
         vc = self._require_valves()
         st = str(state).strip().upper()
 
@@ -214,7 +200,6 @@ class DeviceManager:
             self.STATE_FILTRATION: "filtration",
             self.STATE_FILLING: "filling_solution",
             self.STATE_VENTING: "venting",
-            # WICHTIG: Dein alter Treiber nutzt "backwashing", nicht "backwash"!
             self.STATE_BACKWASH: "backwashing", 
             self.STATE_SHUT: "all_shut",
             self.STATE_OPEN: "all_open"
@@ -229,6 +214,8 @@ class DeviceManager:
             raise ValueError(f"Unknown valve state '{state}' (mapped to {mapped_fn})")
 
     def get_valve_state(self) -> str:
+        # Der alte ValveController hat keine get_state() Methode, die einen String zurückgibt,
+        # er hat das self.state Dictionary.
         vc = self._require_valves()
         if hasattr(vc, "state") and isinstance(vc.state, dict):
             return str(vc.state)
@@ -250,8 +237,8 @@ class DeviceManager:
         logger.info("DeviceManager: Disconnecting hardware...")
         
         if self.flow_sensor is not None:
-            fn: Any = getattr(self.flow_sensor, "close", None)
-            if callable(fn): fn()
+            try: self.flow_sensor.close()
+            except Exception: pass
             self.flow_sensor = None
 
         if self.pressure_controller is not None:
@@ -259,8 +246,8 @@ class DeviceManager:
                 try: self.set_pressure_setpoint_mbar(channel=ch, setpoint_mbar=0.0)
                 except Exception: pass
             
-            fn: Any = getattr(self.pressure_controller, "close", getattr(self.pressure_controller, "shutdown", None))
-            if callable(fn): fn()
+            try: self.pressure_controller.close()
+            except Exception: pass
             self.pressure_controller = None
 
         if self._valves_connected:
