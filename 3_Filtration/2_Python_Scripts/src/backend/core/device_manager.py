@@ -84,9 +84,8 @@ class DeviceManager:
         if opts.enable_flow:
             assert flow_cfg is not None, "Flow config is required but missing."
             try:
-                # Convert dictionary to FlowSensorConfig object
-                flow_sensor_cfg = FlowSensorConfig(**flow_cfg)
-                self.flow_sensor = FlowSensor(flow_sensor_cfg)
+                # 🚀 KORREKTUR HIER: Übergib das rohe Dict! FlowSensor.from_dict kümmert sich um den Müll.
+                self.flow_sensor = FlowSensor(flow_cfg)
                 logger.info("DeviceManager: FlowSensor connected.")
             except Exception as e:
                 logger.error(f"DeviceManager: FlowSensor init failed: {e}")
