@@ -18,13 +18,9 @@ class DeviceManagerOptions:
     enable_pressure: bool = True
     enable_flow: bool = True
     safe_valves_on_disconnect: bool = True
-    
-    # Fail-fast toggles
     require_valves: bool = True
     require_pressure: bool = True
     require_flow: bool = True
-    
-    # Simulations-Toggle
     simulate: bool = False
 
 class DeviceManager:
@@ -49,9 +45,8 @@ class DeviceManager:
             logger.info("DeviceManager: Sim mode active. Skipping hardware driver init.")
             return
 
-        # 1. Konfigurationen laden
         valve_cfg = self._load_required_cfg("valves")
-        
+
         pressure_cfg: Optional[Dict[str, Any]] = None
         if opts.enable_pressure:
             pressure_cfg = self._load_required_cfg("pressure_controller")
@@ -60,11 +55,9 @@ class DeviceManager:
         if opts.enable_flow:
             flow_cfg = self._load_required_cfg("flow_sensor")
 
-        # 2. Ventile initialisieren
         try:
             self.valve_controller = ValveController(valve_cfg)
             
-            # Manche Treiber erfordern ein explizites connect()
             connect_fn = getattr(self.valve_controller, "connect", None)
             if callable(connect_fn):
                 connect_fn()
@@ -220,6 +213,9 @@ class DeviceManager:
         if hasattr(vc, "state") and isinstance(vc.state, dict):
             return str(vc.state)
         return "UNKNOWN"
+    
+    def valves_filtration(self):
+        self.set_valve_state(self.STATE_FILTRATION)
 
     def valves_venting(self) -> None: 
         self.set_valve_state(self.STATE_VENTING)
@@ -232,6 +228,11 @@ class DeviceManager:
             for ch in (1, 2):
                 try: self.set_pressure_setpoint_mbar(channel=ch, setpoint_mbar=0.0)
                 except Exception: pass
+
+    def set_pressure(self, channel: int, pressure: float):
+        """Wichtig: Experimentator schickt oft Pint-Objekte oder Floats."""
+        val = getattr(pressure, "magnitude", pressure)
+        self.set_pressure_setpoint_mbar(channel=channel, setpoint_mbar=float(val))
 
     def disconnect(self) -> None:
         logger.info("DeviceManager: Disconnecting hardware...")
