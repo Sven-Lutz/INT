@@ -163,6 +163,9 @@ class MonitorTab(QFrame):
         self._flow = []
         self._p1 = []
         self._p2 = []
+        
+        self._csv_file = None
+        self._csv_writer = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -218,6 +221,36 @@ class MonitorTab(QFrame):
         self.curve_p1.setData([], [])
         self.curve_p2.setData([], [])
 
+    def start_logging(self, run_name_prefix: str = "Run") -> None:
+        """Start logging telemetry data to CSV file."""
+        self.reset_plot()
+        self._csv_file = None
+        self._csv_writer = None
+        
+        log_dir = resolve_under(project_root(__file__), "logs")
+        ensure_dir(log_dir)
+        
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        csv_path = Path(log_dir) / f"{run_name_prefix}_{timestamp}.csv"
+        
+        try:
+            self._csv_file = open(csv_path, 'w', newline='')
+            self._csv_writer = csv.DictWriter(self._csv_file, fieldnames=['t', 'flow', 'p1_meas', 'p2_meas'])
+            self._csv_writer.writeheader()
+        except Exception as e:
+            print(f"Error opening CSV file: {e}")
+
+    def stop_logging(self) -> None:
+        """Stop logging telemetry data to CSV file."""
+        if self._csv_file is not None:
+            try:
+                self._csv_file.close()
+            except Exception as e:
+                print(f"Error closing CSV file: {e}")
+            finally:
+                self._csv_file = None
+                self._csv_writer = None
+
     @Slot(dict)
     def ingest_telemetry(self, payload: dict) -> None:
         t = payload.get("t", time.time())
@@ -246,6 +279,9 @@ class MonitorTab(QFrame):
 # =========================================================================
 # RIGHT FRAME MAIN
 # =========================================================================
+
+from src.utils.path_utils import project_root, resolve_under, ensure_dir
+
 class RightFrame(QFrame):
     start_clicked = Signal()
     stop_clicked = Signal()
@@ -256,7 +292,11 @@ class RightFrame(QFrame):
         super().__init__(parent)
         self.setProperty("surface", "panel")
         self._running = False
-        self._loss_ml = 0.0  
+        
+        # Log-Verzeichnis für den MonitorTab vorbereiten
+        root_path = project_root(__file__)
+        log_dir = resolve_under(root_path, "logs")
+        ensure_dir(log_dir)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(15, 15, 15, 15)
@@ -266,11 +306,13 @@ class RightFrame(QFrame):
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("""
             QTabWidget::pane { border: 1px solid #1E293B; border-radius: 6px; background: #050914; }
-            QTabBar::tab { background: #0F172A; color: #64748B; padding: 6px 12px; margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px; font-family: 'Consolas'; font-weight: bold; font-size: 10px; }
-            QTabBar::tab:selected { background: #1E293B; color: #00E5FF; }
+            QTabBar::tab { background: #0F172A; color: #64748B; padding: 8px 16px; margin-right: 2px; 
+                           border-top-left-radius: 4px; border-top-right-radius: 4px; 
+                           font-family: 'Consolas'; font-weight: bold; font-size: 10px; }
+            QTabBar::tab:selected { background: #1E293B; color: #00E5FF; border-bottom: 2px solid #00E5FF; }
         """)
 
-        # Tab 1: Abstrakt
+        # Tab 1: Abstraktes Modell
         tab_viz = QWidget()
         viz_lay = QHBoxLayout(tab_viz)
         self.sandglass = SandglassWidget()
@@ -281,7 +323,7 @@ class RightFrame(QFrame):
         viz_lay.addWidget(separator)
         viz_lay.addWidget(self.trapezoid)
         
-        # Tab 2: Echtzeit-Graphen
+        # Tab 2: Der neue Elite Monitor
         self.realtime_plot = MonitorTab()
 
         self.tabs.addTab(tab_viz, "PHYSICAL MODEL")
@@ -375,10 +417,10 @@ class RightFrame(QFrame):
     def reset_state(self):
         self.console.clear()
         self.banner_ok.hide()
-        self._loss_ml = 0.0
         self.sandglass.set_state(0.0, "IDLE")
         self.trapezoid.set_pressure(0.0, 2000.0)
-        self.realtime_plot.reset_plot()
+        # Plot für neuen Lauf säubern
+        self.realtime_plot.stop_logging()
 
     @Slot(str)
     def set_step(self, step: str):
@@ -415,27 +457,54 @@ class RightFrame(QFrame):
 
     def set_running(self, running: bool):
         self._running = running
+        
+        # Status der Buttons umschalten
         self.btn_start.setEnabled(not running)
         self.btn_stop.setEnabled(running)
         
         if running:
-            self.btn_start.setStyleSheet(self.btn_start.styleSheet().replace("color: #10B981;", "color: #334155;").replace("border-bottom: 2px solid #10B981;", "border-bottom: 2px solid #1E293B;"))
+            # 1. Logging-Prozess starten
+            self.realtime_plot.start_logging(run_name_prefix="PelliKAn_Run")
+            
+            # 2. Start-Button "Elite" Styling für den laufenden Zustand (ausgegraut/deaktiviert)
+            self.btn_start.setStyleSheet("""
+                QPushButton {
+                    background-color: #0F172A;
+                    color: #334155;
+                    font-family: 'Consolas'; font-weight: bold; font-size: 12px; letter-spacing: 1px;
+                    border: 1px solid #1E293B; border-bottom: 2px solid #1E293B; border-radius: 4px;
+                }
+            """)
         else:
-            self.btn_start.setStyleSheet(self.btn_start.styleSheet().replace("color: #334155;", "color: #10B981;").replace("border-bottom: 2px solid #1E293B;", "border-bottom: 2px solid #10B981;"))
+            # 1. Logging-Prozess sicher beenden
+            self.realtime_plot.stop_logging()
+            
+            # 2. Start-Button "Elite" Styling für den Idle-Zustand (bereit/grün)
+            self.btn_start.setStyleSheet("""
+                QPushButton {
+                    background-color: #111827;
+                    color: #10B981;
+                    font-family: 'Consolas'; font-weight: bold; font-size: 12px; letter-spacing: 1px;
+                    border: 1px solid #1E293B; border-bottom: 2px solid #10B981; border-radius: 4px;
+                }
+                QPushButton:hover { background-color: #1E293B; color: #FFF; }
+            """)
 
     @Slot(dict)
     def update_telemetry(self, sample: dict):
-        # 1. Update abstrakte Visuals
+        """Hier fließen alle Live-Daten zusammen."""
         p1 = sample.get("p1_meas", 0.0)
         max_p = sample.get("p1_set", 2000.0)
         if max_p is None or max_p < 1: max_p = 2000.0
-        
         step = sample.get("step", "")
         
+        # 1. Update Abstrakte Visuals
         self.trapezoid.set_pressure(p1, max_p)
-        
         fill = min(1.0, max(0.0, p1 / max_p)) if max_p > 0 else 0.0
         self.sandglass.set_state(fill, step)
 
-        # 2. Update Live-Plot!
+        # 2. Update den Elite-Plot
+        # Wir fügen den Timestamp für den Plot hinzu, falls nicht vorhanden
+        if "t" not in sample:
+            sample["t"] = time.time()
         self.realtime_plot.ingest_telemetry(sample)
