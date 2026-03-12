@@ -985,9 +985,12 @@ class MainWindow(Qtw.QMainWindow):
     def _init_device_manager_best_effort(self) -> None:
         try:
             from src.backend.core.device_manager import DeviceManager, DeviceManagerOptions
+            
+            # 1. Hardware-Manager erstellen
             opts = DeviceManagerOptions(enable_pressure=True, enable_flow=True, simulate=False)
             self.dev = DeviceManager(opts)
             self._simulation_mode = False
+            
         except Exception as e:
             logger.warning(f"Could not load hardware. Entering simulation mode. Error: {e}")
             self._simulation_mode = True

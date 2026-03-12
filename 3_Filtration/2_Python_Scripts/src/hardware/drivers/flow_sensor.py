@@ -90,25 +90,20 @@ class FlowSensor:
         niemals abstürzen zu lassen oder Spikes in Graphen zu erzeugen.
         """
         if self.flow_sensor is None:
-            # Fallback, wenn Disconnect aufgerufen wurde, aber Polling noch läuft
             return 0.0
 
         try:
-            # Exakt dein alter Call, aber extrem performant mit pre-compiled List
             values = self.flow_sensor.read_parameters(self._cached_request)
-            
-            # Strikte Gültigkeitsprüfung
+
             if not values or not isinstance(values, list) or len(values) == 0:
                 raise ValueError("Empty response from propar")
 
             data = values[0].get("data")
             if data is None:
                 raise ValueError(f"No data in response: {values[0]}")
-            
-            # Versuche sauberen Float-Cast (Sicherheitshalber)
+
             current_flow = float(data)
-            
-            # Wenn wir hier sind, war der Read 100% erfolgreich
+
             if self._error_count > 0:
                 logger.info("FlowSensor: Connection recovered.")
                 self._error_count = 0
@@ -118,14 +113,10 @@ class FlowSensor:
 
         except Exception as e:
             self._error_count += 1
-            
-            # 🚀 ELITE TWEAK 3: Log Spam Throttling. Loggt nur den 1., 10., 50., 100. Fehler
+
             if self._error_count in (1, 10) or self._error_count % 50 == 0:
                 logger.warning(f"FlowSensor: read error -> {e} (Consecutive failures: {self._error_count})")
             
-            # 🚀 ELITE TWEAK 4: Signal Smoothing. Wir geben den letzten guten Wert zurück.
-            # Wenn der Sensor nur einen kurzen USB-Hänger hat, zuckt der Graph dadurch nicht auf 0 runter!
-            # Wenn der Sensor dauerhaft weg ist, wird er langfristig die Konstante zeichnen.
             return self._last_good_flow
 
     def close(self) -> None:
