@@ -1197,15 +1197,11 @@ class MainWindow(Qtw.QMainWindow):
     def _log_manual_state_if_needed(self, *, fp: Tuple[bool, bool, str, str], reason_tag: str) -> None:
         try:
             now = time.monotonic()
+            # Wir loggen NUR noch, wenn sich der Status auch wirklich geändert hat!
             if fp != self._last_manual_state_fp:
                 self._last_manual_state_fp = fp
                 self._last_manual_state_log_ts = now
                 logger.info("ManualState (%s): allowed=%s active=%s reason=%s", reason_tag, fp[0], fp[1], fp[2])
-                return
-            if (now - self._last_manual_state_log_ts) >= float(self.MANUAL_STATE_LOG_THROTTLE_S):
-                self._last_manual_state_log_ts = now
-                logger.info("ManualState (throttle/%s): allowed=%s active=%s reason=%s", reason_tag, fp[0], fp[1],
-                            fp[2])
         except Exception:
             pass
 
