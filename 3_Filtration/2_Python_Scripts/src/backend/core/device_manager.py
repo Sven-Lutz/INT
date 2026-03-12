@@ -63,6 +63,16 @@ class DeviceManager:
         # 2. Ventile initialisieren
         try:
             self.valve_controller = ValveController(valve_cfg)
+            
+            # Manche Treiber erfordern ein explizites connect()
+            connect_fn = getattr(self.valve_controller, "connect", None)
+            if callable(connect_fn):
+                connect_fn()
+            elif hasattr(self.valve_controller, "relais"):
+                rel_connect = getattr(self.valve_controller.relais, "connect", None)
+                if callable(rel_connect):
+                    rel_connect()
+
             self._valves_connected = True
             logger.info("DeviceManager: ValveController connected.")
         except Exception as e:
@@ -74,6 +84,12 @@ class DeviceManager:
             assert pressure_cfg is not None, "Pressure config is required but missing."
             try:
                 self.pressure_controller = PressureController(pressure_cfg)
+                
+                # Explizites Connect falls nötig
+                connect_fn = getattr(self.pressure_controller, "connect", None)
+                if callable(connect_fn):
+                    connect_fn()
+                    
                 logger.info("DeviceManager: PressureController (OB1) connected.")
             except Exception as e:
                 logger.error(f"DeviceManager: PressureController init failed: {e}")
@@ -84,8 +100,11 @@ class DeviceManager:
         if opts.enable_flow:
             assert flow_cfg is not None, "Flow config is required but missing."
             try:
-                # 🚀 KORREKTUR HIER: Übergib das rohe Dict! FlowSensor.from_dict kümmert sich um den Müll.
                 self.flow_sensor = FlowSensor(flow_cfg)
+                
+                # Hier rufen wir explizit connect() auf, wie in der FlowSensor Klasse definiert
+                self.flow_sensor.connect()
+                
                 logger.info("DeviceManager: FlowSensor connected.")
             except Exception as e:
                 logger.error(f"DeviceManager: FlowSensor init failed: {e}")
@@ -125,43 +144,55 @@ class DeviceManager:
     # =====================================================================
 
     def set_pressure_setpoint_mbar(self, *, channel: int, setpoint_mbar: float, ramp: bool = True) -> None:
-        """Sende mbar DIREKT an den alten Treiber, keine Prozentrechnung!"""
         pc = self._require_pressure()
-        fn: Any = getattr(pc, "set_pressure", None)
         
-        if callable(fn):
-            try:
-                # Alte Signatur: set_pressure(self, channel: int = 1, pressure: float = 0)
-                fn(channel=int(channel), pressure=float(setpoint_mbar))
-            except TypeError:
-                # Fallback ohne kwargs
-                fn(int(channel), float(setpoint_mbar))
-        else:
-            raise RuntimeError("PressureController hat keine set_pressure Methode.")
+        # 🚀 SUCHT JETZT NACH DEN KORREKTEN NEUEN METHODEN
+        for method_name in ("set_pressure_mbar", "set_pressure", "write_pressure"):
+            fn: Any = getattr(pc, method_name, None)
+            if callable(fn):
+                try:
+                    # Versucht zuerst die aktuelle Signatur
+                    fn(ch=int(channel), value_mbar=float(setpoint_mbar))
+                    return
+                except TypeError:
+                    try:
+                        # Versucht die Fallback Signatur (channel, value)
+                        fn(channel=int(channel), value=float(setpoint_mbar))
+                        return
+                    except TypeError:
+                        # Positional Arguments
+                        fn(int(channel), float(setpoint_mbar))
+                        return
+                        
+        raise RuntimeError("PressureController hat keine bekannte Methode zum Setzen des Drucks.")
 
     def get_pressure_mbar(self, channel: int) -> float:
-        """Liest den Druck, ignoriert Pint/Objekte und erzwingt einen Float."""
         pc = self._require_pressure()
-        fn: Any = getattr(pc, "get_pressure", None)
         
-        if callable(fn):
-            v: Any = fn(int(channel))
-            if v is None: 
-                return 0.0 # Safety Fallback
-            # Falls der Treiber ein pint Quantity zurückgibt (Q_)
-            if hasattr(v, "magnitude"): 
-                return float(v.magnitude)
-            return float(v)
-            
-        raise RuntimeError("PressureController hat keine get_pressure Methode.")
+        # 🚀 SUCHT JETZT NACH DEN KORREKTEN NEUEN METHODEN
+        for method_name in ("get_pressure_mbar", "read_pressure", "get_pressure"):
+            fn: Any = getattr(pc, method_name, None)
+            if callable(fn):
+                try:
+                    v: Any = fn(ch=int(channel))
+                except TypeError:
+                    try:
+                        v: Any = fn(channel=int(channel))
+                    except TypeError:
+                        v: Any = fn(int(channel))
+                
+                if v is None: 
+                    return 0.0 # Safety Fallback
+                if hasattr(v, "magnitude"): 
+                    return float(v.magnitude)
+                return float(v)
+                
+        raise RuntimeError(f"PressureController hat keine bekannte Methode zum Lesen des Drucks. Verfügbare Attribute: {dir(pc)}")
 
     def get_pressure_setpoint_mbar(self, channel: int) -> float:
-        # Der alte Treiber hat keine Funktion, um den Setpoint zu lesen.
-        # Wir geben als Fallback einfach den aktuellen Druck zurück.
         return self.get_pressure_mbar(channel)
 
     def read_flow(self) -> float:
-        """Ruft get_flow() auf und extrahiert den Wert aus dem Pint Quantity."""
         fs = self._require_flow()
         fn: Any = getattr(fs, "get_flow", None)
         
@@ -169,7 +200,6 @@ class DeviceManager:
             v: Any = fn()
             if v is None: 
                 return 0.0
-            # Hier fangen wir das Q_(flow_value,"ml/min") Objekt ab!
             if hasattr(v, "magnitude"): 
                 return float(v.magnitude)
             return float(v)
@@ -177,7 +207,6 @@ class DeviceManager:
         raise RuntimeError("FlowSensor hat keine get_flow Methode.")
 
     def set_valve_state(self, state: str) -> None:
-        """Mappt unsere standardisierten Namen auf die deines alten ValveControllers."""
         vc = self._require_valves()
         st = str(state).strip().upper()
 
@@ -200,11 +229,8 @@ class DeviceManager:
             raise ValueError(f"Unknown valve state '{state}' (mapped to {mapped_fn})")
 
     def get_valve_state(self) -> str:
-        # Der alte ValveController hat keine get_state() Methode, die einen String zurückgibt,
-        # er hat das self.state Dictionary. Wir machen einen Best-Effort.
         vc = self._require_valves()
         if hasattr(vc, "state") and isinstance(vc.state, dict):
-            # Gib einfach als Info den Inhalt des Dicts zurück
             return str(vc.state)
         return "UNKNOWN"
 
