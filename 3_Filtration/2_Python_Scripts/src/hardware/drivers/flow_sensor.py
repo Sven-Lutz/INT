@@ -117,8 +117,8 @@ class FlowSensor:
 
         self._consecutive_read_failures: int = 0
         self._last_error: Optional[str] = None
-        self._raw_dumped: set[tuple[int, int, str]] = set()  # (proc,parm,"read"/"write")
-
+        self._raw_dumped: set[tuple[int, int, str]] = set()  
+        
         if not str(self.cfg.port).strip():
             raise ValueError("FlowSensorConfig.port must be set.")
         if int(self.cfg.full_scale_raw) <= 0:
@@ -130,7 +130,6 @@ class FlowSensor:
         if self.cfg.fail_hard_after_consecutive < 1:
             raise ValueError("FlowSensorConfig.fail_hard_after_consecutive must be >= 1.")
 
-    # ---------- connection ----------
     def connect(self) -> None:
         if self.inst is not None:
             logger.debug("FlowSensor: connect() called but already connected")
