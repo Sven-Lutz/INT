@@ -31,26 +31,23 @@ class RunParams:
 
     v_bnnt_ml: float
     v_h2o_ml: float
+
+    run_phase_0: bool
+    phase_0_pressure_mbar: float
+
+    run_phase_a: bool
     phase_a_target_mbar: float
     phase_a_step_mbar: float
     phase_a_time_min: float
 
-    backwash1_duration_s: float
-    backwash1_pressure_mbar: Optional[float]
+    run_phase_b: bool
+    v_extra_ml: float
 
-    filling_target_mbar: float
-    filling_ramp_s: float
-    filling_hold_s: float
+    run_phase_c: bool
+    phase_c_rate_mbar_min: float
 
-    filtration_duration_s: float
-    filtration_pressure_mbar: Optional[float]
-
+    run_venting: bool
     venting_duration_s: float
-
-    backwash2_base_remove_ml: float
-    backwash2_pressure_mbar: Optional[float]
-    backwash2_max_duration_s: float
-
 
 class ExperimentWorker(QObject):
     request_ok = Signal(str, str)
@@ -66,6 +63,8 @@ class ExperimentWorker(QObject):
     cmd_stop_backwash_hold = Signal()
     cmd_abort = Signal(str)
     cmd_manual_vent = Signal()
+
+    log_msg = Signal(str, str)
 
     def __init__(self, cfg: ExperimentConfig):
         super().__init__()
@@ -646,176 +645,125 @@ class ExperimentWorker(QObject):
                 self.status.emit(f"Telemetry store disabled: {e}")
 
             # =================================================================
-            # SCHRITT 1: Initialer Backwash (Setup & Manueller Check)
+            # MODULARE ABLAUFSTEUERUNG (Basierend auf UI-Checkboxes)
             # =================================================================
-
-            # WICHTIG: Zuerst Ventile auf Backwash schalten, damit Leertaste funktioniert!
-            try:
-                dev.valves_backwash()
-            except Exception:
-                pass
-
-            # Das Programm wartet hier, die Ventile sind aber bereits auf BACKWASH.
-            self._wait_ok(Step.BACKWASH_INITIAL, "Perform initial backwash (setup check) and confirm")
-
-            if getattr(dev, "pressure_controller", None) is not None:
-                self._safe_set_pressure_mbar(channel=2, mbar=float(p.backwash1_pressure_mbar or 0.0))
-
-            self._run_timed_with_telemetry(
-                step=Step.BACKWASH_INITIAL,
-                mode="BACKWASH_INITIAL",
-                duration_s=float(p.backwash1_duration_s),
-                pressure_channel=2 if getattr(dev, "pressure_controller", None) is not None else None,
-                net_sign=-1.0,
-                set_valves=dev.valves_backwash,
-                event_start="START_BACKWASH1",
-                event_end="END_BACKWASH1",
-            )
-
-            # Optionales manuelles Nachsteuern
-            self.status.emit("Optional: HOLD backwash to fine-tune, then press OK to continue.")
-            self._current_step = Step.BACKWASH_HOLD
-            self.step_changed.emit(Step.BACKWASH_HOLD.value)
-
-            self._ok_event.clear()
-            self.request_ok.emit(
-                Step.BACKWASH_HOLD.value,
-                "Hold Backwash to run. Release to stop. Press OK to continue.",
-            )
-            try:
-                if self._store is not None:
-                    self._store.write_event(
-                        "OK_GATE_REQUESTED",
-                        {"step": Step.BACKWASH_HOLD.value, "reason": "manual fine backwash hold"},
-                    )
-            except Exception:
-                pass
-
-            while not self._ok_event.wait(timeout=0.1):
-                self._raise_if_abort()
-                self._apply_manual_vent_if_requested()
-                if self._hold_active.is_set():
-                    self._run_backwash_hold_loop()
-
-            try:
-                if self._store is not None:
-                    self._store.write_event("OK_CONFIRMED", {"step": Step.BACKWASH_HOLD.value})
-            except Exception:
-                pass
-
-            # =================================================================
-            # SCHRITT 2: Filling
-            # =================================================================
-            self._wait_ok(Step.FILLING, "Confirm filling parameters and start filling")
-            self.status.emit("Running filling")
-
-            self._current_step = Step.FILLING
-            self._step_t0 = time.monotonic()
-            self._step_total_s = float(p.filling_ramp_s) + float(p.filling_hold_s)
-            self.step_changed.emit(Step.FILLING.value)
-            self._emit_sample(event="STEP_START_FILLING")
-
-            self._exp.step_filling_with_linear_ramp(
-                target_pressure_mbar=float(p.filling_target_mbar),
-                ramp_duration_s=float(p.filling_ramp_s),
-                hold_duration_s=float(p.filling_hold_s),
-            )
-            self._emit_sample(event="END_FILLING")
-
-            self._current_step = Step.FILTRATION
-            self.step_changed.emit(Step.FILTRATION.value)
             
-            # --- PHASE A ---
-            self._wait_ok(Step.FILTRATION, f"Start Phase A: Ramp up to {p.phase_a_target_mbar} mbar")
-            self.status.emit("Running Phase A (Staircase Ramp)")
-            self._emit_sample(event="STEP_START_PHASE_A")
+# =================================================================
+            # MODULARE ABLAUFSTEUERUNG (Basierend auf UI-Checkboxes)
+            # =================================================================
+            
+            target_vol = float(p.v_bnnt_ml) + float(p.v_h2o_ml)
+            total_loss = 0.0
 
             def ramp_step_callback(msg: str):
-                self._wait_ok(Step.FILTRATION, msg)
+                self._wait_ok(self._current_step, msg)
 
-            loss_a = self._exp.step_staircase_ramp(
-                target_pressure_mbar=float(p.phase_a_target_mbar),
-                step_size_mbar=float(p.phase_a_step_mbar),
-                step_time_s=float(p.phase_a_time_min * 60.0),
-                wait_for_ok_fn=ramp_step_callback 
-            )
+            # --- PHASE 0: FILLING ---
+            if p.run_phase_0:
+                self._current_step = Step.FILLING
+                self.step_changed.emit("FILLING")
+                self._wait_ok(Step.FILLING, f"Confirm Phase 0: Fill cell at {p.phase_0_pressure_mbar} mbar")
+                self.status.emit("Running Phase 0 (Filling)")
+                self._emit_sample(event="STEP_START_PHASE_0")
+                
+                try: dev.valves_filling_solution() # type: ignore
+                except Exception: pass
+                
+                if getattr(dev, "pressure_controller", None) is not None:
+                    self._safe_set_pressure_mbar(channel=int(self.cfg.main_pressure_channel), mbar=float(p.phase_0_pressure_mbar))
+                
+                self._wait_ok(Step.FILLING, "Phase 0 active. Click OK when cell is completely filled.")
+                
+                if getattr(dev, "pressure_controller", None) is not None:
+                    self._safe_set_pressure_mbar(channel=int(self.cfg.main_pressure_channel), mbar=0.0)
 
-            target_vol = float(p.v_bnnt_ml) + float(p.v_h2o_ml)
-            self._wait_ok(Step.FILTRATION, f"Start Phase B: Hold {p.phase_a_target_mbar} mbar until {target_vol:.2f}ml removed")
-            self.status.emit(f"Running Phase B (Target: {target_vol:.4f} mL)")
-            self._emit_sample(event="STEP_START_PHASE_B")
+            # --- PHASE A: RAMP UP ---
+            if p.run_phase_a:
+                self._current_step = Step.FILTRATION
+                self.step_changed.emit("PHASE_A") # Eindeutiges Signal für das UI
+                self._wait_ok(Step.FILTRATION, f"Start Phase A: Ramp up to {p.phase_a_target_mbar} mbar")
+                self.status.emit("Running Phase A")
+                self._emit_sample(event="STEP_START_PHASE_A")
+                
+                loss_a = self._exp.step_staircase_ramp(
+                    target_pressure_mbar=float(p.phase_a_target_mbar),
+                    step_size_mbar=float(p.phase_a_step_mbar),
+                    step_time_s=float(p.phase_a_time_min * 60.0),
+                    wait_for_ok_fn=ramp_step_callback 
+                )
+                total_loss += loss_a
 
-            loss_b = self._exp.step_steady_state_volume_target(
-                target_volume_ml_to_remove=target_vol,
-                pressure_mbar=float(p.phase_a_target_mbar),
-                max_duration_s=float(p.filtration_duration_s)
-            )
+            # --- PHASE B: STEADY STATE & DRY ---
+            if p.run_phase_b:
+                self._current_step = Step.FILTRATION
+                self.step_changed.emit("PHASE_B")
+                self._wait_ok(Step.FILTRATION, f"Start Phase B1: Hold until {target_vol:.2f}ml removed")
+                self.status.emit("Running Phase B1")
+                self._emit_sample(event="STEP_START_PHASE_B1")
+                
+                loss_b1 = self._exp.step_steady_state_volume_target(
+                    target_volume_ml_to_remove=target_vol,
+                    pressure_mbar=float(p.phase_a_target_mbar),
+                    max_duration_s=86400.0 # Timeout Sicherung
+                )
+                total_loss += loss_b1
 
-            self._exp.last_filtration_venting_loss_ml = float(loss_a + loss_b)
-            self._emit_sample(event=f"END_FILTRATION_PHASES loss={loss_a + loss_b:.4f}")
+                if p.v_extra_ml > 0:
+                    self._wait_ok(Step.FILTRATION, f"Start Phase B2: Dry with {p.v_extra_ml:.2f}ml extra")
+                    self.status.emit("Running Phase B2")
+                    loss_b2 = self._exp.step_steady_state_volume_target(
+                        target_volume_ml_to_remove=float(p.v_extra_ml),
+                        pressure_mbar=float(p.phase_a_target_mbar),
+                        max_duration_s=86400.0
+                    )
+                    total_loss += loss_b2
+
+            # --- PHASE C: RAMP DOWN ---
+            if p.run_phase_c:
+                self._current_step = Step.FILTRATION
+                self.step_changed.emit("PHASE_C")
+                self._wait_ok(Step.FILTRATION, "Start Phase C: Smooth Ramp Down")
+                self.status.emit("Running Phase C")
+                self._emit_sample(event="STEP_START_PHASE_C")
+                
+                # Wir übersetzen die Rate in kleine Sekundenschritte für einen sauberen Abbau!
+                rate_mbar_s = float(p.phase_c_rate_mbar_min) / 60.0
+                
+                loss_c = self._exp.step_staircase_ramp_down( # type: ignore
+                    start_pressure_mbar=float(p.phase_a_target_mbar),
+                    step_size_mbar=rate_mbar_s, # Kleine Schritte
+                    step_time_s=1.0,            # Jede Sekunde
+                    wait_for_ok_fn=None         # Keine Abfragen mehr, es fährt automatisch runter!
+                )
+                total_loss += loss_c
+
+            # --- VENTING ---
+            if p.run_venting:
+                self._current_step = Step.VENTING
+                self.step_changed.emit("VENTING")
+                self._wait_ok(Step.VENTING, "Confirm venting duration")
+                self.status.emit("Running venting")
+                self._emit_sample(event="STEP_START_VENTING")
+
+                self._run_timed_with_telemetry(
+                    step=Step.VENTING,
+                    mode="VENTING",
+                    duration_s=float(p.venting_duration_s),
+                    pressure_channel=None,
+                    net_sign=-1.0,
+                    set_valves=getattr(dev, "valves_venting", dev.valves_venting), # type: ignore
+                    event_start="START_VENTING",
+                    event_end="END_VENTING",
+                )
+
+            # --- ABSCHLUSS & BILANZ ---
+            self._exp.last_filtration_venting_loss_ml = float(total_loss)
+            self.loss_updated.emit(total_loss)
+            self._emit_sample(event=f"END_SEQUENCE total_loss={total_loss:.4f}")
             
-
-            # =================================================================
-            # SCHRITT 4: Venting
-            # =================================================================
-            self._wait_ok(Step.VENTING, "Confirm venting duration and start venting")
-            self.status.emit("Running venting")
-
-            self._current_step = Step.VENTING
-            self.step_changed.emit(Step.VENTING.value)
-            self._emit_sample(event="STEP_START_VENTING")
-
-            self._run_timed_with_telemetry(
-                step=Step.VENTING,
-                mode="VENTING",
-                duration_s=float(p.venting_duration_s),
-                pressure_channel=None,
-                net_sign=-1.0,
-                set_valves=getattr(dev, "valves_venting", dev.valves_venting),
-                event_start="START_VENTING",
-                event_end="END_VENTING",
-            )
-
-            # Verlustberechnung nach Filtration + Venting aktualisieren
-            try:
-                loss_ml = float(getattr(self._exp, "last_filtration_venting_loss_ml", 0.0))
-            except Exception:
-                loss_ml = 0.0
-            self.loss_updated.emit(loss_ml)
-            self._emit_sample(event=f"LOSS_UPDATED:{loss_ml:.6f}")
-            try:
-                if self._store is not None:
-                    self._store.write_event("LOSS_UPDATED", {"loss_ml": float(loss_ml)})
-            except Exception:
-                pass
-
-            # =================================================================
-            # SCHRITT 5: Finaler Backwash
-            # =================================================================
-            self._wait_ok(Step.BACKWASH_FINAL, "Confirm final backwash target (base + loss) and start")
-            self.status.emit("Running final backwash (remove volume)")
-
-            self._current_step = Step.BACKWASH_FINAL
-            self._step_t0 = time.monotonic()
-            self._step_total_s = float(p.backwash2_max_duration_s)
-            self.step_changed.emit(Step.BACKWASH_FINAL.value)
-            self._emit_sample(event="STEP_START_BACKWASH2")
-
-            removed = self._exp.step_backwash_remove_volume(
-                base_remove_ml=float(p.backwash2_base_remove_ml),
-                add_previous_loss=True,
-                max_duration_s=float(p.backwash2_max_duration_s),
-                backwash_pressure_mbar=float(
-                    p.backwash2_pressure_mbar) if p.backwash2_pressure_mbar is not None else None,
-            )
-            self.status.emit(f"Final backwash completed (removed {removed:.3f} mL)")
-            self._emit_sample(event=f"END_BACKWASH2 removed_ml={removed:.6f}")
-            try:
-                if self._store is not None:
-                    self._store.write_event("BACKWASH2_COMPLETED", {"removed_ml": float(removed)})
-            except Exception:
-                pass
-
+            self.log_msg.emit("--- FINAL VOLUME BALANCE ---", "#00E5FF")
+            self.log_msg.emit(f"TOTAL LOST: {total_loss:.3f} ml", "#EC4899")
+            
             # =================================================================
             # SEQUENCE ENDE
             # =================================================================

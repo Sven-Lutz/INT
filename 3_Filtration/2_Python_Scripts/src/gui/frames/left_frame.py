@@ -1,187 +1,353 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional
-from PySide6.QtCore import Signal, Slot, Qt
+from typing import Optional, List
+import math
+from PySide6.QtCore import Signal, Slot, Qt, QTimer
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
-    QDoubleSpinBox, QPushButton, QWidget, QSizePolicy, QGridLayout, QLayout
+    QGridLayout, QWidget
 )
 from src.gui.data.worker import RunParams
 from src.gui.widgets.hold_button import HoldButton
-from src.gui.widgets.calculators import ExperimentSetupWidget
 from src.gui.widgets.nudge_spinbox import NudgeSpinBox
 
-@dataclass
-class LeftFrameDefaults:
-    bw1_dur: float = 20.0
-    bw1_p: float = 600.0
-    fill_t: float = 600.0
-    fill_r: float = 10.0
-    fill_h: float = 30.0
-    filt_dur: float = 60.0
-    filt_p: float = 1200.0
-    vent_dur: float = 20.0
-    bw2_base: float = 0.0
-    bw2_p: float = 600.0
-    bw2_max: float = 180.0
-    hold_p: float = 600.0
-    hold_max: float = 1.0
+class EliteModule(QFrame):
+    toggled = Signal(bool)
+
+    def __init__(self, title: str, accent_color: str, checkable: bool = False, default_checked: bool = True):
+        super().__init__()
+        self.accent = accent_color
+        self.checkable = checkable
+        self._is_active = default_checked if checkable else True
+        self._is_running_highlight = False
+
+        self.main_lay = QVBoxLayout(self)
+        self.main_lay.setContentsMargins(0, 0, 0, 0)
+        self.main_lay.setSpacing(0)
+
+        # Header
+        self.header = QFrame()
+        self.header.setFixedHeight(26)
+        if self.checkable:
+            self.header.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            self.header.mousePressEvent = self._on_header_click
+
+        self.h_lay = QHBoxLayout(self.header)
+        self.h_lay.setContentsMargins(12, 0, 12, 0)
+
+        self.lbl_title = QLabel(title.upper())
+        self.lbl_status = QLabel("ACTIVE" if self._is_active else "SKIPPED")
+        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        
+        if not self.checkable:
+            self.lbl_status.setText("LOCKED")
+
+        self.h_lay.addWidget(self.lbl_title)
+        self.h_lay.addStretch()
+        if self.checkable:
+            self.h_lay.addWidget(self.lbl_status)
+
+        self.main_lay.addWidget(self.header)
+
+        # Content
+        self.content = QFrame()
+        self.content.setStyleSheet("background-color: transparent; border: none;")
+        self.content_lay = QGridLayout(self.content)
+        self.content_lay.setContentsMargins(12, 12, 12, 12)
+        self.content_lay.setSpacing(6)
+        self.main_lay.addWidget(self.content)
+
+        self._apply_state_styles()
+
+    def _on_header_click(self, event):
+        if not self.checkable: return
+        self._is_active = not self._is_active
+        self._apply_state_styles()
+        self.toggled.emit(self._is_active)
+
+    def _apply_state_styles(self):
+        # KORREKTUR: Immer farbige Rahmen für das Elite Design!
+        if self._is_running_highlight:
+            head_bg = self.accent
+            head_text = "#000000"
+            status_text = "RUNNING"
+            status_col = "#000000"
+            border_col = self.accent
+            border_width = "2px"
+        elif self._is_active:
+            head_bg = "#111827" 
+            head_text = self.accent
+            status_text = "ACTIVE"
+            status_col = self.accent
+            border_col = self.accent # Leuchtender Rahmen!
+            border_width = "1px"
+        else:
+            head_bg = "#050914"
+            head_text = "#334155"
+            status_text = "SKIPPED"
+            status_col = "#334155"
+            border_col = "#1E293B"
+            border_width = "1px"
+
+        self.header.setStyleSheet(f"background-color: {head_bg}; border-top-left-radius: 3px; border-top-right-radius: 3px; border-bottom: 1px solid {border_col};")
+        self.lbl_title.setStyleSheet(f"color: {head_text}; font-family: 'Consolas'; font-size: 10px; font-weight: bold; letter-spacing: 1px; border: none; background: transparent;")
+        if self.checkable:
+            self.lbl_status.setText(status_text)
+            self.lbl_status.setStyleSheet(f"color: {status_col}; font-family: 'Consolas'; font-size: 9px; font-weight: bold; border: none; background: transparent;")
+        
+        self.setStyleSheet(f"EliteModule {{ background-color: #090F16; border: {border_width} solid {border_col}; border-radius: 4px; margin-bottom: 6px; }}")
+
+        for i in range(self.content_lay.count()):
+            item = self.content_lay.itemAt(i)
+            if item is None: continue
+            w = item.widget()
+            if w:
+                w.setEnabled(self._is_active)
+                if isinstance(w, QLabel) and not w.property("is_dynamic_result"):
+                    w.setStyleSheet(f"color: {'#94A3B8' if self._is_active else '#334155'}; font-family: 'Consolas'; font-size: 11px; border: none;")
+
+    def setHighlight(self, is_running: bool):
+        self._is_running_highlight = is_running
+        self._apply_state_styles()
+
+    def isChecked(self) -> bool:
+        return self._is_active
+
+    def addRow(self, row: int, label_text: str, widget: QWidget):
+        lbl = QLabel(label_text)
+        lbl.setStyleSheet("color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
+        self.content_lay.addWidget(lbl, row, 0)
+        self.content_lay.addWidget(widget, row, 1)
 
 
 class LeftFrame(QFrame):
     params_changed = Signal(RunParams)
 
-    def __init__(self, config=None, parent=None, defaults=None):
+    def __init__(self, config=None, parent=None):
         super().__init__(parent)
         self.setProperty("surface", "panel")
-        self.defaults = defaults or LeftFrameDefaults()
-
+        
         self._hold_active = False
         self._hold_allowed = True
+        self._is_running = False
+
+        # --- DYNAMIC COUNTDOWN TIMER ---
+        self.countdown_timer = QTimer(self)
+        self.countdown_timer.timeout.connect(self._on_countdown_tick)
+        self._active_phase_key = ""
+        self._time_left_s = 0.0
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(15, 15, 15, 15)
-        root.setSpacing(15)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(6)
 
-        self.setup_calc = ExperimentSetupWidget()
-        root.addWidget(self.setup_calc)
-
-        hold_card = self._card("MANUAL HOLD", accent="#EC4899")
-        hold_lay = hold_card.layout()
-        assert isinstance(hold_lay, QVBoxLayout) # Hilft Pylance
-
-        self.sp_hold_pressure = NudgeSpinBox(0, 8000, 0, 25, " mbar", self.defaults.hold_p)
-        self.sp_hold_max = NudgeSpinBox(1.0, 36000, 1, 1, " s", self.defaults.hold_max)
-
-        grid_hold = QGridLayout()
-        grid_hold.setSpacing(10)
-        l1 = QLabel("Setpoint")
-        l1.setStyleSheet("color: #A0AEC0; font-size: 11px; font-family: 'Consolas', monospace;")
-        l2 = QLabel("Max Time")
-        l2.setStyleSheet("color: #A0AEC0; font-size: 11px; font-family: 'Consolas', monospace;")
-        grid_hold.addWidget(l1, 0, 0)
-        grid_hold.addWidget(self.sp_hold_pressure, 0, 1)
-        grid_hold.addWidget(l2, 1, 0)
-        grid_hold.addWidget(self.sp_hold_max, 1, 1)
-        hold_lay.addLayout(grid_hold)
-
-        self.btn_hold = HoldButton("SYSTEM IDLE")
-        # ---> KORREKTUR: Voll qualifiziertes Enum
-        self.btn_hold.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.set_hold_active(False)
-        hold_lay.addWidget(self.btn_hold)
-        root.addWidget(hold_card)
-
-        t2 = QLabel("SEQUENCE PARAMETERS")
-        t2.setStyleSheet("font-weight: bold; color: #4A5568; font-size: 10px; letter-spacing: 2px; padding-top: 5px;")
-        root.addWidget(t2)
-
-        self.sp_bw1_dur = NudgeSpinBox(1.0, 3600, 1, 1, " s", self.defaults.bw1_dur)
-        self.sp_bw1_p = NudgeSpinBox(0, 8000, 0, 50, " mbar", self.defaults.bw1_p)
-        root.addWidget(self._param_card("BACKWASH 1", [("Duration", self.sp_bw1_dur), ("Pressure", self.sp_bw1_p)]))
-
-        self.sp_fill_t = NudgeSpinBox(0, 8000, 0, 50, " mbar", self.defaults.fill_t)
-        self.sp_fill_r = NudgeSpinBox(1.0, 600, 1, 1, " s", self.defaults.fill_r)
-        self.sp_fill_h = NudgeSpinBox(1.0, 3600, 1, 1, " s", self.defaults.fill_h)
-        fill_card = self._param_card("FILLING",
-                                     [("Target", self.sp_fill_t), ("Ramp", self.sp_fill_r), ("Hold", self.sp_fill_h)])
-
-        self.lbl_fill_out = QLabel("Auto-Calc: —")
-        self.lbl_fill_out.setStyleSheet(
-            "color: #00E5FF; font-family: 'Consolas', monospace; font-size: 10px; border: none; padding-top: 4px;")
+        # ==========================================
+        # MANUAL HOLD
+        # ==========================================
+        self.grp_manual = QFrame()
+        self.grp_manual.setStyleSheet("QFrame { background: #0B1120; border-radius: 4px; border: 1px solid #1E293B; border-top: 2px solid #EC4899; margin-bottom: 4px; }")
+        lay_manual = QVBoxLayout(self.grp_manual)
+        lay_manual.setContentsMargins(12, 12, 12, 12)
+        lay_manual.setSpacing(8)
         
-        fill_lay = fill_card.layout()
-        assert isinstance(fill_lay, QVBoxLayout) # Hilft Pylance
-        fill_lay.addWidget(self.lbl_fill_out)
-        root.addWidget(fill_card)
+        self.btn_hold = HoldButton("HOLD SPACE TO BACKWASH")
+        self.btn_hold.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.sp_hold_p = NudgeSpinBox(0, 8000, 0, 25, " mbar", 600.0)
+        
+        lay_manual.addWidget(self.btn_hold)
+        h_row = QHBoxLayout()
+        lbl_p = QLabel("Pressure:")
+        lbl_p.setStyleSheet("color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
+        h_row.addWidget(lbl_p); h_row.addWidget(self.sp_hold_p)
+        lay_manual.addLayout(h_row)
+        root.addWidget(self.grp_manual)
 
-        self.sp_filt_dur = NudgeSpinBox(1.0, 86400, 1, 5, " s", self.defaults.filt_dur)
-        self.sp_filt_p = NudgeSpinBox(0, 8000, 0, 50, " mbar", self.defaults.filt_p)
-        root.addWidget(self._param_card("FILTRATION", [("Duration", self.sp_filt_dur), ("Pressure", self.sp_filt_p)]))
+        # ==========================================
+        # BNNT KALIBRIERUNG
+        # ==========================================
+        self.mod_calc = EliteModule("BNNT PARAMETERS", "#64748B", checkable=False)
+        self.sp_area = NudgeSpinBox(1.0, 5000.0, 1, 10.0, " mm²", 1134.0)
+        self.sp_calib = NudgeSpinBox(0.01, 100.0, 2, 0.1, " nm/µl", 2.5)
+        self.sp_thick = NudgeSpinBox(1.0, 1000.0, 1, 1.0, " nm", 100.0)
+        
+        self.mod_calc.addRow(0, "Film Area (A):", self.sp_area)
+        self.mod_calc.addRow(1, "Calibration (C):", self.sp_calib)
+        self.mod_calc.addRow(2, "Desired Thick.:", self.sp_thick)
+        
+        self.lbl_bnnt = QLabel("Req. BNNT: — ml")
+        self.lbl_bnnt.setProperty("is_dynamic_result", True)
+        self.lbl_bnnt.setStyleSheet("color: #10B981; font-weight: bold; font-family: 'Consolas'; font-size: 12px; border: none; padding-top: 4px;")
+        self.mod_calc.content_lay.addWidget(self.lbl_bnnt, 3, 0, 1, 2)
+        root.addWidget(self.mod_calc)
 
-        self.sp_vent_dur = NudgeSpinBox(1.0, 3600, 1, 1, " s", self.defaults.vent_dur)
-        root.addWidget(self._param_card("VENTING", [("Duration", self.sp_vent_dur)]))
+        # ==========================================
+        # STATE 0
+        # ==========================================
+        self.mod_p0 = EliteModule("STATE 0: FILLING SOLUTION", "#00E5FF", checkable=True)
+        self.sp_h2o = NudgeSpinBox(0.0, 10000.0, 2, 100.0, " ml", 1400.0)
+        self.sp_fill_p = NudgeSpinBox(0.0, 2000.0, 0, 10.0, " mbar", 300.0)
+        
+        self.mod_p0.addRow(0, "H2O Volume:", self.sp_h2o)
+        self.mod_p0.addRow(1, "Fill Pressure:", self.sp_fill_p)
+        
+        self.lbl_total_vol = QLabel("Target Vol: — ml")
+        self.lbl_total_vol.setProperty("is_dynamic_result", True)
+        self.lbl_total_vol.setStyleSheet("color: #00E5FF; font-weight: bold; font-family: 'Consolas'; font-size: 12px; border: none; padding-top: 4px;")
+        self.mod_p0.content_lay.addWidget(self.lbl_total_vol, 2, 0, 1, 2)
+        root.addWidget(self.mod_p0)
 
-        self.sp_bw2_base = NudgeSpinBox(0.0, 1000, 3, 0.1, " mL", self.defaults.bw2_base)
-        self.sp_bw2_p = NudgeSpinBox(0, 8000, 0, 50, " mbar", self.defaults.bw2_p)
-        self.sp_bw2_max = NudgeSpinBox(1.0, 3600, 1, 5, " s", self.defaults.bw2_max)
-        root.addWidget(self._param_card("BACKWASH 2", [("Base Remove", self.sp_bw2_base), ("Pressure", self.sp_bw2_p),
-                                                       ("Max duration", self.sp_bw2_max)]))
+        # ==========================================
+        # PHASE A
+        # ==========================================
+        self.mod_pa = EliteModule("PHASE A: RAMP UP", "#8B5CF6", checkable=True)
+        self.sp_target_p = NudgeSpinBox(0.0, 8000.0, 0, 100.0, " mbar", 2000.0)
+        self.sp_up_step = NudgeSpinBox(1.0, 1000.0, 0, 10.0, " mbar", 250.0)
+        self.sp_up_time = NudgeSpinBox(0.1, 120.0, 1, 1.0, " min", 2.0)
+        
+        self.mod_pa.addRow(0, "Target Pres.:", self.sp_target_p)
+        self.mod_pa.addRow(1, "Step Size:", self.sp_up_step)
+        self.mod_pa.addRow(2, "Step Time:", self.sp_up_time)
+        
+        self.lbl_pa_info = QLabel("Steps: — | ETA: — min")
+        self.lbl_pa_info.setProperty("is_dynamic_result", True)
+        self.lbl_pa_info.setStyleSheet("color: #8B5CF6; font-weight: bold; font-family: 'Consolas'; font-size: 11px; border: none; padding-top: 4px;")
+        self.mod_pa.content_lay.addWidget(self.lbl_pa_info, 3, 0, 1, 2)
+        root.addWidget(self.mod_pa)
+
+        # ==========================================
+        # PHASE B
+        # ==========================================
+        self.mod_pb = EliteModule("PHASE B: STEADY STATE", "#F59E0B", checkable=True)
+        lbl_b1 = QLabel("B1 holds until 'Target Vol' is reached.")
+        lbl_b1.setStyleSheet("color: #64748B; font-size: 10px; font-family: 'Arial'; border: none;")
+        self.mod_pb.content_lay.addWidget(lbl_b1, 0, 0, 1, 2)
+        
+        self.sp_v_extra = NudgeSpinBox(0.0, 5000.0, 2, 10.0, " ml", 0.0)
+        self.mod_pb.addRow(1, "B2 V_Extra:", self.sp_v_extra)
+        root.addWidget(self.mod_pb)
+
+        # ==========================================
+        # PHASE C (JETZT MIT RATE STATT STEPS!)
+        # ==========================================
+        self.mod_pc = EliteModule("PHASE C: RAMP DOWN", "#EC4899", checkable=True)
+        self.sp_dn_rate = NudgeSpinBox(1.0, 5000.0, 0, 50.0, " mbar/min", 500.0)
+        self.mod_pc.addRow(0, "Ramp Rate:", self.sp_dn_rate)
+        
+        self.lbl_pc_info = QLabel("ETA: — min")
+        self.lbl_pc_info.setProperty("is_dynamic_result", True)
+        self.lbl_pc_info.setStyleSheet("color: #EC4899; font-weight: bold; font-family: 'Consolas'; font-size: 11px; border: none; padding-top: 4px;")
+        self.mod_pc.content_lay.addWidget(self.lbl_pc_info, 1, 0, 1, 2)
+        root.addWidget(self.mod_pc)
+
+        # ==========================================
+        # VENTING
+        # ==========================================
+        self.mod_vent = EliteModule("FINAL: VENTING", "#10B981", checkable=True)
+        self.sp_vent_time = NudgeSpinBox(1.0, 600.0, 0, 5.0, " s", 20.0)
+        self.mod_vent.addRow(0, "Duration:", self.sp_vent_time)
+        root.addWidget(self.mod_vent)
 
         root.addStretch()
-        self._wire()
+        self._current_bnnt_ml = 0.0
+        self._wire_signals()
+        self._recalc_math()
 
-    def _card(self, title: str, accent: str = "#E2E8F0") -> QFrame:
-        c = QFrame()
-        c.setStyleSheet(
-            f"background: #111827; border-radius: 6px; border: 1px solid #1F2937; border-top: 3px solid {accent};")
-        l = QVBoxLayout(c)
-        l.setContentsMargins(15, 12, 15, 15)
-        l.setSpacing(12)
-        t = QLabel(title)
-        t.setStyleSheet(
-            f"font-size: 11px; font-weight: bold; color: {accent}; letter-spacing: 1.5px; border: none; font-family: 'Consolas', monospace;")
-        l.addWidget(t)
-        return c
-
-    def _param_card(self, title: str, items: list) -> QFrame:
-        c = self._card(title, accent="#4A5568")
-        l = c.layout()
-        assert isinstance(l, QVBoxLayout) # Hilft Pylance
-        g = QGridLayout()
-        g.setSpacing(10)
-        for i, (label, widget) in enumerate(items):
-            lbl = QLabel(label)
-            lbl.setStyleSheet("color: #A0AEC0; font-size: 11px; font-family: 'Consolas', monospace; border: none;")
-            g.addWidget(lbl, i, 0)
-            g.addWidget(widget, i, 1)
-        l.addLayout(g)
-        return c
-
-    def _wire(self):
+    def _wire_signals(self):
         widgets = [
-            self.sp_hold_pressure, self.sp_hold_max, self.sp_bw1_dur, self.sp_bw1_p,
-            self.sp_fill_t, self.sp_fill_r, self.sp_fill_h, self.sp_filt_dur,
-            self.sp_filt_p, self.sp_vent_dur, self.sp_bw2_base, self.sp_bw2_p,
-            self.sp_bw2_max
+            self.sp_area, self.sp_calib, self.sp_thick, self.sp_h2o,
+            self.sp_fill_p, self.sp_target_p, self.sp_up_step, self.sp_up_time,
+            self.sp_v_extra, self.sp_dn_rate, self.sp_vent_time
         ]
-        for w in widgets:
-            w.valueChanged.connect(self._on_any_change)
-
-        self.setup_calc.setup_changed.connect(self._on_any_change)
+        for w in widgets: w.valueChanged.connect(self._recalc_math)
+        
+        self.modules = [self.mod_p0, self.mod_pa, self.mod_pb, self.mod_pc, self.mod_vent]
+        for m in self.modules: m.toggled.connect(self._recalc_math)
 
     @Slot()
-    def _on_any_change(self):
+    def _recalc_math(self):
+        if self._is_running: return # Blockiere Recalc während des Laufs wg. Countdowns
+
+        c = self.sp_calib.value()
+        if c > 0:
+            self._current_bnnt_ml = ((self.sp_thick.value() / c) * (self.sp_area.value() / 1134.0))
+            self.lbl_bnnt.setText(f"Req. BNNT: {self._current_bnnt_ml:.4f} ml")
+        
+        tot = self._current_bnnt_ml + self.sp_h2o.value()
+        self.lbl_total_vol.setText(f"Target Vol: {tot:.4f} ml")
+
+        # ETA Phase A
+        up_s = self.sp_up_step.value()
+        if up_s > 0:
+            steps = math.ceil(self.sp_target_p.value() / up_s)
+            t_min = steps * self.sp_up_time.value()
+            self.lbl_pa_info.setText(f"Steps: {steps} | ETA: {t_min:.1f} min")
+
+        # ETA Phase C
+        rate = self.sp_dn_rate.value()
+        if rate > 0:
+            c_min = self.sp_target_p.value() / rate
+            self.lbl_pc_info.setText(f"ETA: {c_min:.1f} min")
+
         self.params_changed.emit(self.get_run_params())
 
     def get_run_params(self) -> RunParams:
         return RunParams(
-            v_bnnt_ml=self.setup_calc.get_v_bnnt_ml(),
-            v_h2o_ml=self.setup_calc.sp_h2o.value(),
-            phase_a_target_mbar=self.setup_calc.sp_target_p.value(),
-            phase_a_step_mbar=self.setup_calc.sp_step_size.value(),
-            phase_a_time_min=self.setup_calc.sp_step_time.value(),
-            backwash1_duration_s=self.sp_bw1_dur.value(),
-            backwash1_pressure_mbar=self.sp_bw1_p.value(),
-            filling_target_mbar=self.sp_fill_t.value(),
-            filling_ramp_s=self.sp_fill_r.value(),
-            filling_hold_s=self.sp_fill_h.value(),
-            filtration_duration_s=self.sp_filt_dur.value(),
-            filtration_pressure_mbar=self.sp_filt_p.value(),
-            venting_duration_s=self.sp_vent_dur.value(),
-            backwash2_base_remove_ml=self.sp_bw2_base.value(),
-            backwash2_pressure_mbar=self.sp_bw2_p.value(),
-            backwash2_max_duration_s=self.sp_bw2_max.value()
+            v_bnnt_ml=self._current_bnnt_ml, v_h2o_ml=self.sp_h2o.value(),
+            run_phase_0=self.mod_p0.isChecked(), phase_0_pressure_mbar=self.sp_fill_p.value(),
+            run_phase_a=self.mod_pa.isChecked(), phase_a_target_mbar=self.sp_target_p.value(),
+            phase_a_step_mbar=self.sp_up_step.value(), phase_a_time_min=self.sp_up_time.value(),
+            run_phase_b=self.mod_pb.isChecked(), v_extra_ml=self.sp_v_extra.value(),
+            # KORREKTUR: Neue Variable für Ramp Rate!
+            run_phase_c=self.mod_pc.isChecked(), phase_c_rate_mbar_min=self.sp_dn_rate.value(),
+            run_venting=self.mod_vent.isChecked(), venting_duration_s=self.sp_vent_time.value()
         )
 
-    def get_backwash_hold_pressure_mbar(self) -> float:
-        return self.sp_hold_pressure.value()
+    def set_running(self, running: bool):
+        self._is_running = running
+        for m in self.modules + [self.mod_calc]:
+            m.setEnabled(not running)
+        if not running:
+            self.countdown_timer.stop()
+            self._recalc_math() # Text resetten
+            self.update_active_step_highlight("IDLE")
+            
+    def update_active_step_highlight(self, current_step_str: str):
+        for m in self.modules: m.setHighlight(False)
+        self._active_phase_key = current_step_str
+        
+        # Zeit für den Countdown berechnen
+        if "PHASE_A" in current_step_str: 
+            self.mod_pa.setHighlight(True)
+            steps = math.ceil(self.sp_target_p.value() / self.sp_up_step.value()) if self.sp_up_step.value() > 0 else 0
+            self._time_left_s = steps * self.sp_up_time.value() * 60
+        elif "PHASE_B" in current_step_str: 
+            self.mod_pb.setHighlight(True)
+        elif "PHASE_C" in current_step_str: 
+            self.mod_pc.setHighlight(True)
+            rate = self.sp_dn_rate.value()
+            self._time_left_s = (self.sp_target_p.value() / rate * 60) if rate > 0 else 0
+        elif "VENTING" in current_step_str: 
+            self.mod_vent.setHighlight(True)
+        elif "FILLING" in current_step_str:
+            self.mod_p0.setHighlight(True)
 
-    def set_filling_outputs(self, *, target_pct: Optional[float] = None, slope_mbar_s: Optional[float] = None,
-                            suggested_ramp_s: Optional[float] = None):
-        t = f"{target_pct:.1f}%" if target_pct is not None else "—"
-        s = f"{slope_mbar_s:.1f} mbar/s" if slope_mbar_s is not None else "—"
-        self.lbl_fill_out.setText(f"Target: {t} | Slope: {s}")
+        if self._time_left_s > 0 and self._is_running:
+            self.countdown_timer.start(1000)
+        else:
+            self.countdown_timer.stop()
+
+    def _on_countdown_tick(self):
+        if self._time_left_s > 0:
+            self._time_left_s -= 1
+            m = int(self._time_left_s // 60)
+            s = int(self._time_left_s % 60)
+            ts = f"{m:02d}:{s:02d}"
+            
+            if "PHASE_A" in self._active_phase_key:
+                self.lbl_pa_info.setText(f"ACTION: RAMPING | REM: {ts}")
+            elif "PHASE_C" in self._active_phase_key:
+                self.lbl_pc_info.setText(f"ACTION: RAMPING | REM: {ts}")
 
     @Slot(bool)
     def set_hold_active(self, active: bool):
@@ -190,32 +356,16 @@ class LeftFrame(QFrame):
 
     def set_hold_affordance(self, allowed: bool, hint: str):
         self._hold_allowed = allowed
-        if not self._hold_active:
-            self._update_hold_style()
+        if not self._hold_active: self._update_hold_style()
 
     def _update_hold_style(self):
-        base_style = "font-family: 'Consolas', monospace; font-size: 11px; font-weight: bold; letter-spacing: 2px; padding: 12px; border-radius: 4px; "
+        base = "font-family: 'Consolas'; font-size: 11px; font-weight: bold; letter-spacing: 1px; padding: 8px; border-radius: 4px; "
         if self._hold_active:
             self.btn_hold.setText(">>> BACKWASH ACTIVE <<<")
-            self.btn_hold.setStyleSheet(
-                base_style + "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #EC4899, stop:1 #8B5CF6); border: none; color: #FFFFFF;")
+            self.btn_hold.setStyleSheet(base + "background: #EC4899; color: #FFF; border: none;")
         elif not self._hold_allowed:
-            self.btn_hold.setText("MANUAL CONTROL UNAVAILABLE")
-            self.btn_hold.setStyleSheet(base_style + "background: #000000; border: 1px solid #1F2937; color: #4A5568;")
+            self.btn_hold.setText("MANUAL UNAVAILABLE")
+            self.btn_hold.setStyleSheet(base + "background: #000; color: #334155; border: 1px solid #1E293B;")
         else:
-            self.btn_hold.setText("HOLD (SPACE / CLICK) TO BACKWASH")
-            self.btn_hold.setStyleSheet(
-                base_style + "background-color: #111827; border: 1px solid #2D3748; color: #EC4899;")
-
-    def set_running(self, running: bool):
-
-        self.setup_calc.setEnabled(not running)
-
-        widgets = [
-            self.sp_hold_pressure, self.sp_hold_max, self.sp_bw1_dur, self.sp_bw1_p,
-            self.sp_fill_t, self.sp_fill_r, self.sp_fill_h, self.sp_filt_dur,
-            self.sp_filt_p, self.sp_vent_dur, self.sp_bw2_base, self.sp_bw2_p,
-            self.sp_bw2_max
-        ]
-        for w in widgets:
-            w.setEnabled(not running)
+            self.btn_hold.setText("HOLD SPACE TO BACKWASH")
+            self.btn_hold.setStyleSheet(base + "background: transparent; color: #EC4899; border: 1px solid #EC4899;")

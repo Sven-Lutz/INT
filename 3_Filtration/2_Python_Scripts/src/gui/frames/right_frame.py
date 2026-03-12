@@ -1,363 +1,441 @@
 from __future__ import annotations
-import logging
-from datetime import datetime
-from typing import Optional, Dict
-from PySide6.QtCore import Qt, Signal, Slot, QTimer
-from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QProgressBar,
-    QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
-    QTextEdit
+
+import time
+from typing import Optional
+from pathlib import Path
+import csv
+from dataclasses import dataclass
+
+import pyqtgraph as pg
+from PySide6.QtCore import Signal, Slot, Qt, QRectF, QPointF
+from PySide6.QtGui import (
+    QPainter, QColor, QPen, QBrush, QPainterPath, QLinearGradient, QFont
 )
-from src.gui.style.phase_map import PHASE_ORDER, normalize_step, compute_phase_states
+from PySide6.QtWidgets import (
+    QFrame, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QTextBrowser, QWidget, QTabWidget
+)
+from src.utils.path_utils import ensure_dir, project_root, resolve_under
 
+# =========================================================================
+# VISUALISIERUNG 1: DIE SANDUHR (CELL FILL LEVEL)
+# =========================================================================
+class SandglassWidget(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(180, 150)
+        self.setStyleSheet("background: transparent;")
+        self._fill_pct = 0.0
+        self._color = QColor("#00E5FF")
 
+    def set_state(self, fill_pct: float, phase: str):
+        self._fill_pct = max(0.0, min(1.0, fill_pct))
+        
+        # Farbwechsel je nach Phase
+        if "FILL" in phase: self._color = QColor("#00E5FF")
+        elif "PHASE" in phase: self._color = QColor("#8B5CF6")
+        elif "VENT" in phase: self._color = QColor("#10B981")
+        elif "BACKWASH" in phase: self._color = QColor("#EC4899")
+        
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        w, h = self.width(), self.height()
+        cx, cy = w / 2, h / 2
+        glass_w = w * 0.5
+        glass_h = h * 0.8
+        
+        # 1. Sanduhr-Pfad zeichnen
+        path = QPainterPath()
+        path.moveTo(cx - glass_w/2, cy - glass_h/2) # Oben links
+        path.lineTo(cx + glass_w/2, cy - glass_h/2) # Oben rechts
+        path.lineTo(cx + 5, cy)                     # Mitte rechts
+        path.lineTo(cx + glass_w/2, cy + glass_h/2) # Unten rechts
+        path.lineTo(cx - glass_w/2, cy + glass_h/2) # Unten links
+        path.lineTo(cx - 5, cy)                     # Mitte links
+        path.closeSubpath()
+
+        # Füllung (Flüssigkeit) im unteren Bereich (simuliert)
+        fill_h = (glass_h/2) * self._fill_pct
+        fill_rect = QRectF(cx - glass_w/2, cy + glass_h/2 - fill_h, glass_w, fill_h)
+        
+        p.save()
+        p.setClipPath(path)
+        grad = QLinearGradient(0, cy, 0, cy + glass_h/2)
+        grad.setColorAt(0, self._color.darker(150))
+        grad.setColorAt(1, self._color)
+        p.fillRect(fill_rect, grad)
+        p.restore()
+
+        # Outline zeichnen (Neon Glow)
+        p.setPen(QPen(QColor(30, 41, 59, 200), 4))
+        p.drawPath(path)
+        p.setPen(QPen(QColor(248, 250, 252, 100), 1))
+        p.drawPath(path)
+        
+        # Text Overlay
+        p.setPen(QColor("#94A3B8"))
+        p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+        p.drawText(QRectF(0, h - 15, w, 15), Qt.AlignmentFlag.AlignCenter, "CELL VOL")
+
+# =========================================================================
+# VISUALISIERUNG 2: DAS TRAPEZ (PRESSURE RAMP PROFILE)
+# =========================================================================
+class TrapezoidWidget(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(250, 150)
+        self.setStyleSheet("background: transparent;")
+        self._current_p = 0.0
+        self._max_p = 2000.0
+
+    def set_pressure(self, current: float, max_p: float):
+        self._current_p = max(0.0, current)
+        self._max_p = max(1.0, max_p)
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        
+        pad_x, pad_y = 20, 20
+        plot_w = w - 2 * pad_x
+        plot_h = h - 2 * pad_y
+        
+        # Achsen
+        p.setPen(QPen(QColor("#1E293B"), 2))
+        p.drawLine(pad_x, h - pad_y, w - pad_x, h - pad_y) # X-Achse
+        
+        # Ideales Trapez (A -> B -> C)
+        path = QPainterPath()
+        p1 = QPointF(pad_x, h - pad_y)                   # Start
+        p2 = QPointF(pad_x + plot_w*0.3, pad_y)          # Ende Ramp Up (Phase A)
+        p3 = QPointF(pad_x + plot_w*0.7, pad_y)          # Ende Steady (Phase B)
+        p4 = QPointF(pad_x + plot_w, h - pad_y)          # Ende Ramp Down (Phase C)
+        
+        path.moveTo(p1); path.lineTo(p2); path.lineTo(p3); path.lineTo(p4)
+        
+        p.setPen(QPen(QColor(100, 116, 139, 100), 2, Qt.PenStyle.DashLine))
+        p.drawPath(path)
+
+        # Aktueller Druck als leuchtender Punkt auf der Y-Achse interpoliert
+        norm_p = min(1.0, self._current_p / self._max_p)
+        dot_y = (h - pad_y) - (norm_p * plot_h)
+        
+        # Wir bewegen den Punkt künstlich nach rechts basierend auf dem Druck (nur optische Hilfestellung)
+        if norm_p < 0.95: dot_x = pad_x + (norm_p * plot_w * 0.3)
+        else: dot_x = pad_x + plot_w * 0.5 # In der Mitte bei Steady State
+
+        # Glow
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(139, 92, 246, 50))
+        p.drawEllipse(QPointF(dot_x, dot_y), 12, 12)
+        p.setBrush(QColor("#8B5CF6"))
+        p.drawEllipse(QPointF(dot_x, dot_y), 5, 5)
+
+        # Text Overlay
+        p.setPen(QColor("#94A3B8"))
+        p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+        p.drawText(QRectF(0, h - 15, w, 15), Qt.AlignmentFlag.AlignCenter, "PRESSURE PROFILE")
+
+# =========================================================================
+# VISUALISIERUNG 3: REAL TIME MONITOR TAB (ELITE LEVEL)
+# =========================================================================
+def _to_float(x) -> Optional[float]:
+    try: return None if x is None else float(x)
+    except Exception: return None
+
+def _nan(x: Optional[float]) -> float:
+    return float("nan") if x is None else float(x)
+
+class MonitorTab(QFrame):
+    def __init__(self, parent=None, max_points: int = 2000) -> None:
+        super().__init__(parent)
+        self.setStyleSheet("background: transparent;")
+        self._max_points = int(max_points)
+
+        self._t0: Optional[float] = None
+        self._t = []
+        self._flow = []
+        self._p1 = []
+        self._p2 = []
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
+
+        pg.setConfigOptions(antialias=True)
+        pg.setConfigOption('background', '#050914') # Dark Theme passend zum RightFrame
+        pg.setConfigOption('foreground', '#94A3B8')
+
+        self.plot_p = pg.PlotWidget(title="PRESSURE TELEMETRY (mbar)")
+        self.plot_flow = pg.PlotWidget(title="FLOW DYNAMICS (mL/min)")
+
+        self.plot_flow.showGrid(x=False, y=True, alpha=0.1)
+        self.plot_p.showGrid(x=False, y=True, alpha=0.1)
+
+        # Limits setzen, um wildes Zoomen zu verhindern
+        self.plot_flow.getViewBox().setLimits(minYRange=1.0, minXRange=10.0)
+        self.plot_p.getViewBox().setLimits(minYRange=100.0, minXRange=10.0)
+
+        # 🚀 CHROMA GRADIENT: Neon Pink zu Transparent für Flow 🚀
+        grad_flow = QLinearGradient(0, 0, 0, 1)
+        grad_flow.setCoordinateMode(QLinearGradient.CoordinateMode.ObjectBoundingMode)
+        grad_flow.setColorAt(0.0, QColor(236, 72, 153, 100)) # Pink
+        grad_flow.setColorAt(1.0, QColor(236, 72, 153, 0))
+        brush_flow = QBrush(grad_flow)
+
+        pen_flow = pg.mkPen(color='#EC4899', width=2.5) # Neon Pink Line
+        self.curve_flow = self.plot_flow.plot([], [], pen=pen_flow, fillLevel=0, brush=brush_flow)
+
+        # 🚀 CHROMA GRADIENT: Violett/Cyan für Pressure 🚀
+        grad_p1 = QLinearGradient(0, 0, 0, 1)
+        grad_p1.setCoordinateMode(QLinearGradient.CoordinateMode.ObjectBoundingMode)
+        grad_p1.setColorAt(0.0, QColor(139, 92, 246, 80)) # Purple
+        grad_p1.setColorAt(1.0, QColor(139, 92, 246, 0))
+        brush_p1 = QBrush(grad_p1)
+
+        pen_p1 = pg.mkPen(color='#8B5CF6', width=2.5) # Purple Line
+        self.curve_p1 = self.plot_p.plot([], [], pen=pen_p1, fillLevel=0, brush=brush_p1, name="P1 Main")
+
+        pen_p2 = pg.mkPen(color='#00E5FF', width=2, style=Qt.PenStyle.DashLine) # Cyan Line
+        self.curve_p2 = self.plot_p.plot([], [], pen=pen_p2, name="P2 Backwash")
+
+        root.addWidget(self.plot_p, 1)
+        root.addWidget(self.plot_flow, 1)
+
+    def reset_plot(self):
+        self._t0 = None
+        self._t.clear()
+        self._flow.clear()
+        self._p1.clear()
+        self._p2.clear()
+        self.curve_flow.setData([], [])
+        self.curve_p1.setData([], [])
+        self.curve_p2.setData([], [])
+
+    @Slot(dict)
+    def ingest_telemetry(self, payload: dict) -> None:
+        t = payload.get("t", time.time())
+        flow = _to_float(payload.get("flow"))
+        p1 = _to_float(payload.get("p1_meas"))
+        p2 = _to_float(payload.get("p2_meas"))
+
+        if self._t0 is None: self._t0 = t
+        ts = t - self._t0
+
+        self._t.append(ts)
+        self._flow.append(flow)
+        self._p1.append(p1)
+        self._p2.append(p2)
+
+        if len(self._t) > self._max_points:
+            self._t = self._t[-self._max_points :]
+            self._flow = self._flow[-self._max_points :]
+            self._p1 = self._p1[-self._max_points :]
+            self._p2 = self._p2[-self._max_points :]
+
+        self.curve_flow.setData(self._t, [_nan(v) for v in self._flow])
+        self.curve_p1.setData(self._t, [_nan(v) for v in self._p1])
+        self.curve_p2.setData(self._t, [_nan(v) for v in self._p2])
+
+# =========================================================================
+# RIGHT FRAME MAIN
+# =========================================================================
 class RightFrame(QFrame):
     start_clicked = Signal()
-    ok_clicked = Signal()
     stop_clicked = Signal()
     manual_vent_clicked = Signal()
+    ok_clicked = Signal()
 
-    def __init__(self, config: Optional[dict] = None, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, config=None, parent=None):
         super().__init__(parent)
         self.setProperty("surface", "panel")
-
-        self._current_step = "IDLE"
         self._running = False
-        self._step_elapsed_s: Optional[float] = None
-        self._step_total_s: Optional[float] = None
-        self._eta_s: Optional[float] = None
+        self._loss_ml = 0.0  
 
-        self._loss_ml = 0.0
-        self._hold_removed_ml = 0.0
-        self._base_remove_ml = 0.0
-
-        self.pulse_timer = QTimer(self)
-        self.pulse_timer.timeout.connect(self._pulse_active_phase)
-        self._pulse_state = False
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.NoFrame)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        self.content = QWidget()
-
-        root = QVBoxLayout(self.content)
-        root.setContentsMargins(15, 10, 15, 15)
-        root.setSpacing(15)
-
-        self._build_phase_overview(root)
-        self._build_run_state_card(root)
-        self._build_output_preview_card(root)
-        self._build_terminal_card(root)
-
-        root.addStretch(1)
-        self.scroll.setWidget(self.content)
-        outer.addWidget(self.scroll, 1)
-
-        footer = QWidget()
-        footer.setProperty("surface", "panel")
-        footer_lay = QVBoxLayout(footer)
-        footer_lay.setContentsMargins(15, 0, 15, 15)
-        self._build_run_controls(footer_lay)
-        outer.addWidget(footer, 0)
-
-        self.reset_state()
-
-    def _card(self, title: str) -> QFrame:
-        c = QFrame()
-        c.setStyleSheet("background: #111827; border-radius: 8px; border: 1px solid #1E293B;")
-        lay = QVBoxLayout(c)
+        lay = QVBoxLayout(self)
         lay.setContentsMargins(15, 15, 15, 15)
         lay.setSpacing(12)
 
-        t = QLabel(title)
-        t.setStyleSheet(
-            "font-family: 'Consolas', monospace; font-size: 11px; font-weight: bold; color: #E2E8F0; letter-spacing: 1.5px; border: none;")
-        lay.addWidget(t)
-        return c
+        # 1. TABS (Visualisierung & Graphen)
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #1E293B; border-radius: 6px; background: #050914; }
+            QTabBar::tab { background: #0F172A; color: #64748B; padding: 6px 12px; margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px; font-family: 'Consolas'; font-weight: bold; font-size: 10px; }
+            QTabBar::tab:selected { background: #1E293B; color: #00E5FF; }
+        """)
 
-    def _build_phase_overview(self, root: QVBoxLayout) -> None:
-        card = self._card("SEQUENCE PROGRESS")
-        lay = card.layout()
-        grid = QGridLayout();
-        grid.setHorizontalSpacing(10);
-        grid.setVerticalSpacing(10)
-        self._phase_boxes = {}
+        # Tab 1: Abstrakt
+        tab_viz = QWidget()
+        viz_lay = QHBoxLayout(tab_viz)
+        self.sandglass = SandglassWidget()
+        self.trapezoid = TrapezoidWidget()
+        viz_lay.addWidget(self.sandglass)
+        separator = QFrame(frameShape=QFrame.Shape.VLine)
+        separator.setStyleSheet("color: #1E293B;")
+        viz_lay.addWidget(separator)
+        viz_lay.addWidget(self.trapezoid)
+        
+        # Tab 2: Echtzeit-Graphen
+        self.realtime_plot = MonitorTab()
 
-        display_phases = [p for p in PHASE_ORDER if "HOLD" not in p]
+        self.tabs.addTab(tab_viz, "PHYSICAL MODEL")
+        self.tabs.addTab(self.realtime_plot, "LIVE TELEMETRY")
+        
+        lay.addWidget(self.tabs, stretch=3)
 
-        for i, key in enumerate(display_phases):
-            box = QFrame()
-            box.setStyleSheet("background: #050914; border-radius: 6px; border: 1px solid #1A202C; padding: 6px;")
-            bl = QVBoxLayout(box);
-            bl.setContentsMargins(8, 8, 8, 8);
-            bl.setSpacing(6)
+        # 2. TERMINAL KONSOLEN-BEREICH
+        term_lay = QVBoxLayout()
+        term_lay.setSpacing(2)
+        lbl_term = QLabel("SYSTEM TERMINAL")
+        lbl_term.setStyleSheet("color: #64748B; font-family: 'Consolas'; font-weight: bold; font-size: 10px; letter-spacing: 2px;")
+        term_lay.addWidget(lbl_term)
 
-            name = QLabel(key.replace("BACKWASH_INITIAL", "Backwash 1").replace("BACKWASH_FINAL", "Backwash 2").title())
-            name.setStyleSheet(
-                "font-family: 'Consolas', monospace; font-size: 11px; font-weight: bold; color: #A0AEC0; border: none;")
+        self.console = QTextBrowser()
+        self.console.setStyleSheet("""
+            QTextBrowser {
+                background-color: #090F16;
+                color: #94A3B8;
+                font-family: 'Consolas';
+                font-size: 11px;
+                border: 1px solid #1E293B;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
+        term_lay.addWidget(self.console)
+        lay.addLayout(term_lay, stretch=2)
 
-            pill = QLabel("IDLE")
-            pill.setAlignment(Qt.AlignCenter)
-            pill.setStyleSheet(
-                "background: transparent; color: #4A5568; font-size: 10px; font-weight: bold; font-family: 'Consolas', monospace; border: none;")
+        # 3. ACTION BANNER (Für "OK" Klicks)
+        self.banner_ok = QFrame()
+        self.banner_ok.setStyleSheet("background-color: #F59E0B; border-radius: 4px;")
+        banner_lay = QHBoxLayout(self.banner_ok)
+        banner_lay.setContentsMargins(10, 5, 10, 5)
+        
+        self.lbl_banner_reason = QLabel("")
+        self.lbl_banner_reason.setStyleSheet("color: #000000; font-weight: bold; font-family: 'Consolas'; font-size: 12px;")
+        
+        self.btn_ok = QPushButton("CONFIRM [OK]")
+        self.btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_ok.setStyleSheet("""
+            QPushButton {
+                background-color: #000000; color: #F59E0B; font-weight: bold; font-family: 'Consolas';
+                border: 1px solid #000000; border-radius: 3px; padding: 5px 15px;
+            }
+            QPushButton:hover { background-color: #111827; color: #FFF; }
+        """)
+        self.btn_ok.clicked.connect(self.ok_clicked.emit)
+        
+        banner_lay.addWidget(self.lbl_banner_reason, 1)
+        banner_lay.addWidget(self.btn_ok)
+        self.banner_ok.hide()
+        lay.addWidget(self.banner_ok)
 
-            bl.addWidget(name);
-            bl.addWidget(pill, 0, Qt.AlignLeft)
-            grid.addWidget(box, i // 3, i % 3)
-            self._phase_boxes[key] = {'root': box, 'pill': pill}
+        # 4. KONTROLL-BUTTONS
+        ctrl_lay = QHBoxLayout()
+        ctrl_lay.setSpacing(10)
 
-        lay.addLayout(grid);
-        root.addWidget(card)
-
-    def _pulse_active_phase(self):
-        self._pulse_state = not self._pulse_state
-        for key, v in self._phase_boxes.items():
-            if v['pill'].text() == "ACTIVE":
-                if self._pulse_state:
-                    # CHROMA GLOW
-                    v['root'].setStyleSheet(
-                        "background: rgba(139, 92, 246, 0.2); border-radius: 6px; border: 1px solid #8B5CF6; padding: 6px;")
-                else:
-                    v['root'].setStyleSheet(
-                        "background: rgba(139, 92, 246, 0.05); border-radius: 6px; border: 1px solid #7C3AED; padding: 6px;")
-
-    def _build_run_state_card(self, root: QVBoxLayout) -> None:
-        card = self._card("CURRENT STATUS")
-        lay = card.layout()
-
-        self.lbl_step = QLabel("IDLE")
-        self.lbl_step.setStyleSheet(
-            "font-family: 'Consolas', monospace; font-size: 22px; font-weight: bold; color: #F8FAFC; border: none;")
-
-        self.ok_box = QFrame()
-        self.ok_box.setStyleSheet(
-            "background: #111827; border: 1px solid #F59E0B; border-left: 4px solid #F59E0B; border-radius: 4px; padding: 8px;")
-        self.ok_box.setVisible(False)
-        self.ok_banner = QLabel("")
-        self.ok_banner.setStyleSheet(
-            "color: #F59E0B; font-size: 12px; font-family: 'Consolas', monospace; font-weight: bold; border: none;")
-        self.ok_banner.setWordWrap(True)
-        QHBoxLayout(self.ok_box).addWidget(self.ok_banner)
-
-        self.progress = QProgressBar()
-        self.progress.setFixedHeight(8)
-        self.progress.setTextVisible(False)
-        # 🚀 CHROMA GRADIENT: Pink -> Purple -> Cyan 🚀
-        self.progress.setStyleSheet(
-            "QProgressBar { background: #050914; border: none; border-radius: 4px; } QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #EC4899, stop:0.5 #8B5CF6, stop:1 #00E5FF); border-radius: 4px; }")
-
-        self.lbl_eta = QLabel("—")
-        self.lbl_eta.setStyleSheet(
-            "font-family: 'Consolas', monospace; font-weight: bold; color: #A0AEC0; font-size: 12px; border: none;")
-
-        lay.addWidget(self.lbl_step);
-        lay.addWidget(self.ok_box);
-        lay.addWidget(self.progress);
-        lay.addWidget(self.lbl_eta)
-        root.addWidget(card)
-
-    def _build_output_preview_card(self, root: QVBoxLayout) -> None:
-        card = self._card("TELEMETRY MATH")
-        lay = card.layout()
-        host = QWidget()
-        grid = QGridLayout(host);
-        grid.setContentsMargins(0, 0, 0, 0);
-        grid.setVerticalSpacing(8)
-
-        font_style = "font-family: 'Consolas', monospace; font-size: 14px; font-weight: bold; border: none;"
-
-        self.val_loss = QLabel("0.000 mL");
-        self.val_loss.setStyleSheet(f"{font_style} color: #F8FAFC;")
-        self.val_hold_removed = QLabel("0.000 mL");
-        self.val_hold_removed.setStyleSheet(f"{font_style} color: #F8FAFC;")
-        self.val_target_remove = QLabel("0.000 mL");
-        self.val_target_remove.setStyleSheet(f"{font_style} color: #00E5FF; font-size: 18px;")
-
-        l1 = QLabel("Loss (Filt+Vent)");
-        l1.setStyleSheet(
-            "font-family: 'Consolas', monospace; color: #A0AEC0; font-size: 11px; font-weight: bold; border: none;")
-        l2 = QLabel("Manual HOLD");
-        l2.setStyleSheet(
-            "font-family: 'Consolas', monospace; color: #A0AEC0; font-size: 11px; font-weight: bold; border: none;")
-        l3 = QLabel("Target Remove");
-        l3.setStyleSheet(
-            "font-family: 'Consolas', monospace; color: #F8FAFC; font-size: 12px; font-weight: bold; border: none;")
-
-        grid.addWidget(l1, 0, 0);
-        grid.addWidget(self.val_loss, 0, 1)
-        grid.addWidget(l2, 1, 0);
-        grid.addWidget(self.val_hold_removed, 1, 1)
-        grid.addWidget(l3, 2, 0);
-        grid.addWidget(self.val_target_remove, 2, 1)
-        lay.addWidget(host);
-        root.addWidget(card)
-
-    def _build_terminal_card(self, root: QVBoxLayout) -> None:
-        card = self._card("SYSTEM CONSOLE")
-        lay = card.layout()
-        self.console = QTextEdit()
-        self.console.setReadOnly(True)
-        self.console.setFixedHeight(180)
-        self.console.setStyleSheet(
-            "background-color: #050914; color: #00E5FF; font-family: 'Consolas', monospace; font-size: 12px; border: 1px solid #1A202C; border-radius: 4px; padding: 10px;")
-        lay.addWidget(self.console);
-        root.addWidget(card)
-
-    def _build_run_controls(self, lay: QVBoxLayout) -> None:
-        row = QHBoxLayout();
-        row.setContentsMargins(0, 10, 0, 0);
-        row.setSpacing(12)
-
-        def _btn(text, color):
-            b = QPushButton(text)
-            b.setStyleSheet(f"""
-                QPushButton {{ 
-                    font-family: 'Consolas', monospace; font-size: 13px; font-weight: bold; letter-spacing: 1px; padding: 16px; 
-                    background-color: #111827; 
-                    border: 1px solid #1F2937; border-bottom: 3px solid {color}; 
-                    color: #F8FAFC; border-radius: 4px; 
-                }}
-                QPushButton:hover {{ background-color: #1E293B; border: 1px solid {color}; }}
-                QPushButton:disabled {{ border: 1px solid #111827; color: #4A5568; border-bottom: 3px solid #111827; background-color: #050914; }}
-            """)
-            return b
-
-        self.btn_start = _btn("START RUN", "#8B5CF6")  # Purple
-        self.btn_ok = _btn("CONFIRM STEP", "#00E5FF")  # Cyan
-        self.btn_vent = _btn("VENT", "#A0AEC0")  # Silver
-        self.btn_stop = _btn("ABORT RUN", "#FF1744")  # Red
-
-        self.btn_ok.setEnabled(False)
+        self.btn_start = self._action_btn("START SEQUENCE", "#10B981")
+        self.btn_start.clicked.connect(self.start_clicked.emit)
+        
+        self.btn_stop = self._action_btn("EMERGENCY ABORT", "#FF1744")
+        self.btn_stop.clicked.connect(self.stop_clicked.emit)
         self.btn_stop.setEnabled(False)
 
-        self.btn_start.clicked.connect(self.start_clicked.emit)
-        self.btn_ok.clicked.connect(self.ok_clicked.emit)
+        self.btn_vent = self._action_btn("MANUAL VENT", "#64748B")
         self.btn_vent.clicked.connect(self.manual_vent_clicked.emit)
-        self.btn_stop.clicked.connect(self.stop_clicked.emit)
 
-        row.addWidget(self.btn_start, 2)
-        row.addWidget(self.btn_ok, 2)
-        row.addWidget(self.btn_vent, 1)
-        row.addWidget(self.btn_stop, 2)
-        lay.addLayout(row)
+        ctrl_lay.addWidget(self.btn_start)
+        ctrl_lay.addWidget(self.btn_stop)
+        ctrl_lay.addWidget(self.btn_vent)
+        lay.addLayout(ctrl_lay)
 
-    def append_log(self, msg: str, color: str = "#8B5CF6") -> None:
-        ts = datetime.now().strftime("%H:%M:%S")
-        self.console.append(
-            f'<span style="color: #4A5568;">[{ts}]</span> <span style="color: {color}; font-weight: bold;">{msg}</span>')
-        self.console.verticalScrollBar().setValue(self.console.verticalScrollBar().maximum())
+    def _action_btn(self, text: str, color: str) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setFixedHeight(40)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #111827;
+                color: {color};
+                font-family: 'Consolas'; font-weight: bold; font-size: 12px; letter-spacing: 1px;
+                border: 1px solid #1E293B; border-bottom: 2px solid {color}; border-radius: 4px;
+            }}
+            QPushButton:hover:enabled {{ background-color: #1E293B; color: #FFF; }}
+            QPushButton:disabled {{ background-color: #050914; color: #334155; border: 1px solid #0F172A; }}
+        """)
+        return btn
 
-    def reset_state(self) -> None:
-        self.set_loss_ml(0.0)
-        self.set_hold_removed_ml(0.0)
-        self.set_step("IDLE")
-        self.set_status("Idle")
-        self.progress.setValue(0)
-        self.lbl_eta.setText("—")
-        self.set_running(False)
-        self.ok_box.setVisible(False)
-        self.pulse_timer.stop()
+    @Slot()
+    def reset_state(self):
+        self.console.clear()
+        self.banner_ok.hide()
+        self._loss_ml = 0.0
+        self.sandglass.set_state(0.0, "IDLE")
+        self.trapezoid.set_pressure(0.0, 2000.0)
+        self.realtime_plot.reset_plot()
 
-        for k, v in self._phase_boxes.items():
-            v['root'].setStyleSheet("background: #050914; border-radius: 4px; border: 1px solid #1A202C; padding: 6px;")
-            v['pill'].setStyleSheet(
-                "background: transparent; color: #4A5568; font-size: 10px; font-weight: bold; border: none;")
-            v['pill'].setText("IDLE")
+    @Slot(str)
+    def set_step(self, step: str):
+        self.append_log(f"--- STEP TRANSITION: {step} ---", "#8B5CF6")
+
+    @Slot(str)
+    def set_status(self, msg: str):
+        pass # Status wird jetzt im TopFrame schön angezeigt
 
     @Slot(float)
-    def set_loss_ml(self, v: float):
-        self._loss_ml = float(v); self.val_loss.setText(f"{self._loss_ml:.3f} mL"); self._calc()
+    def set_loss_ml(self, loss_ml: float):
+        self._loss_ml = loss_ml
 
-    @Slot(float)
-    def set_hold_removed_ml(self, v: float):
-        self._hold_removed_ml = float(v); self.val_hold_removed.setText(f"{self._hold_removed_ml:.3f} mL"); self._calc()
+    def set_base_remove_ml(self, base_ml: float):
+        pass # Nur für main_window compatibility
 
-    def set_base_remove_ml(self, v: float):
-        self._base_remove_ml = float(v); self._calc()
+    @Slot(str, str)
+    def append_log(self, msg: str, color: str = "#94A3B8"):
+        ts = time.strftime("%H:%M:%S")
+        html = f'<span style="color: #64748B;">[{ts}]</span> <span style="color: {color};">{msg}</span>'
+        self.console.append(html)
+        vs = self.console.verticalScrollBar()
+        vs.setValue(vs.maximum())
 
-    def _calc(self):
-        self.val_target_remove.setText(
-            f"{max(0.0, self._base_remove_ml + self._loss_ml + self._hold_removed_ml):.3f} mL")
+    def set_ok_banner(self, step: str, reason: str, show: bool):
+        if show:
+            self.lbl_banner_reason.setText(f"WAITING: {reason.upper()}")
+            self.banner_ok.show()
+        else:
+            self.banner_ok.hide()
+
+    def enable_ok(self, enabled: bool):
+        self.btn_ok.setEnabled(enabled)
 
     def set_running(self, running: bool):
         self._running = running
         self.btn_start.setEnabled(not running)
         self.btn_stop.setEnabled(running)
-        if not running: self.btn_ok.setEnabled(False)
-
-    def enable_ok(self, e: bool):
-        self.btn_ok.setEnabled(e)
-
-    def set_status(self, s: str):
-        if s and "OK required" not in s: self.append_log(f"SYS: {s}", "#A0AEC0")
-
-    def set_ok_banner(self, *, step: str = "", reason: str = "", show: bool = True) -> None:
-        if not show:
-            self.ok_box.setVisible(False)
-            return
-        st = str(step or "").strip();
-        rs = str(reason or "").strip()
-        self.ok_banner.setText(f"> {st}: {rs}" if (st and rs) else (f"> {rs}" if rs else "> MANUAL OK REQUIRED"))
-        self.ok_box.setVisible(True)
-
-    def set_manual_state(self, **kwargs):
-        pass
-
-    def set_step(self, step: str) -> None:
-        self._current_step = normalize_step(step) or "IDLE"
-        self.lbl_step.setText(self._current_step)
-
-        if self._current_step not in ("IDLE", "FINISHED"):
-            self.append_log(f"PHASE: {self._current_step}", "#00E5FF")
-
-        if self._current_step in ("FINISHED", "DONE"):
-            states = {p: "done" for p in PHASE_ORDER}
-            self.pulse_timer.stop()
-        elif self._current_step in PHASE_ORDER:
-            states = compute_phase_states(self._current_step, set(PHASE_ORDER[:PHASE_ORDER.index(self._current_step)]),
-                                          set())
-            self.pulse_timer.start(500)
+        
+        if running:
+            self.btn_start.setStyleSheet(self.btn_start.styleSheet().replace("color: #10B981;", "color: #334155;").replace("border-bottom: 2px solid #10B981;", "border-bottom: 2px solid #1E293B;"))
         else:
-            states = compute_phase_states("", set(), set())
-            self.pulse_timer.stop()
+            self.btn_start.setStyleSheet(self.btn_start.styleSheet().replace("color: #334155;", "color: #10B981;").replace("border-bottom: 2px solid #1E293B;", "border-bottom: 2px solid #10B981;"))
 
-        for k, v in self._phase_boxes.items():
-            st = states.get(k, 'idle')
-            if st == 'active':
-                v['root'].setStyleSheet(
-                    "background: rgba(139, 92, 246, 0.2); border-radius: 6px; border: 1px solid #8B5CF6; padding: 6px;")
-                v['pill'].setStyleSheet(
-                    "background: #8B5CF6; color: #FFFFFF; font-size: 11px; font-weight: bold; border-radius: 3px; padding: 2px 8px;")
-            elif st == 'done':
-                v['root'].setStyleSheet(
-                    "background: #09090C; border-radius: 4px; border: 1px solid #1F2937; padding: 6px;")
-                v['pill'].setStyleSheet(
-                    "background: transparent; color: #00E5FF; font-size: 11px; font-weight: bold; border: none;")
-            else:
-                v['root'].setStyleSheet(
-                    "background: #050914; border-radius: 4px; border: 1px solid #1F2937; padding: 6px;")
-                v['pill'].setStyleSheet(
-                    "background: transparent; color: #4A5568; font-size: 10px; font-weight: bold; border: none;")
-            v['pill'].setText(st.upper())
+    @Slot(dict)
+    def update_telemetry(self, sample: dict):
+        # 1. Update abstrakte Visuals
+        p1 = sample.get("p1_meas", 0.0)
+        max_p = sample.get("p1_set", 2000.0)
+        if max_p is None or max_p < 1: max_p = 2000.0
+        
+        step = sample.get("step", "")
+        
+        self.trapezoid.set_pressure(p1, max_p)
+        
+        fill = min(1.0, max(0.0, p1 / max_p)) if max_p > 0 else 0.0
+        self.sandglass.set_state(fill, step)
 
-    def set_step_progress(self, *, step_elapsed_s=None, step_total_s=None, eta_s=None, text="") -> None:
-        if text: self.lbl_eta.setText(str(text))
-        if self._current_step == "BACKWASH_HOLD":
-            self.progress.setValue(0);
-            self.lbl_eta.setText("HOLD active...");
-            return
-
-        if step_elapsed_s and step_total_s and step_total_s > 0:
-            pct = int((step_elapsed_s / step_total_s) * 100)
-            self.progress.setValue(pct)
-            calc_eta = eta_s if eta_s is not None else max(0.0, step_total_s - step_elapsed_s)
-            self.lbl_eta.setText(f"ETA: {calc_eta:.1f} s")
-        else:
-            self.progress.setValue(0)
-            if not text: self.lbl_eta.setText("—")
+        # 2. Update Live-Plot!
+        self.realtime_plot.ingest_telemetry(sample)
