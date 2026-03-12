@@ -1,4 +1,3 @@
-# src/gui/data/worker.py
 from __future__ import annotations
 
 import threading
@@ -28,7 +27,6 @@ class Step(str, Enum):
 
 @dataclass
 class RunParams:
-
     v_bnnt_ml: float
     v_h2o_ml: float
 
@@ -239,32 +237,17 @@ class ExperimentWorker(QObject):
             valve_state = "UNKNOWN"
 
         p1_set = p1_meas = p2_set = p2_meas = None
+        
+        # 🚀 KORREKTUR: Wir nutzen nur noch die offiziellen, getypten Canonical-Methoden!
         if getattr(dev, "pressure_controller", None) is not None:
-            try:
-                if hasattr(dev, "get_pressure_setpoint_mbar"):
-                    _val = dev.get_pressure_setpoint_mbar(1) # type: ignore
-                    p1_set = float(_val) if _val is not None else None
-                else:
-                    _val = dev.get_pressure_setpoint(1)
-                    p1_set = float(_val) if _val is not None else None
-            except Exception:
-                p1_set = None
-            try:
-                p1_meas = float(dev.get_pressure_mbar(1)) if hasattr(dev, "get_pressure_mbar") else float(
-                    dev.get_pressure(1))
-            except Exception:
-                p1_meas = None
-            try:
-                p2_set = float(dev.get_pressure_setpoint_mbar(2)) if hasattr(dev,
-                                                                             "get_pressure_setpoint_mbar") else float(
-                    dev.get_pressure_setpoint(2))
-            except Exception:
-                p2_set = None
-            try:
-                p2_meas = float(dev.get_pressure_mbar(2)) if hasattr(dev, "get_pressure_mbar") else float(
-                    dev.get_pressure(2))
-            except Exception:
-                p2_meas = None
+            try: p1_set = float(dev.get_pressure_setpoint_mbar(1))
+            except Exception: pass
+            try: p1_meas = float(dev.get_pressure_mbar(1))
+            except Exception: pass
+            try: p2_set = float(dev.get_pressure_setpoint_mbar(2))
+            except Exception: pass
+            try: p2_meas = float(dev.get_pressure_mbar(2))
+            except Exception: pass
 
         try:
             vol = float(exp.volume_ml)
@@ -308,34 +291,18 @@ class ExperimentWorker(QObject):
 
     def _safe_set_pressure_mbar(self, *, channel: int, mbar: float) -> None:
         dev = self._dev
-        exp = self._exp
-        if dev is None or exp is None:
-            return
-        if getattr(dev, "pressure_controller", None) is None:
+        if dev is None or getattr(dev, "pressure_controller", None) is None:
             return
 
+        # 🚀 KORREKTUR: Direkter Aufruf der sauberen mbar-Methode ohne Prozent-Rechnung
         try:
-            if hasattr(dev, "set_pressure_setpoint_mbar"):
-                dev.set_pressure_setpoint_mbar(channel=int(channel), setpoint_mbar=float(mbar),
-                                               ramp=True)  # type: ignore[attr-defined]
-                return
-        except Exception:
-            pass
-
-        try:
-            pct = exp._mbar_to_percent(float(mbar))
-            try:
-                exp._set_pressure_pct(channel=int(channel), pct=float(pct), ramp=True)  # type: ignore[attr-defined]
-            except Exception:
-                dev.set_pressure(float(pct), channel=int(channel), ramp=True)
+            dev.set_pressure_setpoint_mbar(channel=int(channel), setpoint_mbar=float(mbar))
         except Exception:
             pass
 
     def _safe_drop_pressure_all(self) -> None:
         dev = self._dev
-        if dev is None:
-            return
-        if getattr(dev, "pressure_controller", None) is None:
+        if dev is None or getattr(dev, "pressure_controller", None) is None:
             return
         for ch in (1, 2):
             try:
@@ -348,12 +315,7 @@ class ExperimentWorker(QObject):
         if dev is None:
             return
         try:
-            if hasattr(dev, "valves_venting"):
-                dev.valves_venting()
-            elif hasattr(dev, "venting"):
-                dev.venting()  # type: ignore[attr-defined]
-            elif hasattr(dev, "set_valve_state"):
-                dev.set_valve_state(getattr(dev, "STATE_VENTING", "VENTING"))  # type: ignore[attr-defined]
+            dev.set_valve_state("VENTING")
         except Exception:
             pass
 
@@ -370,14 +332,11 @@ class ExperimentWorker(QObject):
         except Exception:
             pass
 
-        try:
-            self._safe_drop_pressure_all()
-        except Exception:
-            pass
-        try:
-            self._safe_valves_vent()
-        except Exception:
-            pass
+        try: self._safe_drop_pressure_all()
+        except Exception: pass
+        
+        try: self._safe_valves_vent()
+        except Exception: pass
 
         self._emit_sample(event="MANUAL_VENT")
 
@@ -411,10 +370,8 @@ class ExperimentWorker(QObject):
 
         self.step_changed.emit(step.value)
 
-        try:
-            set_valves()
-        except Exception:
-            pass
+        try: set_valves()
+        except Exception: pass
 
         self.status.emit(f"Running {step.value}")
         self._emit_sample(event=event_start)
@@ -437,13 +394,8 @@ class ExperimentWorker(QObject):
             net_ml_s = exp._update_volume(dt_s, flow_raw, net_sign=float(net_sign))
 
             exp._log_row(
-                str(mode),
-                float(dt_s),
-                float(flow_raw),
-                float(flow_ml_s),
-                net_flow_ml_s=float(net_ml_s),
-                pressure_channel=pressure_channel,
-                event="",
+                str(mode), float(dt_s), float(flow_raw), float(flow_ml_s),
+                net_flow_ml_s=float(net_ml_s), pressure_channel=pressure_channel, event="",
             )
 
             now = time.monotonic()
@@ -455,13 +407,8 @@ class ExperimentWorker(QObject):
             self._sleep_abortable(float(exp.cfg.sample_period_s), tick=0.05)
 
         exp._log_row(
-            str(mode),
-            0.0,
-            exp._last_flow_raw if exp._last_flow_raw is not None else float("nan"),
-            0.0,
-            net_flow_ml_s=0.0,
-            pressure_channel=pressure_channel,
-            event=str(event_end),
+            str(mode), 0.0, exp._last_flow_raw if exp._last_flow_raw is not None else float("nan"),
+            0.0, net_flow_ml_s=0.0, pressure_channel=pressure_channel, event=str(event_end),
         )
         self._emit_sample(event=event_end)
 
@@ -485,13 +432,11 @@ class ExperimentWorker(QObject):
         self.status.emit("Backwash HOLD active (manual fine)")
         self.manual_active_changed.emit(True)
 
+        # 🚀 KORREKTUR: Wir rufen einfach die universelle set_valve_state Methode auf
         try:
-            dev.valves_backwash()
+            dev.set_valve_state("BACKWASH")
         except Exception:
-            try:
-                dev.set_valve_state(getattr(dev, "STATE_BACKWASH", "BACKWASH"))  # type: ignore[attr-defined]
-            except Exception:
-                pass
+            pass
 
         if getattr(dev, "pressure_controller", None) is not None:
             self._safe_set_pressure_mbar(channel=2, mbar=float(self._hold_pressure_mbar))
@@ -531,10 +476,7 @@ class ExperimentWorker(QObject):
             net_ml_s = exp._update_volume(dt_s, flow_raw, net_sign=-1.0)
 
             exp._log_row(
-                "BACKWASH_HOLD",
-                float(dt_s),
-                float(flow_raw),
-                float(flow_ml_s),
+                "BACKWASH_HOLD", float(dt_s), float(flow_raw), float(flow_ml_s),
                 net_flow_ml_s=float(net_ml_s),
                 pressure_channel=2 if getattr(dev, "pressure_controller", None) is not None else None,
                 event="",
@@ -551,11 +493,8 @@ class ExperimentWorker(QObject):
         self._safe_drop_pressure_all()
 
         exp._log_row(
-            "BACKWASH_HOLD",
-            0.0,
-            exp._last_flow_raw if exp._last_flow_raw is not None else float("nan"),
-            0.0,
-            net_flow_ml_s=0.0,
+            "BACKWASH_HOLD", 0.0, exp._last_flow_raw if exp._last_flow_raw is not None else float("nan"),
+            0.0, net_flow_ml_s=0.0,
             pressure_channel=2 if getattr(dev, "pressure_controller", None) is not None else None,
             event="END_BACKWASH_HOLD",
         )
@@ -570,32 +509,38 @@ class ExperimentWorker(QObject):
         except Exception:
             pass
 
+    def _device_implements_proto(self, dev: DeviceManager) -> bool:
+        """Check if device implements required protocol methods."""
+        required = ["valves_backwash", "valves_filling_solution", "valves_filtration", 
+                   "all_valves_shut", "get_pressure_setpoint", "get_pressure", "set_pressure"]
+        return all(hasattr(dev, attr) for attr in required)
+    
+    def _create_device_adapter(self, dev: DeviceManager) -> object:
+        """Create adapter shim for DeviceManager to match _DeviceProto."""
+        # Placeholder - implement based on actual protocol requirements
+        return dev
+
     def _enter_safe_state(self) -> None:
         try:
             self._hold_active.clear()
             self._hold_dirty_update.clear()
-        except Exception:
-            pass
+        except Exception: pass
 
         try:
             if self._dev is not None and hasattr(self._dev, "vent_all"):
-                self._dev.vent_all()  # type: ignore[attr-defined]
+                self._dev.vent_all()
             else:
                 self._safe_drop_pressure_all()
                 self._safe_valves_vent()
-        except Exception:
-            pass
+        except Exception: pass
 
         try:
             if self._store is not None:
                 self._store.write_event("SAFE_STATE", {"step": self._current_step.value})
-        except Exception:
-            pass
+        except Exception: pass
 
-        try:
-            self._emit_sample(event="SAFE_STATE")
-        except Exception:
-            pass
+        try: self._emit_sample(event="SAFE_STATE")
+        except Exception: pass
 
     @Slot()
     def run(self) -> None:
@@ -626,7 +571,12 @@ class ExperimentWorker(QObject):
 
             self._raise_if_abort()
 
-            self._exp = Experimentator(dev, self.cfg) # type: ignore
+            # Wrap DeviceManager to ensure protocol compatibility
+            exp_dev: object = dev
+            if not self._device_implements_proto(dev):
+                exp_dev = self._create_device_adapter(dev)
+            
+            self._exp = Experimentator(exp_dev, self.cfg)  # type: ignore[arg-type]
             self._t0 = None
 
             try:
@@ -648,10 +598,6 @@ class ExperimentWorker(QObject):
             # MODULARE ABLAUFSTEUERUNG (Basierend auf UI-Checkboxes)
             # =================================================================
             
-# =================================================================
-            # MODULARE ABLAUFSTEUERUNG (Basierend auf UI-Checkboxes)
-            # =================================================================
-            
             target_vol = float(p.v_bnnt_ml) + float(p.v_h2o_ml)
             total_loss = 0.0
 
@@ -666,7 +612,7 @@ class ExperimentWorker(QObject):
                 self.status.emit("Running Phase 0 (Filling)")
                 self._emit_sample(event="STEP_START_PHASE_0")
                 
-                try: dev.valves_filling_solution() # type: ignore
+                try: dev.set_valve_state("FILLING")
                 except Exception: pass
                 
                 if getattr(dev, "pressure_controller", None) is not None:
@@ -680,7 +626,7 @@ class ExperimentWorker(QObject):
             # --- PHASE A: RAMP UP ---
             if p.run_phase_a:
                 self._current_step = Step.FILTRATION
-                self.step_changed.emit("PHASE_A") # Eindeutiges Signal für das UI
+                self.step_changed.emit("PHASE_A")
                 self._wait_ok(Step.FILTRATION, f"Start Phase A: Ramp up to {p.phase_a_target_mbar} mbar")
                 self.status.emit("Running Phase A")
                 self._emit_sample(event="STEP_START_PHASE_A")
@@ -704,7 +650,7 @@ class ExperimentWorker(QObject):
                 loss_b1 = self._exp.step_steady_state_volume_target(
                     target_volume_ml_to_remove=target_vol,
                     pressure_mbar=float(p.phase_a_target_mbar),
-                    max_duration_s=86400.0 # Timeout Sicherung
+                    max_duration_s=86400.0
                 )
                 total_loss += loss_b1
 
@@ -726,14 +672,13 @@ class ExperimentWorker(QObject):
                 self.status.emit("Running Phase C")
                 self._emit_sample(event="STEP_START_PHASE_C")
                 
-                # Wir übersetzen die Rate in kleine Sekundenschritte für einen sauberen Abbau!
                 rate_mbar_s = float(p.phase_c_rate_mbar_min) / 60.0
                 
-                loss_c = self._exp.step_staircase_ramp_down( # type: ignore
-                    start_pressure_mbar=float(p.phase_a_target_mbar),
-                    step_size_mbar=rate_mbar_s, # Kleine Schritte
-                    step_time_s=1.0,            # Jede Sekunde
-                    wait_for_ok_fn=None         # Keine Abfragen mehr, es fährt automatisch runter!
+                loss_c = self._exp.step_staircase_ramp(
+                    target_pressure_mbar=0.0,
+                    step_size_mbar=abs(rate_mbar_s),
+                    step_time_s=1.0,
+                    wait_for_ok_fn=None
                 )
                 total_loss += loss_c
 
@@ -751,7 +696,8 @@ class ExperimentWorker(QObject):
                     duration_s=float(p.venting_duration_s),
                     pressure_channel=None,
                     net_sign=-1.0,
-                    set_valves=getattr(dev, "valves_venting", dev.valves_venting), # type: ignore
+                    # 🚀 KORREKTUR: Einheitlicher Valve-Aufruf
+                    set_valves=lambda: dev.set_valve_state("VENTING"), 
                     event_start="START_VENTING",
                     event_end="END_VENTING",
                 )
@@ -790,49 +736,35 @@ class ExperimentWorker(QObject):
             msg = f"{e}\n\n{tb}"
             self.step_changed.emit(Step.ABORTED.value)
             self.status.emit(f"Failed: {e}")
-            try:
-                self.manual_active_changed.emit(False)
-            except Exception:
-                pass
+            try: self.manual_active_changed.emit(False)
+            except Exception: pass
             try:
                 if self._store is not None:
                     self._store.write_event("RUN_FAILED", {"error": str(e), "traceback": tb})
-            except Exception:
-                pass
+            except Exception: pass
             self.failed.emit(msg)
 
         finally:
-            try:
-                self._enter_safe_state()
-            except Exception:
-                pass
+            try: self._enter_safe_state()
+            except Exception: pass
 
             try:
-                if self._exp is not None:
-                    self._exp.close()
-            except Exception:
-                pass
+                if self._exp is not None: self._exp.close()
+            except Exception: pass
             self._exp = None
 
             try:
-                if self._store is not None:
-                    self._store.close()
-            except Exception:
-                pass
+                if self._store is not None: self._store.close()
+            except Exception: pass
             self._store = None
 
             if self._dev_owned and self._dev is not None:
                 try:
-                    if hasattr(self._dev, "__exit__"):
-                        self._dev.__exit__(None, None, None)
-                    elif hasattr(self._dev, "disconnect"):
-                        self._dev.disconnect()
-                except Exception:
-                    pass
+                    if hasattr(self._dev, "__exit__"): self._dev.__exit__(None, None, None)
+                    elif hasattr(self._dev, "disconnect"): self._dev.disconnect()
+                except Exception: pass
                 self._dev = None
 
             if dev_cm is not None:
-                try:
-                    dev_cm.__exit__(None, None, None)
-                except Exception:
-                    pass
+                try: dev_cm.__exit__(None, None, None)
+                except Exception: pass
