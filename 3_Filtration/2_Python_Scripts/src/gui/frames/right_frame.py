@@ -18,24 +18,30 @@ from PySide6.QtWidgets import (
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
 
 # =========================================================================
-# VISUALISIERUNG 1: DIE SANDUHR (CELL FILL LEVEL)
+# VISUALISIERUNG 1: DER CYBER-REAKTOR (CELL FILL LEVEL)
 # =========================================================================
 class SandglassWidget(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(180, 150)
+        self.setMinimumSize(180, 200)
         self.setStyleSheet("background: transparent;")
         self._fill_pct = 0.0
-        self._color = QColor("#00E5FF")
-
+        self._color = QColor("#00E5FF")  # Default Cyan
+        
     def set_state(self, fill_pct: float, phase: str):
         self._fill_pct = max(0.0, min(1.0, fill_pct))
         
-        # Farbwechsel je nach Phase
-        if "FILL" in phase: self._color = QColor("#00E5FF")
-        elif "PHASE" in phase: self._color = QColor("#8B5CF6")
-        elif "VENT" in phase: self._color = QColor("#10B981")
-        elif "BACKWASH" in phase: self._color = QColor("#EC4899")
+        # Elite Color-Coding je nach Maschinen-Phase
+        if "FILL" in phase.upper(): 
+            self._color = QColor("#00E5FF")  # Cyan
+        elif "A" in phase.upper() or "B" in phase.upper() or "C" in phase.upper() or "FILTRATION" in phase.upper(): 
+            self._color = QColor("#8B5CF6")  # Purple
+        elif "VENT" in phase.upper(): 
+            self._color = QColor("#10B981")  # Green
+        elif "BACKWASH" in phase.upper(): 
+            self._color = QColor("#EC4899")  # Pink
+        elif "ABORT" in phase.upper() or "FAIL" in phase.upper() or "ERROR" in phase.upper():
+            self._color = QColor("#FF1744")  # Crimson Red
         
         self.update()
 
@@ -44,50 +50,85 @@ class SandglassWidget(QFrame):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         w, h = self.width(), self.height()
-        cx, cy = w / 2, h / 2
-        glass_w = w * 0.5
-        glass_h = h * 0.8
         
-        # 1. Sanduhr-Pfad zeichnen
-        path = QPainterPath()
-        path.moveTo(cx - glass_w/2, cy - glass_h/2) # Oben links
-        path.lineTo(cx + glass_w/2, cy - glass_h/2) # Oben rechts
-        path.lineTo(cx + 5, cy)                     # Mitte rechts
-        path.lineTo(cx + glass_w/2, cy + glass_h/2) # Unten rechts
-        path.lineTo(cx - glass_w/2, cy + glass_h/2) # Unten links
-        path.lineTo(cx - 5, cy)                     # Mitte links
-        path.closeSubpath()
+        # Abmessungen des Reaktor-Tanks
+        tank_w = w * 0.45
+        tank_h = h * 0.75
+        cx = w / 2
+        cy = (h - 20) / 2 # Etwas Platz nach unten für den Text
+        
+        tank_rect = QRectF(cx - tank_w/2, cy - tank_h/2, tank_w, tank_h)
+        corner_radius = 12.0
+        
+        # 1. HINTERGRUND: Dunkles Tank-Innere
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(15, 23, 42, 200)) # Slate 900
+        p.drawRoundedRect(tank_rect, corner_radius, corner_radius)
+        
+        # 2. FLÜSSIGKEIT: Dynamischer Füllstand mit Cyber-Glow
+        if self._fill_pct > 0.01:
+            liquid_h = tank_h * self._fill_pct
+            liquid_rect = QRectF(cx - tank_w/2, (cy + tank_h/2) - liquid_h, tank_w, liquid_h)
+            
+            # Farbverlauf der Flüssigkeit (Dunkel unten, Leuchtend oben)
+            grad = QLinearGradient(0, liquid_rect.top(), 0, liquid_rect.bottom())
+            grad.setColorAt(0.0, self._color) # Top Glow
+            grad.setColorAt(1.0, self._color.darker(300)) # Deep Base
+            
+            p.save()
+            # Wir clippen die Zeichnung auf die abgerundete Form des Tanks
+            clip_path = QPainterPath()
+            clip_path.addRoundedRect(tank_rect, corner_radius, corner_radius)
+            p.setClipPath(clip_path)
+            
+            p.setBrush(grad)
+            p.drawRect(liquid_rect)
+            
+            # Ein kleiner Lichtreflex am oberen Rand der Flüssigkeit (Meniskus)
+            p.setBrush(QColor(255, 255, 255, 60))
+            p.drawEllipse(QRectF(cx - tank_w/2, liquid_rect.top() - 3, tank_w, 6))
+            p.restore()
 
-        # Füllung (Flüssigkeit) im unteren Bereich (simuliert)
-        fill_h = (glass_h/2) * self._fill_pct
-        fill_rect = QRectF(cx - glass_w/2, cy + glass_h/2 - fill_h, glass_w, fill_h)
+        # 3. GLAS-OUTLINE: Äußere Hülle des Tanks
+        pen_outline = QPen(QColor(71, 85, 105, 180), 2) # Slate 600
+        p.setPen(pen_outline)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(tank_rect, corner_radius, corner_radius)
         
-        p.save()
-        p.setClipPath(path)
-        grad = QLinearGradient(0, cy, 0, cy + glass_h/2)
-        grad.setColorAt(0, self._color.darker(150))
-        grad.setColorAt(1, self._color)
-        p.fillRect(fill_rect, grad)
-        p.restore()
+        # Neon-Rand, der die Farbe der Flüssigkeit annimmt
+        pen_neon = QPen(QColor(self._color.red(), self._color.green(), self._color.blue(), 100), 1)
+        p.setPen(pen_neon)
+        p.drawRoundedRect(tank_rect.adjusted(-2, -2, 2, 2), corner_radius + 2, corner_radius + 2)
 
-        # Outline zeichnen (Neon Glow)
-        p.setPen(QPen(QColor(30, 41, 59, 200), 4))
-        p.drawPath(path)
-        p.setPen(QPen(QColor(248, 250, 252, 100), 1))
-        p.drawPath(path)
-        
-        # Text Overlay
+        # 4. SKALA: Technische Markierungen links am Tank
+        p.setPen(QPen(QColor(100, 116, 139, 150), 1))
+        scale_x = cx - tank_w/2 - 5
+        steps = 5
+        for i in range(steps + 1):
+            y_pos = (cy + tank_h/2) - (i / steps) * tank_h
+            line_len = 8 if i % 2 == 0 else 4
+            p.drawLine(QPointF(scale_x, y_pos), QPointF(scale_x - line_len, y_pos))
+
+        # 5. TEXT: Cyber-Overlay unter dem Tank
         p.setPen(QColor("#94A3B8"))
-        p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
-        p.drawText(QRectF(0, h - 15, w, 15), Qt.AlignmentFlag.AlignCenter, "CELL VOL")
+        p.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
+        text_y = cy + tank_h/2 + 15
+        p.drawText(QRectF(0, text_y, w, 15), Qt.AlignmentFlag.AlignCenter, "REACTOR VOL")
+        
+        # Kleine Prozentanzeige in der Mitte des Tanks
+        if self._fill_pct > 0:
+            p.setPen(QColor(255, 255, 255, 200))
+            p.setFont(QFont("Consolas", 10, QFont.Weight.Black))
+            pct_text = f"{int(self._fill_pct * 100)}%"
+            p.drawText(tank_rect, Qt.AlignmentFlag.AlignCenter, pct_text)
 
 # =========================================================================
-# VISUALISIERUNG 2: DAS TRAPEZ (PRESSURE RAMP PROFILE)
+# VISUALISIERUNG 2: ELITE PRESSURE PROFILE (RAMP HUD)
 # =========================================================================
 class TrapezoidWidget(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(250, 150)
+        self.setMinimumSize(250, 200) # Höhe an den Reaktor angepasst
         self.setStyleSheet("background: transparent;")
         self._current_p = 0.0
         self._max_p = 2000.0
@@ -102,44 +143,74 @@ class TrapezoidWidget(QFrame):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
         
-        pad_x, pad_y = 20, 20
+        pad_x, pad_y = 25, 30
         plot_w = w - 2 * pad_x
         plot_h = h - 2 * pad_y
         
-        # Achsen
-        p.setPen(QPen(QColor("#1E293B"), 2))
-        p.drawLine(pad_x, h - pad_y, w - pad_x, h - pad_y) # X-Achse
+        # 1. BASIS: X-Achse (Massiv)
+        p.setPen(QPen(QColor(30, 41, 59), 3)) # Slate 800
+        p.drawLine(pad_x, h - pad_y, w - pad_x, h - pad_y)
         
-        # Ideales Trapez (A -> B -> C)
+        # Geometrie der idealen Rampe berechnen
         path = QPainterPath()
         p1 = QPointF(pad_x, h - pad_y)                   # Start
-        p2 = QPointF(pad_x + plot_w*0.3, pad_y)          # Ende Ramp Up (Phase A)
-        p3 = QPointF(pad_x + plot_w*0.7, pad_y)          # Ende Steady (Phase B)
-        p4 = QPointF(pad_x + plot_w, h - pad_y)          # Ende Ramp Down (Phase C)
+        p2 = QPointF(pad_x + plot_w*0.3, pad_y)          # Ende Ramp Up
+        p3 = QPointF(pad_x + plot_w*0.7, pad_y)          # Ende Steady State
+        p4 = QPointF(pad_x + plot_w, h - pad_y)          # Ende Ramp Down
         
-        path.moveTo(p1); path.lineTo(p2); path.lineTo(p3); path.lineTo(p4)
+        path.moveTo(p1)
+        path.lineTo(p2)
+        path.lineTo(p3)
+        path.lineTo(p4)
         
-        p.setPen(QPen(QColor(100, 116, 139, 100), 2, Qt.PenStyle.DashLine))
-        p.drawPath(path)
+        # 2. HOLOGRAPHISCHE FÜLLUNG (Unter der Kurve)
+        grad_bg = QLinearGradient(0, pad_y, 0, h - pad_y)
+        grad_bg.setColorAt(0.0, QColor(139, 92, 246, 50)) # Purple transparent
+        grad_bg.setColorAt(1.0, QColor(139, 92, 246, 0))  # Fade into dark
+        
+        bg_path = QPainterPath(path)
+        bg_path.lineTo(p1) # Pfad unten schließen für saubere Füllung
+        
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(grad_bg)
+        p.drawPath(bg_path)
 
-        # Aktueller Druck als leuchtender Punkt auf der Y-Achse interpoliert
+        # 3. NEON-KONTUR (Die Soll-Kurve)
+        p.setPen(QPen(QColor(139, 92, 246, 200), 3))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+        
+        # 4. TACTICAL LIVE TRACKER (Wo stehen wir gerade?)
         norm_p = min(1.0, self._current_p / self._max_p)
         dot_y = (h - pad_y) - (norm_p * plot_h)
         
-        # Wir bewegen den Punkt künstlich nach rechts basierend auf dem Druck (nur optische Hilfestellung)
-        if norm_p < 0.95: dot_x = pad_x + (norm_p * plot_w * 0.3)
-        else: dot_x = pad_x + plot_w * 0.5 # In der Mitte bei Steady State
-
-        # Glow
+        # Logik: Steigt der Druck, sind wir auf der linken Flanke. Ist er Max, in der Mitte.
+        if norm_p < 0.98: 
+            dot_x = pad_x + (norm_p * plot_w * 0.3)
+        else: 
+            dot_x = pad_x + plot_w * 0.5 
+            
+        # Gestrichelte Ziellinie (Crosshair) zur Y-Achse
+        p.setPen(QPen(QColor(0, 229, 255, 120), 1, Qt.PenStyle.DashLine))
+        p.drawLine(QPointF(pad_x, dot_y), QPointF(dot_x, dot_y))
+        p.drawLine(QPointF(dot_x, dot_y), QPointF(dot_x, h - pad_y))
+        
+        # Der leuchtende Messpunkt (Cyan)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(139, 92, 246, 50))
+        p.setBrush(QColor(0, 229, 255, 60)) # Outer Glow
         p.drawEllipse(QPointF(dot_x, dot_y), 12, 12)
-        p.setBrush(QColor("#8B5CF6"))
+        p.setBrush(QColor("#00E5FF"))       # Inner Core
         p.drawEllipse(QPointF(dot_x, dot_y), 5, 5)
+        
+        # Fliegendes Label: Exakter Druck über dem Punkt
+        p.setPen(QColor("#F8FAFC"))
+        p.setFont(QFont("Consolas", 9, QFont.Weight.Black))
+        # Leicht versetzt oben rechts vom Punkt
+        p.drawText(QPointF(dot_x + 10, dot_y - 10), f"{int(self._current_p)}")
 
-        # Text Overlay
+        # 5. TITEL
         p.setPen(QColor("#94A3B8"))
-        p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+        p.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
         p.drawText(QRectF(0, h - 15, w, 15), Qt.AlignmentFlag.AlignCenter, "PRESSURE PROFILE")
 
 # =========================================================================
@@ -172,40 +243,44 @@ class MonitorTab(QFrame):
         root.setSpacing(10)
 
         pg.setConfigOptions(antialias=True)
-        pg.setConfigOption('background', '#050914') # Dark Theme passend zum RightFrame
+        pg.setConfigOption('background', '#050914') 
         pg.setConfigOption('foreground', '#94A3B8')
 
         self.plot_p = pg.PlotWidget(title="PRESSURE TELEMETRY (mbar)")
         self.plot_flow = pg.PlotWidget(title="FLOW DYNAMICS (mL/min)")
 
-        self.plot_flow.showGrid(x=False, y=True, alpha=0.1)
-        self.plot_p.showGrid(x=False, y=True, alpha=0.1)
+        # 🚀 FIX: Elite Achsen-Styling
+        for plot in [self.plot_p, self.plot_flow]:
+            plot.showGrid(x=False, y=True, alpha=0.1)
+            plot.getAxis('bottom').setPen(pg.mkPen('#1E293B'))
+            plot.getAxis('bottom').setTextPen(pg.mkPen('#64748B'))
+            plot.getAxis('left').setPen(pg.mkPen('#1E293B'))
+            plot.getAxis('left').setTextPen(pg.mkPen('#64748B'))
 
-        # Limits setzen, um wildes Zoomen zu verhindern
         self.plot_flow.getViewBox().setLimits(minYRange=1.0, minXRange=10.0)
         self.plot_p.getViewBox().setLimits(minYRange=100.0, minXRange=10.0)
 
-        # 🚀 CHROMA GRADIENT: Neon Pink zu Transparent für Flow 🚀
+        # Flow Gradient (Pink)
         grad_flow = QLinearGradient(0, 0, 0, 1)
         grad_flow.setCoordinateMode(QLinearGradient.CoordinateMode.ObjectBoundingMode)
-        grad_flow.setColorAt(0.0, QColor(236, 72, 153, 100)) # Pink
+        grad_flow.setColorAt(0.0, QColor(236, 72, 153, 100))
         grad_flow.setColorAt(1.0, QColor(236, 72, 153, 0))
         brush_flow = QBrush(grad_flow)
 
-        pen_flow = pg.mkPen(color='#EC4899', width=2.5) # Neon Pink Line
+        pen_flow = pg.mkPen(color='#EC4899', width=2.5)
         self.curve_flow = self.plot_flow.plot([], [], pen=pen_flow, fillLevel=0, brush=brush_flow)
 
-        # 🚀 CHROMA GRADIENT: Violett/Cyan für Pressure 🚀
+        # Pressure Gradient (Lila)
         grad_p1 = QLinearGradient(0, 0, 0, 1)
         grad_p1.setCoordinateMode(QLinearGradient.CoordinateMode.ObjectBoundingMode)
-        grad_p1.setColorAt(0.0, QColor(139, 92, 246, 80)) # Purple
+        grad_p1.setColorAt(0.0, QColor(139, 92, 246, 80))
         grad_p1.setColorAt(1.0, QColor(139, 92, 246, 0))
         brush_p1 = QBrush(grad_p1)
 
-        pen_p1 = pg.mkPen(color='#8B5CF6', width=2.5) # Purple Line
+        pen_p1 = pg.mkPen(color='#8B5CF6', width=2.5)
         self.curve_p1 = self.plot_p.plot([], [], pen=pen_p1, fillLevel=0, brush=brush_p1, name="P1 Main")
 
-        pen_p2 = pg.mkPen(color='#00E5FF', width=2, style=Qt.PenStyle.DashLine) # Cyan Line
+        pen_p2 = pg.mkPen(color='#00E5FF', width=2, style=Qt.PenStyle.DashLine)
         self.curve_p2 = self.plot_p.plot([], [], pen=pen_p2, name="P2 Backwash")
 
         root.addWidget(self.plot_p, 1)
@@ -222,7 +297,6 @@ class MonitorTab(QFrame):
         self.curve_p2.setData([], [])
 
     def start_logging(self, run_name_prefix: str = "Run") -> None:
-        """Start logging telemetry data to CSV file."""
         self.reset_plot()
         self._csv_file = None
         self._csv_writer = None
@@ -241,12 +315,10 @@ class MonitorTab(QFrame):
             print(f"Error opening CSV file: {e}")
 
     def stop_logging(self) -> None:
-        """Stop logging telemetry data to CSV file."""
         if self._csv_file is not None:
             try:
                 self._csv_file.close()
-            except Exception as e:
-                print(f"Error closing CSV file: {e}")
+            except Exception: pass
             finally:
                 self._csv_file = None
                 self._csv_writer = None
@@ -275,13 +347,17 @@ class MonitorTab(QFrame):
         self.curve_flow.setData(self._t, [_nan(v) for v in self._flow])
         self.curve_p1.setData(self._t, [_nan(v) for v in self._p1])
         self.curve_p2.setData(self._t, [_nan(v) for v in self._p2])
+        
+        # 🚀 FIX: Werte endlich in die geöffnete CSV schreiben!
+        if self._csv_writer is not None and self._csv_file is not None and not self._csv_file.closed:
+            try:
+                self._csv_writer.writerow({'t': f"{ts:.3f}", 'flow': flow, 'p1_meas': p1, 'p2_meas': p2})
+            except Exception: pass
+
 
 # =========================================================================
 # RIGHT FRAME MAIN
 # =========================================================================
-
-from src.utils.path_utils import project_root, resolve_under, ensure_dir
-
 class RightFrame(QFrame):
     start_clicked = Signal()
     stop_clicked = Signal()
@@ -293,16 +369,14 @@ class RightFrame(QFrame):
         self.setProperty("surface", "panel")
         self._running = False
         
-        # Log-Verzeichnis für den MonitorTab vorbereiten
         root_path = project_root(__file__)
-        log_dir = resolve_under(root_path, "logs")
-        ensure_dir(log_dir)
+        ensure_dir(resolve_under(root_path, "logs"))
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(15, 15, 15, 15)
         lay.setSpacing(12)
 
-        # 1. TABS (Visualisierung & Graphen)
+        # 1. TABS
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("""
             QTabWidget::pane { border: 1px solid #1E293B; border-radius: 6px; background: #050914; }
@@ -312,7 +386,6 @@ class RightFrame(QFrame):
             QTabBar::tab:selected { background: #1E293B; color: #00E5FF; border-bottom: 2px solid #00E5FF; }
         """)
 
-        # Tab 1: Abstraktes Modell
         tab_viz = QWidget()
         viz_lay = QHBoxLayout(tab_viz)
         self.sandglass = SandglassWidget()
@@ -323,7 +396,6 @@ class RightFrame(QFrame):
         viz_lay.addWidget(separator)
         viz_lay.addWidget(self.trapezoid)
         
-        # Tab 2: Der neue Elite Monitor
         self.realtime_plot = MonitorTab()
 
         self.tabs.addTab(tab_viz, "PHYSICAL MODEL")
@@ -331,7 +403,7 @@ class RightFrame(QFrame):
         
         lay.addWidget(self.tabs, stretch=3)
 
-        # 2. TERMINAL KONSOLEN-BEREICH
+        # 2. TERMINAL
         term_lay = QVBoxLayout()
         term_lay.setSpacing(2)
         lbl_term = QLabel("SYSTEM TERMINAL")
@@ -353,7 +425,7 @@ class RightFrame(QFrame):
         term_lay.addWidget(self.console)
         lay.addLayout(term_lay, stretch=2)
 
-        # 3. ACTION BANNER (Für "OK" Klicks)
+        # 3. ACTION BANNER
         self.banner_ok = QFrame()
         self.banner_ok.setStyleSheet("background-color: #F59E0B; border-radius: 4px;")
         banner_lay = QHBoxLayout(self.banner_ok)
@@ -419,7 +491,6 @@ class RightFrame(QFrame):
         self.banner_ok.hide()
         self.sandglass.set_state(0.0, "IDLE")
         self.trapezoid.set_pressure(0.0, 2000.0)
-        # Plot für neuen Lauf säubern
         self.realtime_plot.stop_logging()
 
     @Slot(str)
@@ -428,14 +499,14 @@ class RightFrame(QFrame):
 
     @Slot(str)
     def set_status(self, msg: str):
-        pass # Status wird jetzt im TopFrame schön angezeigt
+        pass 
 
     @Slot(float)
     def set_loss_ml(self, loss_ml: float):
         self._loss_ml = loss_ml
 
     def set_base_remove_ml(self, base_ml: float):
-        pass # Nur für main_window compatibility
+        pass 
 
     @Slot(str, str)
     def append_log(self, msg: str, color: str = "#94A3B8"):
@@ -457,33 +528,23 @@ class RightFrame(QFrame):
 
     def set_running(self, running: bool):
         self._running = running
-        
-        # Status der Buttons umschalten
         self.btn_start.setEnabled(not running)
         self.btn_stop.setEnabled(running)
         
         if running:
-            # 1. Logging-Prozess starten
             self.realtime_plot.start_logging(run_name_prefix="PelliKAn_Run")
-            
-            # 2. Start-Button "Elite" Styling für den laufenden Zustand (ausgegraut/deaktiviert)
             self.btn_start.setStyleSheet("""
                 QPushButton {
-                    background-color: #0F172A;
-                    color: #334155;
+                    background-color: #0F172A; color: #334155;
                     font-family: 'Consolas'; font-weight: bold; font-size: 12px; letter-spacing: 1px;
                     border: 1px solid #1E293B; border-bottom: 2px solid #1E293B; border-radius: 4px;
                 }
             """)
         else:
-            # 1. Logging-Prozess sicher beenden
             self.realtime_plot.stop_logging()
-            
-            # 2. Start-Button "Elite" Styling für den Idle-Zustand (bereit/grün)
             self.btn_start.setStyleSheet("""
                 QPushButton {
-                    background-color: #111827;
-                    color: #10B981;
+                    background-color: #111827; color: #10B981;
                     font-family: 'Consolas'; font-weight: bold; font-size: 12px; letter-spacing: 1px;
                     border: 1px solid #1E293B; border-bottom: 2px solid #10B981; border-radius: 4px;
                 }
@@ -492,19 +553,15 @@ class RightFrame(QFrame):
 
     @Slot(dict)
     def update_telemetry(self, sample: dict):
-        """Hier fließen alle Live-Daten zusammen."""
         p1 = sample.get("p1_meas", 0.0)
         max_p = sample.get("p1_set", 2000.0)
         if max_p is None or max_p < 1: max_p = 2000.0
         step = sample.get("step", "")
         
-        # 1. Update Abstrakte Visuals
         self.trapezoid.set_pressure(p1, max_p)
         fill = min(1.0, max(0.0, p1 / max_p)) if max_p > 0 else 0.0
         self.sandglass.set_state(fill, step)
 
-        # 2. Update den Elite-Plot
-        # Wir fügen den Timestamp für den Plot hinzu, falls nicht vorhanden
         if "t" not in sample:
             sample["t"] = time.time()
         self.realtime_plot.ingest_telemetry(sample)

@@ -32,8 +32,11 @@ def _safe_json(x: Any) -> str:
 def _as_plain(obj: Any) -> Any:
     if obj is None:
         return None
-    if is_dataclass(obj):
+    
+    # 🚀 FIX: Wir stellen sicher, dass es eine Instanz ist und keine leere Klassen-Blaupause
+    if is_dataclass(obj) and not isinstance(obj, type):
         return {k: _as_plain(v) for k, v in asdict(obj).items()}
+        
     if isinstance(obj, dict):
         return {str(k): _as_plain(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -41,7 +44,6 @@ def _as_plain(obj: Any) -> Any:
     if isinstance(obj, (str, int, float, bool)):
         return obj
     return str(obj)
-
 
 def _fmt_float(x: Any, *, digits: int = 6) -> str:
     if x is None:

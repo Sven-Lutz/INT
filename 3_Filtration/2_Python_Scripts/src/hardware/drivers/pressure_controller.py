@@ -124,6 +124,8 @@ class PressureController:
         self._calib = (c_double * 1000)()
         self._connected = False
 
+        self._last_p = {1: 0.0, 2: 0.0}
+
     def connect(self) -> None:
         """Stellt die Verbindung her. Wird vom DeviceManager aufgerufen."""
         if self._connected:
@@ -209,12 +211,11 @@ class PressureController:
         out = c_double(0.0)
         err = OB1_Get_Press(self._instr_id.value, int(ch), 1, byref(self._calib), byref(out), 1000)
         
-        if err != 0:
-            # Downgrade to debug to avoid log spam during fast polling
-            logger.debug(f"OB1_Get_Press busy/failed (err={err}) ch={ch}")
-            return 0.0
+        if err == 0:
+            self._last_p[ch] = float(out.value)
+            return float(out.value)
             
-        return float(out.value)
+        return self._last_p.get(ch, 0.0)
 
     def set_pressure_mbar(self, ch: int, value_mbar: float) -> None:
         if OB1_Set_Press is None or not self._connected:

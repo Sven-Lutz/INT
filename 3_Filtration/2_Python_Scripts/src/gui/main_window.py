@@ -20,7 +20,7 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QMessageBox, QGraphicsOpacityEffect
 
 from src.backend.core.experimentator import ExperimentConfig
-from src.gui.data import ExperimentWorker, RunParams
+from src.gui.data import ExperimentWorker, RunParams, worker
 from src.gui.monitor.server import MonitorServer
 from src.gui.health import HealthEvaluator, HealthRules
 from src.gui.style.theme import apply_theme
@@ -765,6 +765,12 @@ class MainWindow(Qtw.QMainWindow):
             worker.telemetry.connect(self.right.update_telemetry) 
             worker.loss_updated.connect(self.top.set_loss_ml)
 
+            srv = getattr(self, "server", getattr(self, "monitor", None))
+            if srv is not None:
+                worker.status.connect(srv.update_status)
+                worker.step_changed.connect(srv.update_step)
+                worker.loss_updated.connect(srv.update_loss)
+
             try:
                 worker.telemetry.connect(self.tab_analysis.plot_widget.plot) # type: ignore
             except Exception:
@@ -819,15 +825,14 @@ class MainWindow(Qtw.QMainWindow):
     def _abort_run(self) -> None:
         try:
             self.right.append_log("!!! ABORT TRIGGERED !!!", "#FF1744")
-        except Exception:
-            pass
+        except Exception: pass
+        
         self.right.set_ok_banner(step="", reason="", show=False)
         self._set_ok_enabled(False)
 
         if self._thread is None:
             self._toast("Stop: forcing SAFE_STATE.")
-            try:
-                self._force_safe_state_now()
+            try: self._force_safe_state_now()
             except Exception: pass
             return
 
@@ -840,7 +845,8 @@ class MainWindow(Qtw.QMainWindow):
         
         try:
             self.top.set_loss_ml(0.0)
-            self.top.update_status("SIMULATION: IDLE")
+            status_text = "SIMULATION: IDLE" if self._simulation_mode else "SYSTEM: IDLE / READY"
+            self.top.update_status(status_text)
         except Exception:
             pass
 
@@ -1123,23 +1129,29 @@ class MainWindow(Qtw.QMainWindow):
             self.monitor = None
 
     def _poll_realtime(self) -> None:
-        if getattr(self, '_is_booting', False): return 
+        if getattr(self, '_is_booting', False): 
+            return 
 
+        import time
+        import random
         now = time.monotonic()
-        if self.dev is None and not self._simulation_mode:
+        
+        if getattr(self, 'dev', None) is None and not getattr(self, '_simulation_mode', False):
             return
 
         try:
-            if self._simulation_mode:
+            if getattr(self, '_simulation_mode', False):
                 self._last_good_comm_ts = now
                 if getattr(self.right, '_running', False):
                     self._rt_p1 = random.uniform(1190, 1210)
                     self._rt_p2 = random.uniform(0, 5)
                     self._rt_flow = random.uniform(1.2, 1.3)
                     self._rt_valves = "FILTRATION"
-                elif self._hold_active:
+                elif getattr(self, '_hold_active', False):
                     self._rt_p1 = random.uniform(0, 5)
-                    self._rt_p2 = self._ui_backwash_pressure_mbar() + random.uniform(-5, 5)
+                    # Fallback falls die Funktion _ui_backwash_pressure_mbar nicht existiert
+                    bw_set = getattr(self, '_ui_backwash_pressure_mbar', lambda: 300)() 
+                    self._rt_p2 = bw_set + random.uniform(-5, 5)
                     self._rt_flow = random.uniform(-2.5, -2.4)
                     self._rt_valves = "BACKWASH"
                 else:
@@ -1148,35 +1160,58 @@ class MainWindow(Qtw.QMainWindow):
                     self._rt_flow = random.uniform(-0.01, 0.01)
                     self._rt_valves = "SIM: IDLE"
             else:
+                # Echte Hardware lesen
                 self._rt_p1 = self._dev_read_pressure(channel=1)
                 self._rt_p2 = self._dev_read_pressure(channel=2)
                 
-                if self.dev:
-                    try: self._rt_flow = float(self.dev.read_flow()) # type: ignore
-                    except Exception: self._rt_flow = None
-                    try: self._rt_valves = str(self.dev.get_valve_state()) # type: ignore
-                    except Exception: self._rt_valves = None
+                if getattr(self, 'dev', None) is not None:
+                    try: 
+                        self._rt_flow = float(self.dev.read_flow()) # type: ignore
+                    except Exception: 
+                        self._rt_flow = 0.0
+                    try: 
+                        self._rt_valves = str(self.dev.get_valve_state()) # type: ignore
+                    except Exception: 
+                        self._rt_valves = "UNKNOWN"
 
-            # 🚀 LÖSUNG: Wir nutzen einfach das 'now', das oben schon definiert wurde!
+            # 🚀 Innerer Block: UI und Server füttern
             try:
+                f_val = self._rt_flow if getattr(self, '_rt_flow', None) is not None else 0.0
+                p1_val = getattr(self, '_rt_p1', 0.0)
+                p2_val = getattr(self, '_rt_p2', 0.0)
+                v_val = getattr(self, '_rt_valves', "UNKNOWN")
+                
                 sample = {
-                    "t": now,  
-                    "p1_meas": self._rt_p1,
-                    "p2_meas": self._rt_p2,
-                    "flow": self._rt_flow if self._rt_flow is not None else 0.0
+                    "t": now,
+                    "p1_meas": p1_val,
+                    "p2_meas": p2_val,
+                    "flow": f_val,
+                    "valves": v_val,
+                    "pressure": {
+                        1: {"meas": p1_val, "set": 0.0},
+                        2: {"meas": p2_val, "set": 0.0}
+                    }
                 }
                 
-                # 1. Zahlen-LCDs oben füttern
-                self.top.update_telemetry(sample)
-                
-                # 2. Den Graphen (self.right) füttern wir hier im Leerlauf BEWUSST NICHT.
-                # Das verhindert den Bug mit der negativen Zeitachse (-1500) aus deinem Screenshot!
+                # 1. LCDs oben füttern
+                if hasattr(self, "top"):
+                    self.top.update_telemetry(sample)
 
-            except Exception:
-                pass
+                # 2. WLAN-Webserver mit Echtzeitdaten füttern
+                srv = getattr(self, "server", getattr(self, "monitor", None))
+                if srv is not None:
+                    srv.update_metrics(
+                        flow=f_val,
+                        p1_meas=p1_val,
+                        p2_meas=p2_val,
+                        valves=v_val
+                    )
+            except Exception as e_inner:
+                pass # Fehler beim UI/Server-Update ignorieren wir im Live-Loop
 
         except Exception as e:
-            logger.error(f"Polling error in _poll_realtime: {e}")
+            import logging
+            logging.getLogger(__name__).error(f"Polling error in _poll_realtime: {e}")
 
     def _construct_frame(self, cls, config):
         try: return cls(config)
