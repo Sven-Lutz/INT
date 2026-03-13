@@ -214,23 +214,19 @@ class TrapezoidWidget(QFrame):
         p.drawText(QRectF(0, h - 15, w, 15), Qt.AlignmentFlag.AlignCenter, "PRESSURE PROFILE")
 
 # =========================================================================
-# VISUALISIERUNG 3: REAL TIME MONITOR TAB (ELITE LEVEL)
+# VISUALISIERUNG 3: REAL TIME MONITOR TAB (ELITE LEVEL - CRASH PROOF)
 # =========================================================================
 def _to_float(x) -> float:
-    """
-    Kugelsichere Umwandlung: Keine NaNs, keine Nones.
-    PyQtGraph stürzt ab, wenn es Gradienten-Flächen (fillLevel) mit NaNs zeichnen soll!
-    """
+    """Kugelsicher: Keine NaNs, keine Nones, keine Strings."""
     try:
         if x is None: return 0.0
         v = float(x)
-        # Überprüfen, ob v ein "NaN" (Not a Number) ist
-        return v if v == v else 0.0 
-    except Exception:
+        return v if v == v else 0.0  # v == v filtert NaN heraus
+    except Exception: 
         return 0.0
 
 class MonitorTab(QFrame):
-    def __init__(self, parent=None, max_points: int = 2000) -> None:
+    def __init__(self, parent=None, max_points: int = 1500) -> None:
         super().__init__(parent)
         self.setStyleSheet("background: transparent;")
         self._max_points = int(max_points)
@@ -331,18 +327,26 @@ class MonitorTab(QFrame):
 
     @Slot(dict)
     def ingest_telemetry(self, payload: dict) -> None:
-        # 🚀 DER WICHTIGSTE FIX: Wir ignorieren die Zeit aus der Payload!
-        # So verhindern wir das Zick-Zack-Zeichnen, falls Worker und Idle-Loop sich überlagern.
         import time
-        t = time.monotonic()
         
+        # 🚀 LÖSUNG 1: Wir ignorieren die externe Zeit komplett!
+        # Der Graph hat seine eigene, interne, unzerstörbare Stoppuhr.
+        current_time = time.monotonic()
+
+        if self._t0 is None: 
+            self._t0 = current_time
+        
+        ts = current_time - self._t0
+
+        # 🚀 LÖSUNG 2: Anti-Zick-Zack Schutzschild
+        # Falls zwei Signale gleichzeitig eintreffen, MUSS die X-Achse trotzdem weiterlaufen!
+        # Das verhindert den PyQtGraph-Polygon-Crash zu 100%.
+        if len(self._t) > 0 and ts <= self._t[-1]:
+            ts = self._t[-1] + 0.005 
+
         flow = _to_float(payload.get("flow"))
         p1 = _to_float(payload.get("p1_meas"))
         p2 = _to_float(payload.get("p2_meas"))
-
-        if self._t0 is None: 
-            self._t0 = t
-        ts = t - self._t0
 
         self._t.append(ts)
         self._flow.append(flow)
@@ -355,7 +359,8 @@ class MonitorTab(QFrame):
             self._p1 = self._p1[-self._max_points :]
             self._p2 = self._p2[-self._max_points :]
 
-        # Da wir Nones und NaNs oben rausgefiltert haben, explodiert setData hier nicht mehr!
+        # Da NaNs durch _to_float abgefangen werden und die Zeit IMMER vorwärts läuft, 
+        # kann PyQtGraph hier nicht mehr abstürzen.
         self.curve_flow.setData(self._t, self._flow)
         self.curve_p1.setData(self._t, self._p1)
         self.curve_p2.setData(self._t, self._p2)
