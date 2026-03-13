@@ -153,7 +153,7 @@ class LeftFrame(QFrame):
         
         self.btn_hold = HoldButton("HOLD SPACE TO BACKWASH")
         self.btn_hold.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.sp_hold_p = NudgeSpinBox(0, 8000, 0, 25, " mbar", 600.0)
+        self.sp_hold_p = NudgeSpinBox(0, 8000, 0, 25, " mbar", 300.0)
         
         lay_manual.addWidget(self.btn_hold)
         h_row = QHBoxLayout()
@@ -167,8 +167,8 @@ class LeftFrame(QFrame):
         # BNNT KALIBRIERUNG
         # ==========================================
         self.mod_calc = EliteModule("BNNT PARAMETERS", "#64748B", checkable=False)
-        self.sp_area = NudgeSpinBox(1.0, 5000.0, 1, 10.0, " mm²", 1134.0)
-        self.sp_calib = NudgeSpinBox(0.01, 100.0, 2, 0.1, " nm/µl", 2.5)
+        self.sp_area = NudgeSpinBox(1.0, 70000.0, 1, 10.0, " mm²", 49480.0)
+        self.sp_calib = NudgeSpinBox(0.001, 10.0, 8, 0.1, " nm/µl", 0.06314815)
         self.sp_thick = NudgeSpinBox(1.0, 1000.0, 1, 1.0, " nm", 100.0)
         
         self.mod_calc.addRow(0, "Film Area (A):", self.sp_area)
@@ -270,7 +270,7 @@ class LeftFrame(QFrame):
 
         c = self.sp_calib.value()
         if c > 0:
-            self._current_bnnt_ml = ((self.sp_thick.value() / c) * (self.sp_area.value() / 1134.0))
+            self._current_bnnt_ml = ((self.sp_thick.value() / c) * (self.sp_area.value() / 1134.0) / 1000.0) 
             self.lbl_bnnt.setText(f"Req. BNNT: {self._current_bnnt_ml:.4f} ml")
         
         tot = self._current_bnnt_ml + self.sp_h2o.value()
@@ -298,7 +298,6 @@ class LeftFrame(QFrame):
             run_phase_a=self.mod_pa.isChecked(), phase_a_target_mbar=self.sp_target_p.value(),
             phase_a_step_mbar=self.sp_up_step.value(), phase_a_time_min=self.sp_up_time.value(),
             run_phase_b=self.mod_pb.isChecked(), v_extra_ml=self.sp_v_extra.value(),
-            # KORREKTUR: Neue Variable für Ramp Rate!
             run_phase_c=self.mod_pc.isChecked(), phase_c_rate_mbar_min=self.sp_dn_rate.value(),
             run_venting=self.mod_vent.isChecked(), venting_duration_s=self.sp_vent_time.value()
         )
