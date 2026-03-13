@@ -762,6 +762,7 @@ class MainWindow(Qtw.QMainWindow):
             worker.step_changed.connect(self.left.update_active_step_highlight)
             worker.status.connect(self.top.update_status)
             worker.telemetry.connect(self.top.update_telemetry)
+            worker.telemetry.connect(self.right.update_telemetry) 
             worker.loss_updated.connect(self.top.set_loss_ml)
 
             try:
@@ -1163,6 +1164,7 @@ class MainWindow(Qtw.QMainWindow):
                     "flow": self._rt_flow
                 }
                 self.top.update_telemetry(sample)
+                self.right.update_telemetry(sample)
             except Exception:
                 pass
 

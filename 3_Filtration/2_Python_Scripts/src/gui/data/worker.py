@@ -571,7 +571,6 @@ class ExperimentWorker(QObject):
 
             self._raise_if_abort()
 
-            # Wrap DeviceManager to ensure protocol compatibility
             exp_dev: object = dev
             if not self._device_implements_proto(dev):
                 exp_dev = self._create_device_adapter(dev)
@@ -595,19 +594,18 @@ class ExperimentWorker(QObject):
                 self.status.emit(f"Telemetry store disabled: {e}")
 
             # =================================================================
-            # MODULARE ABLAUFSTEUERUNG (Basierend auf UI-Checkboxes)
+            # MODULARE ABLAUFSTEUERUNG (Vollautomatisch!)
             # =================================================================
             
             target_vol = float(p.v_bnnt_ml) + float(p.v_h2o_ml)
             total_loss = 0.0
 
-            def ramp_step_callback(msg: str):
-                self._wait_ok(self._current_step, msg)
-
             # --- PHASE 0: FILLING ---
             if p.run_phase_0:
                 self._current_step = Step.FILLING
                 self.step_changed.emit("FILLING")
+                
+                # Nur ein einziges Gate zur Sicherheit am Start
                 self._wait_ok(Step.FILLING, f"Confirm Phase 0: Fill cell at {p.phase_0_pressure_mbar} mbar")
                 self.status.emit("Running Phase 0 (Filling)")
                 self._emit_sample(event="STEP_START_PHASE_0")
@@ -627,15 +625,14 @@ class ExperimentWorker(QObject):
             if p.run_phase_a:
                 self._current_step = Step.FILTRATION
                 self.step_changed.emit("PHASE_A")
-                self._wait_ok(Step.FILTRATION, f"Start Phase A: Ramp up to {p.phase_a_target_mbar} mbar")
-                self.status.emit("Running Phase A")
+                self.status.emit("Running Phase A (Automatic)")
                 self._emit_sample(event="STEP_START_PHASE_A")
                 
                 loss_a = self._exp.step_staircase_ramp(
                     target_pressure_mbar=float(p.phase_a_target_mbar),
                     step_size_mbar=float(p.phase_a_step_mbar),
                     step_time_s=float(p.phase_a_time_min * 60.0),
-                    wait_for_ok_fn=ramp_step_callback 
+                    wait_for_ok_fn=None  # 🚀 KEINE SPAM-POPUPS MEHR!
                 )
                 total_loss += loss_a
 
@@ -643,8 +640,7 @@ class ExperimentWorker(QObject):
             if p.run_phase_b:
                 self._current_step = Step.FILTRATION
                 self.step_changed.emit("PHASE_B")
-                self._wait_ok(Step.FILTRATION, f"Start Phase B1: Hold until {target_vol:.2f}ml removed")
-                self.status.emit("Running Phase B1")
+                self.status.emit(f"Running Phase B1 (Target: {target_vol:.2f}ml)")
                 self._emit_sample(event="STEP_START_PHASE_B1")
                 
                 loss_b1 = self._exp.step_steady_state_volume_target(
@@ -655,8 +651,7 @@ class ExperimentWorker(QObject):
                 total_loss += loss_b1
 
                 if p.v_extra_ml > 0:
-                    self._wait_ok(Step.FILTRATION, f"Start Phase B2: Dry with {p.v_extra_ml:.2f}ml extra")
-                    self.status.emit("Running Phase B2")
+                    self.status.emit(f"Running Phase B2 (Extra dry: {p.v_extra_ml:.2f}ml)")
                     loss_b2 = self._exp.step_steady_state_volume_target(
                         target_volume_ml_to_remove=float(p.v_extra_ml),
                         pressure_mbar=float(p.phase_a_target_mbar),
@@ -668,8 +663,7 @@ class ExperimentWorker(QObject):
             if p.run_phase_c:
                 self._current_step = Step.FILTRATION
                 self.step_changed.emit("PHASE_C")
-                self._wait_ok(Step.FILTRATION, "Start Phase C: Smooth Ramp Down")
-                self.status.emit("Running Phase C")
+                self.status.emit("Running Phase C (Ramp down)")
                 self._emit_sample(event="STEP_START_PHASE_C")
                 
                 rate_mbar_s = float(p.phase_c_rate_mbar_min) / 60.0
@@ -678,7 +672,7 @@ class ExperimentWorker(QObject):
                     target_pressure_mbar=0.0,
                     step_size_mbar=abs(rate_mbar_s),
                     step_time_s=1.0,
-                    wait_for_ok_fn=None
+                    wait_for_ok_fn=None # 🚀 KEINE SPAM-POPUPS MEHR!
                 )
                 total_loss += loss_c
 
@@ -686,7 +680,6 @@ class ExperimentWorker(QObject):
             if p.run_venting:
                 self._current_step = Step.VENTING
                 self.step_changed.emit("VENTING")
-                self._wait_ok(Step.VENTING, "Confirm venting duration")
                 self.status.emit("Running venting")
                 self._emit_sample(event="STEP_START_VENTING")
 
@@ -696,7 +689,6 @@ class ExperimentWorker(QObject):
                     duration_s=float(p.venting_duration_s),
                     pressure_channel=None,
                     net_sign=-1.0,
-                    # 🚀 KORREKTUR: Einheitlicher Valve-Aufruf
                     set_valves=lambda: dev.set_valve_state("VENTING"), 
                     event_start="START_VENTING",
                     event_end="END_VENTING",
@@ -708,7 +700,7 @@ class ExperimentWorker(QObject):
             self._emit_sample(event=f"END_SEQUENCE total_loss={total_loss:.4f}")
             
             self.log_msg.emit("--- FINAL VOLUME BALANCE ---", "#00E5FF")
-            self.log_msg.emit(f"TOTAL LOST: {total_loss:.3f} ml", "#EC4899")
+            self.log_msg.emit(f"TOTAL REMOVED: {total_loss:.3f} ml", "#EC4899")
             
             # =================================================================
             # SEQUENCE ENDE
