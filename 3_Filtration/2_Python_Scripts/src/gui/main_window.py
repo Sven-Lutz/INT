@@ -1185,19 +1185,26 @@ class MainWindow(Qtw.QMainWindow):
                     "t": now,
                     "p1_meas": p1_val,
                     "p2_meas": p2_val,
+                    "p1_set": 0.0,
+                    "p2_set": 0.0,
                     "flow": f_val,
                     "valves": v_val,
+                    "step": self._current_step,           # ← NEU: step Key!
                     "pressure": {
                         1: {"meas": p1_val, "set": 0.0},
                         2: {"meas": p2_val, "set": 0.0}
                     }
                 }
-                
-                # 1. LCDs oben füttern
+ 
+                # 1. TopFrame (LCDs)
                 if hasattr(self, "top"):
                     self.top.update_telemetry(sample)
-
-                # 2. WLAN-Webserver mit Echtzeitdaten füttern
+ 
+                # 2. RightFrame (Sandglass + Trapezoid + Live Plot)
+                if hasattr(self, "right"):                # ← NEU: war komplett fehlend!
+                    self.right.update_telemetry(sample)
+ 
+                # 3. WLAN-Webserver
                 srv = getattr(self, "server", getattr(self, "monitor", None))
                 if srv is not None:
                     srv.update_metrics(

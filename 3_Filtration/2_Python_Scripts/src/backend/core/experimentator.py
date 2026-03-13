@@ -614,45 +614,77 @@ class Experimentator:
         step_time_s: float,
         wait_for_ok_fn: Optional[Callable[[str], None]] = None
     ) -> float:
-        """Phase A: Führt eine Treppen-Rampe aus und gibt das gefilterte Volumen zurück."""
-        logger.info("STAIRCASE RAMP to %.1f mbar (step: %.1f, time: %.1fs)", target_pressure_mbar, step_size_mbar, step_time_s)
-
+        """
+        Staircase ramp — funktioniert jetzt in BEIDE Richtungen.
+        - Aktueller Druck > target → rampt RUNTER
+        - Aktueller Druck < target → rampt HOCH
+        """
+        logger.info(
+            "STAIRCASE RAMP to %.1f mbar (step: %.1f, time: %.1fs)",
+            target_pressure_mbar, step_size_mbar, step_time_s
+        )
+ 
         ch = int(self.cfg.main_pressure_channel)
-        
+ 
         try:
             self.dev.valves_filtration()
         except Exception:
             pass
-
-        if step_size_mbar <= 0 or target_pressure_mbar <= 0:
+ 
+        if step_size_mbar <= 0 or step_time_s <= 0:
             return 0.0
-
-        current_target = 0.0
+ 
+        # ═══════════════════════════════════════════════
+        # FIX: Startpunkt = aktueller Druck, nicht 0!
+        # ═══════════════════════════════════════════════
+        start_mbar = self._get_pressure_setpoint_mbar_best(ch)
+        if start_mbar is None:
+            start_mbar = 0.0
+ 
+        current_target = float(start_mbar)
+        target = float(target_pressure_mbar)
+        step = abs(float(step_size_mbar))
         v0 = float(self.volume_ml)
-
-        while current_target < target_pressure_mbar:
-            current_target += step_size_mbar
-            if current_target > target_pressure_mbar:
-                current_target = target_pressure_mbar
-
-            # Manueller Stopp-Gate (Blockiert den Ablauf, bis UI "OK" sendet)
+ 
+        # Richtung bestimmen
+        ramping_up = (target > current_target)
+ 
+        # Schon am Ziel?
+        if abs(current_target - target) < 0.1:
+            return 0.0
+ 
+        while True:
+            # Nächste Stufe berechnen
+            if ramping_up:
+                current_target = min(current_target + step, target)
+            else:
+                current_target = max(current_target - step, target)
+ 
+            # Optionaler OK-Gate
             if wait_for_ok_fn:
                 wait_for_ok_fn(f"Confirm ramp step to {current_target:.0f} mbar")
-
+ 
+            # Druck setzen
             if getattr(self.dev, "pressure_controller", None) is not None:
                 self._set_pressure_mbar(channel=ch, mbar=current_target, ramp=True)
-
-            # Halten & Messen für die Zeit des aktuellen Schritts
+ 
+            # Halten & Messen
             self._run_timed_step(
-                mode="PHASE_A_RAMP",
+                mode="STAIRCASE_RAMP",
                 duration_s=float(step_time_s),
                 pressure_channel=ch if getattr(self.dev, "pressure_controller", None) is not None else None,
-                net_sign=-1.0, 
+                net_sign=-1.0,
                 set_valves=self.dev.valves_filtration,
                 event_start=f"RAMP_STEP_{current_target:.0f}_START",
                 event_end=f"RAMP_STEP_{current_target:.0f}_END",
             )
-
+ 
+            # Ziel erreicht?
+            if ramping_up and current_target >= target:
+                break
+            if not ramping_up and current_target <= target:
+                break
+ 
         loss_ml = max(0.0, v0 - float(self.volume_ml))
         return float(loss_ml)
 

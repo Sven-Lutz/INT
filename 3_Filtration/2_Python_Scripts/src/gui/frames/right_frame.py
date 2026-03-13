@@ -553,15 +553,33 @@ class RightFrame(QFrame):
 
     @Slot(dict)
     def update_telemetry(self, sample: dict):
-        p1 = sample.get("p1_meas", 0.0)
-        max_p = sample.get("p1_set", 2000.0)
-        if max_p is None or max_p < 1: max_p = 2000.0
-        step = sample.get("step", "")
-        
+        # ═══════════════════════════════════════════════
+        # FIX: None-safe Extraktion aller Werte
+        # ═══════════════════════════════════════════════
+        p1 = sample.get("p1_meas")
+        if p1 is None:
+            p1 = 0.0
+        else:
+            p1 = float(p1)
+ 
+        max_p = sample.get("p1_set")
+        if max_p is None or max_p < 10:
+            # Während idle ist p1_set=0 → Auto-Scale aus dem Messwert
+            # oder sinnvoller Default
+            max_p = max(abs(p1), 100.0) if p1 > 10 else 2000.0
+        else:
+            max_p = float(max_p)
+ 
+        step = sample.get("step") or "IDLE"
+ 
         self.trapezoid.set_pressure(p1, max_p)
-        fill = min(1.0, max(0.0, p1 / max_p)) if max_p > 0 else 0.0
+ 
+        if max_p > 0:
+            fill = min(1.0, max(0.0, p1 / max_p))
+        else:
+            fill = 0.0
         self.sandglass.set_state(fill, step)
-
+ 
         if "t" not in sample:
             sample["t"] = time.time()
         self.realtime_plot.ingest_telemetry(sample)

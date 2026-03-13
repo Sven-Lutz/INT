@@ -665,14 +665,23 @@ class ExperimentWorker(QObject):
                 self.step_changed.emit("PHASE_C")
                 self.status.emit("Running Phase C (Ramp down)")
                 self._emit_sample(event="STEP_START_PHASE_C")
-                
+ 
+                # Sinnvolle Schrittgröße: gleich wie Phase A oder 50 mbar
+                step_size_c = float(p.phase_a_step_mbar) if p.phase_a_step_mbar > 0 else 50.0
                 rate_mbar_s = float(p.phase_c_rate_mbar_min) / 60.0
-                
+ 
+                if rate_mbar_s > 0:
+                    # Haltezeit pro Stufe = Stufenhöhe / Rate
+                    # z.B. 250 mbar / 8.33 mbar/s = 30s pro Stufe
+                    step_time_c = step_size_c / rate_mbar_s
+                else:
+                    step_time_c = 5.0
+ 
                 loss_c = self._exp.step_staircase_ramp(
                     target_pressure_mbar=0.0,
-                    step_size_mbar=abs(rate_mbar_s),
-                    step_time_s=1.0,
-                    wait_for_ok_fn=None # 🚀 KEINE SPAM-POPUPS MEHR!
+                    step_size_mbar=step_size_c,
+                    step_time_s=step_time_c,
+                    wait_for_ok_fn=None
                 )
                 total_loss += loss_c
 

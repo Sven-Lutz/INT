@@ -143,17 +143,22 @@ class DeviceManager:
             self.STATE_FILTRATION: "filtration",
             self.STATE_FILLING: "filling_solution",
             self.STATE_VENTING: "venting",
-            self.STATE_BACKWASH: "backwashing", 
+            self.STATE_BACKWASH: "backwash",          # ← FIX: war "backwashing"
             self.STATE_SHUT: "all_shut",
             self.STATE_OPEN: "all_open"
         }
         fn_name = mapping.get(st, "venting")
         fn: Any = getattr(vc, fn_name, None)
-        if callable(fn): fn()
+        if callable(fn):
+            fn()
+        else:
+            logger.error("DeviceManager.set_valve_state: Methode '%s' nicht gefunden auf ValveController!", fn_name)
 
     def get_valve_state(self) -> str:
         vc = self._require_valves()
-        if hasattr(vc, "state") and isinstance(vc.state, dict): return str(vc.state)
+        # ValveController hat get_state() → gibt _state.value zurück (z.B. "FILTRATION")
+        if hasattr(vc, "get_state"):
+            return str(vc.get_state())
         return "UNKNOWN"
     
     # ---------------- Legacy Adapter ----------------
