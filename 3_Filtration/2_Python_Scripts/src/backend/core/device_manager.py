@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-# Hardware imports (müssen mit deiner Projektstruktur übereinstimmen)
+# Hardware imports
 from src.hardware.drivers.flow_sensor import FlowSensor, FlowSensorConfig
 from src.hardware.drivers.pressure_controller import PressureController
 from src.hardware.drivers.valves import ValveController
@@ -46,7 +46,7 @@ class DeviceManager:
             return
 
         valve_cfg = self._load_required_cfg("valves")
-
+        
         pressure_cfg: Optional[Dict[str, Any]] = None
         if opts.enable_pressure:
             pressure_cfg = self._load_required_cfg("pressure_controller")
@@ -55,9 +55,9 @@ class DeviceManager:
         if opts.enable_flow:
             flow_cfg = self._load_required_cfg("flow_sensor")
 
+        # 1. Ventile
         try:
             self.valve_controller = ValveController(valve_cfg)
-            
             connect_fn = getattr(self.valve_controller, "connect", None)
             if callable(connect_fn):
                 connect_fn()
@@ -65,39 +65,30 @@ class DeviceManager:
                 rel_connect = getattr(self.valve_controller.relais, "connect", None)
                 if callable(rel_connect):
                     rel_connect()
-
             self._valves_connected = True
             logger.info("DeviceManager: ValveController connected.")
         except Exception as e:
             logger.error(f"DeviceManager: ValveController init failed: {e}")
             if self.opts.require_valves: raise
 
-        # 3. OB1 Druckregler initialisieren
-        if opts.enable_pressure:
-            assert pressure_cfg is not None, "Pressure config is required but missing."
+        # 2. OB1 Druckregler
+        if opts.enable_pressure and pressure_cfg is not None:
             try:
                 self.pressure_controller = PressureController(pressure_cfg)
-                
-                # Explizites Connect falls nötig
                 connect_fn = getattr(self.pressure_controller, "connect", None)
                 if callable(connect_fn):
                     connect_fn()
-                    
                 logger.info("DeviceManager: PressureController (OB1) connected.")
             except Exception as e:
                 logger.error(f"DeviceManager: PressureController init failed: {e}")
                 if self.opts.require_pressure: raise
                 self.pressure_controller = None
 
-        # 4. Flusssensor initialisieren
-        if opts.enable_flow:
-            assert flow_cfg is not None, "Flow config is required but missing."
+        # 3. Flusssensor
+        if opts.enable_flow and flow_cfg is not None:
             try:
                 self.flow_sensor = FlowSensor(flow_cfg)
-                
-                # Hier rufen wir explizit connect() auf, wie in der FlowSensor Klasse definiert
                 self.flow_sensor.connect()
-                
                 logger.info("DeviceManager: FlowSensor connected.")
             except Exception as e:
                 logger.error(f"DeviceManager: FlowSensor init failed: {e}")
@@ -119,7 +110,6 @@ class DeviceManager:
         if not isinstance(cfg, dict): raise ValueError(f"Config '{name}' must be a mapping.")
         return cfg
 
-    # ---------------- Hardware Guards ----------------
     def _require_valves(self) -> Any:
         if not self._valves_connected: raise RuntimeError("ValveController not connected.")
         return self.valve_controller
@@ -133,50 +123,51 @@ class DeviceManager:
         return self.flow_sensor
 
     # =====================================================================
-    # 🚀 ADAPTER: STRIKTE AUFRUFE DER KLASSEN-METHODEN
+    # 🚀 LÖSUNG 1: KANAL-ROUTING (LOGISCH -> PHYSISCH)
     # =====================================================================
+    def _get_physical_channel(self, logical_channel: int) -> int:
+        """
+        Mappt die Software-Kanäle auf deine physischen OB1-Schläuche.
+        Kanal 1 wird physisch an Schlauch 2 gesendet.
+        Kanal 2 wird physisch an Schlauch 1 gesendet.
+        """
+        c = int(logical_channel)
+        if c == 1: return 2
+        if c == 2: return 1
+        return c
 
     def set_pressure_setpoint_mbar(self, *, channel: int, setpoint_mbar: float, ramp: bool = True) -> None:
-        """
-        Ruft direkt die Methode 'set_pressure_mbar(ch, value)' auf dem PressureController auf.
-        Kein Raten mehr!
-        """
         pc = self._require_pressure()
+        phys_ch = self._get_physical_channel(channel)
         try:
-            pc.set_pressure_mbar(int(channel), float(setpoint_mbar))
+            pc.set_pressure_mbar(phys_ch, float(setpoint_mbar))
+            logger.info(f"Druck gesendet: {setpoint_mbar} mbar an physischen Kanal {phys_ch} (Software forderte Kanal {channel})")
         except Exception as e:
-            logger.error(f"DeviceManager: Failed to set pressure on channel {channel} to {setpoint_mbar} mbar. Error: {e}")
+            logger.error(f"DeviceManager: Failed to set pressure on channel {channel}. Error: {e}")
             raise
 
     def get_pressure_mbar(self, channel: int) -> float:
-        """
-        Ruft direkt die Methode 'get_pressure_mbar(ch)' auf dem PressureController auf.
-        """
         pc = self._require_pressure()
+        phys_ch = self._get_physical_channel(channel)
         try:
-            v = pc.get_pressure_mbar(int(channel))
-            if v is None:
-                return 0.0
+            v = pc.get_pressure_mbar(phys_ch)
+            if v is None: return 0.0
             return float(v)
         except Exception as e:
             logger.error(f"DeviceManager: Failed to read pressure on channel {channel}. Error: {e}")
             return 0.0
 
     def get_pressure_setpoint_mbar(self, channel: int) -> float:
-        # Der alte Treiber hat keine Funktion, um den Setpoint zu lesen.
-        # Wir geben als Fallback einfach den aktuellen Druck zurück.
         return self.get_pressure_mbar(channel)
 
+    # =====================================================================
+    # RESTLICHE HARDWARE-METHODEN
+    # =====================================================================
     def read_flow(self) -> float:
-        """
-        Ruft direkt die Methode 'get_flow()' auf dem FlowSensor auf.
-        """
         fs = self._require_flow()
         try:
             v = fs.get_flow()
-            if v is None: 
-                return 0.0
-            # Just in case some pint object still slips through
+            if v is None: return 0.0
             if hasattr(v, "magnitude") and not isinstance(v, (float, int)): 
                 return float(v.magnitude)
             return float(v)
@@ -185,10 +176,8 @@ class DeviceManager:
             return 0.0
 
     def set_valve_state(self, state: str) -> None:
-        """Mappt unsere standardisierten Namen auf die deines alten ValveControllers."""
         vc = self._require_valves()
         st = str(state).strip().upper()
-
         state_map = {
             self.STATE_FILTRATION: "filtration",
             self.STATE_FILLING: "filling_solution",
@@ -197,46 +186,41 @@ class DeviceManager:
             self.STATE_SHUT: "all_shut",
             self.STATE_OPEN: "all_open"
         }
-        
         mapped_fn = state_map.get(st, "venting")
         fn: Any = getattr(vc, mapped_fn, None)
-        
-        if callable(fn):
-            fn()
-        else:
-            raise ValueError(f"Unknown valve state '{state}' (mapped to {mapped_fn})")
+        if callable(fn): fn()
+        else: raise ValueError(f"Unknown valve state '{state}' (mapped to {mapped_fn})")
 
     def get_valve_state(self) -> str:
-        # Der alte ValveController hat keine get_state() Methode, die einen String zurückgibt,
-        # er hat das self.state Dictionary.
         vc = self._require_valves()
         if hasattr(vc, "state") and isinstance(vc.state, dict):
             return str(vc.state)
         return "UNKNOWN"
-    
-    def valves_filtration(self):
-        self.set_valve_state(self.STATE_FILTRATION)
 
-    def valves_venting(self) -> None: 
-        self.set_valve_state(self.STATE_VENTING)
+    def valves_filtration(self): self.set_valve_state(self.STATE_FILTRATION)
+    def valves_venting(self) -> None: self.set_valve_state(self.STATE_VENTING)
+    def valves_filling_solution(self): self.set_valve_state(self.STATE_FILLING)
+    def valves_backwash(self): self.set_valve_state(self.STATE_BACKWASH)
+    def all_valves_shut(self): self.set_valve_state(self.STATE_SHUT)
 
     def vent_all(self) -> None:
         try: self.valves_venting()
         except Exception: pass
-        
         if self.pressure_controller is not None:
             for ch in (1, 2):
                 try: self.set_pressure_setpoint_mbar(channel=ch, setpoint_mbar=0.0)
                 except Exception: pass
 
-    def set_pressure(self, channel: int, pressure: float):
-        """Wichtig: Experimentator schickt oft Pint-Objekte oder Floats."""
-        val = getattr(pressure, "magnitude", pressure)
+    # Legcy-Brücke für den Worker
+    def set_pressure(self, value, channel: int = 1, ramp: bool = True):
+        val = getattr(value, "magnitude", value)
         self.set_pressure_setpoint_mbar(channel=channel, setpoint_mbar=float(val))
+        
+    def get_pressure(self, channel: int) -> float: return self.get_pressure_mbar(channel)
+    def get_pressure_setpoint(self, channel: int) -> float: return self.get_pressure_mbar(channel)
 
     def disconnect(self) -> None:
         logger.info("DeviceManager: Disconnecting hardware...")
-        
         if self.flow_sensor is not None:
             try: self.flow_sensor.close()
             except Exception: pass
@@ -246,7 +230,6 @@ class DeviceManager:
             for ch in (1, 2):
                 try: self.set_pressure_setpoint_mbar(channel=ch, setpoint_mbar=0.0)
                 except Exception: pass
-            
             try: self.pressure_controller.close()
             except Exception: pass
             self.pressure_controller = None
@@ -263,8 +246,5 @@ class DeviceManager:
 
         logger.info("DeviceManager: Disconnect complete.")
 
-    def __enter__(self) -> "DeviceManager":
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        self.disconnect()
+    def __enter__(self) -> "DeviceManager": return self
+    def __exit__(self, exc_type, exc, tb) -> None: self.disconnect()
