@@ -19,7 +19,7 @@ from PySide6.QtGui import (
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QMessageBox, QGraphicsOpacityEffect
 
-from src.backend.core.experimentator import ExperimentConfig
+from src.gui.data.worker import ExperimentConfig
 from src.gui.data import ExperimentWorker, RunParams, worker
 from src.gui.monitor.server import MonitorServer
 from src.gui.health import HealthEvaluator, HealthRules
