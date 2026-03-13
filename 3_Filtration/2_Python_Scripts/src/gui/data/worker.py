@@ -452,48 +452,51 @@ class ExperimentWorker(QObject):
             target_vol = float(p.v_bnnt_ml) + float(p.v_h2o_ml)
             total_loss = 0.0
 
-            # --- PHASE 0: FILLING SOLUTION ---
+            # -------------------------------------------------------------
+            # PHASE 0: BACKFLUSH / FILLING
+            # -------------------------------------------------------------
             if p.run_phase_0:
                 self._current_step = Step.FILLING
                 self.step_changed.emit("FILLING")
                 
-                # 🚀 Echte Hardware-Calls für Ventile
-                self.log_msg.emit("HW: Switching to FILLING valves...", "#94A3B8")
-                if hasattr(dev, "valves_filling_solution"):
-                    dev.valves_filling_solution()
-                elif hasattr(dev, "set_valve_state"):
-                    dev.set_valve_state("FILLING")
-                
-                time.sleep(1.0) # Hardware Zeit geben zum Umschalten!
+                # 🚀 FIX 1: Phase 0 ist physikalisch ein BACKWASH!
+                robust_switch_valves(dev, "BACKWASH", self.log_msg)
                 
                 if getattr(dev, "pressure_controller", None) is not None:
-                    self.log_msg.emit(f"HW: Setting Pressure to {p.phase_0_pressure_mbar} mbar", "#94A3B8")
-                    self._safe_set_pressure_mbar(channel=int(self.cfg.main_pressure_channel), mbar=float(p.phase_0_pressure_mbar))
+                    # 🚀 FIX 2: Wir müssen zwingend Kanal 2 (Backwash) befeuern, NICHT Kanal 1!
+                    self._safe_set_pressure_mbar(channel=int(self.cfg.backwash_pressure_channel), mbar=float(p.phase_0_pressure_mbar))
 
                 if p.phase_0_mode == "continuous":
-                    self.status.emit("FILLING: Continuous (Click OK to Stop)")
-                    self.log_msg.emit("Continuous Fill active. Press OK when full.", "#00E5FF")
-                    self._wait_ok(Step.FILLING, "Stop continuous filling")
+                    self.status.emit("BACKFLUSH: Continuous (Click OK to Stop)")
+                    self.log_msg.emit("Continuous Backflush active. Press OK when full.", "#00E5FF")
+                    self._wait_ok(Step.FILLING, "Stop continuous backflush")
                 else:
-                    self.status.emit(f"FILLING: Auto target {target_vol:.2f} mL")
-                    self.log_msg.emit(f"Auto Fill started: target {target_vol:.2f} mL.", "#00E5FF")
+                    self.status.emit(f"BACKFLUSH: Auto target {target_vol:.2f} mL")
+                    self.log_msg.emit(f"Auto Backflush started: target {target_vol:.2f} mL.", "#00E5FF")
                     start_vol = self._exp.volume_ml
                     
                     while not self._should_abort():
                         dt_s, flow_raw = self._exp._sample_flow()
-                        self._exp._update_volume(dt_s, flow_raw, net_sign=1.0)
-                        filled = self._exp.volume_ml - start_vol
-                        self.loss_updated.emit(-filled) 
-                        self._emit_sample(event="FILLING_AUTO")
+                        
+                        # Beim Backwash fließt die Flüssigkeit rückwärts in die Zelle.
+                        self._exp._update_volume(dt_s, flow_raw, net_sign=-1.0)
+                        
+                        # Wir tracken das absolute Volumen, das in die Zelle gedrückt wurde
+                        filled = abs(self._exp.volume_ml - start_vol)
+                        
+                        self.loss_updated.emit(-filled) # UI Kugel füllt sich (negativer Loss)
+                        self._emit_sample(event="BACKFLUSH_AUTO")
+                        
                         if filled >= target_vol:
-                            self.log_msg.emit(f"Auto Fill complete ({filled:.2f} mL).", "#10B981")
+                            self.log_msg.emit(f"Auto Backflush complete ({filled:.2f} mL).", "#10B981")
                             break
                         time.sleep(0.1)
 
-                # Druck abschalten nach dem Füllen!
+                # 🚀 FIX 3: Druck auf Kanal 2 wieder auf 0 und Ventile SICHER schließen!
                 if getattr(dev, "pressure_controller", None) is not None:
-                    self._safe_set_pressure_mbar(channel=int(self.cfg.main_pressure_channel), mbar=0.0)
-                time.sleep(0.5)
+                    self._safe_set_pressure_mbar(channel=int(self.cfg.backwash_pressure_channel), mbar=0.0)
+                
+                robust_switch_valves(dev, "SHUT", self.log_msg)
 
             # --- PHASE A: RAMP UP ---
             if p.run_phase_a:
