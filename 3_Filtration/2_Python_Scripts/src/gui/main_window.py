@@ -627,7 +627,6 @@ class MainWindow(Qtw.QMainWindow):
         self.right.start_clicked.connect(self._start_experiment)
         self.right.ok_clicked.connect(self._send_ok)
         self.right.stop_clicked.connect(self._abort_run)
-        self.right.manual_vent_clicked.connect(self._request_manual_vent)
         self.left.btn_hold.hold_started.connect(lambda: self._hold_source_set("mouse", True))
         self.left.btn_hold.hold_ended.connect(lambda: self._hold_source_set("mouse", False))
         
