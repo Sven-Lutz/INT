@@ -256,8 +256,16 @@ class MonitorTab(QFrame):
         grad_flow.setColorAt(1.0, QColor(236, 72, 153, 0))
         brush_flow = QBrush(grad_flow)
 
-        pen_flow = pg.mkPen(color='#EC4899', width=2.5)
-        self.curve_flow = self.plot_flow.plot([], [], pen=pen_flow, fillLevel=0, brush=brush_flow)
+        pen_flow = pg.mkPen(color='#EC4899', width=3.5)
+        pen_p1 = pg.mkPen(color='#8B5CF6', width=3.5)
+        self.curve_flow = self.plot_flow.plot(
+            [], [],
+            pen=pen_flow,
+            fillLevel=0,
+            brush=brush_flow,
+            symbol='o',
+            symbolSize=4
+        )
 
         # Pressure Gradient (Lila)
         grad_p1 = QLinearGradient(0, 0, 0, 1)
@@ -266,12 +274,24 @@ class MonitorTab(QFrame):
         grad_p1.setColorAt(1.0, QColor(139, 92, 246, 0))
         brush_p1 = QBrush(grad_p1)
 
-        pen_p1 = pg.mkPen(color='#8B5CF6', width=2.5)
-        self.curve_p1 = self.plot_p.plot([], [], pen=pen_p1, fillLevel=0, brush=brush_p1, name="P1 Main")
+        self.curve_p1 = self.plot_p.plot(
+            [], [],
+            pen=pen_p1,
+            fillLevel=0,
+            brush=brush_p1,
+            name="P1 Main",
+            symbol='o',
+            symbolSize=4
+        )
 
         pen_p2 = pg.mkPen(color='#00E5FF', width=2, style=Qt.PenStyle.DashLine)
-        self.curve_p2 = self.plot_p.plot([], [], pen=pen_p2, name="P2 Backwash")
-
+        self.curve_p2 = self.plot_p.plot(
+            [], [],
+            pen=pen_p2,
+            name="P2 Backwash",
+            symbol='o',
+            symbolSize=4
+        )
         root.addWidget(self.plot_p, 1)
         root.addWidget(self.plot_flow, 1)
 
@@ -340,6 +360,8 @@ class MonitorTab(QFrame):
         p1 = _to_float(p1_raw)
         p2 = _to_float(p2_raw)
 
+        print(f"ingest: n={len(self._t)+1}, p1={p1}, p2={p2}, flow={flow}")
+
         self._t.append(ts)
         self._flow.append(flow)
         self._p1.append(p1)
@@ -360,11 +382,35 @@ class MonitorTab(QFrame):
             self.curve_flow.setData(self._t, self._flow)
             self.curve_p1.setData(self._t, self._p1)
             self.curve_p2.setData(self._t, self._p2)
-        
-        if self._csv_writer is not None and self._csv_file is not None and not self._csv_file.closed:
-            try:
-                self._csv_writer.writerow({'t': f"{ts:.3f}", 'flow': flow, 'p1_meas': p1, 'p2_meas': p2})
-            except Exception: pass
+
+        if len(self._t) > 1:
+            self.curve_flow.setData(self._t, self._flow)
+            self.curve_p1.setData(self._t, self._p1)
+            self.curve_p2.setData(self._t, self._p2)
+
+            # Sichtbarkeit bei Flatline / Nullwerten erzwingen
+            if max(map(abs, self._flow), default=0.0) < 1e-9:
+                self.plot_flow.setYRange(-1.0, 1.0)
+
+            else:
+                fmin = min(self._flow)
+                fmax = max(self._flow)
+                pad = max(1.0, (fmax - fmin) * 0.15)
+                self.plot_flow.setYRange(fmin - pad, fmax + pad)
+
+            p_all = self._p1 + self._p2
+            if max(map(abs, p_all), default=0.0) < 1e-9:
+                self.plot_p.setYRange(-50.0, 50.0)
+            else:
+                pmin = min(p_all)
+                pmax = max(p_all)
+                pad = max(10.0, (pmax - pmin) * 0.15)
+                self.plot_p.setYRange(pmin - pad, pmax + pad)
+                
+                if self._csv_writer is not None and self._csv_file is not None and not self._csv_file.closed:
+                    try:
+                        self._csv_writer.writerow({'t': f"{ts:.3f}", 'flow': flow, 'p1_meas': p1, 'p2_meas': p2})
+                    except Exception: pass
 
 
 # =========================================================================
@@ -561,6 +607,7 @@ class RightFrame(QFrame):
 
     @Slot(dict)
     def update_telemetry(self, sample: dict):
+        print("UPDATE_TELEMETRY CALLED", sample)
         pressures = sample.get("pressure", {})
         p1_data = pressures.get(1, pressures.get("1", {}))
 

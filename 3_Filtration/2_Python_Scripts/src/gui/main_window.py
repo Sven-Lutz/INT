@@ -1108,15 +1108,37 @@ class MainWindow(Qtw.QMainWindow):
         if self._experiment_running():
             if self._worker is not None: self._worker_hold_start_best_effort(self._worker, p)
         else:
-            self._dev_set_valve_state("BACKWASH")
-            self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=p)
+            print(">>> MANUAL HOLD: Requesting BACKWASH")
+            dev = getattr(self, 'dev', None)
+            if dev is not None:
+                # Nutze unsere neue sichere Methode (via Import oder direkt)
+                try:
+                    if hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
+                    import time; time.sleep(0.05)
+                    
+                    if hasattr(dev, "valves_backwash"): dev.valves_backwash()
+                    elif hasattr(dev, "set_valve_state"): dev.set_valve_state("BACKWASH")
+                    else: print("!!! HW ERROR: No backwash method found on device !!!")
+                except Exception as e:
+                    print(f"!!! HW VALVE ERROR: {e} !!!")
+                    
+            self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=p)
 
     def _hold_end_actions(self) -> None:
         if self._experiment_running():
             if self._worker is not None: self._worker_hold_stop_best_effort(self._worker)
         else:
-            self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=0.0)
-            self._dev_set_valve_state("FILTRATION")
+            # 🚀 FIX: Alles ZU machen, wenn man loslässt!
+            print(">>> MANUAL HOLD RELEASED: Shutting all valves")
+            self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=0.0)
+            
+            dev = getattr(self, 'dev', None)
+            if dev is not None:
+                try:
+                    if hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
+                    elif hasattr(dev, "set_valve_state"): dev.set_valve_state("SHUT")
+                except Exception as e:
+                    print(f"!!! HW VALVE ERROR: {e} !!!")
 
     def _schedule_hold_setpoint_push(self, *args) -> None:
         if self._hold_active and not self._hold_setpoint_timer.isActive():
@@ -1156,92 +1178,78 @@ class MainWindow(Qtw.QMainWindow):
     def _poll_realtime(self) -> None:
         if getattr(self, '_is_booting', False): 
             return 
+        if self._experiment_running(): 
+            return # Wenn Worker läuft, darf MainWindow NICHTS machen!
 
+        import time
         now = time.monotonic()
         
-        if getattr(self, 'dev', None) is None and not getattr(self, '_simulation_mode', False):
+        # Sicherstellen, dass self.dev existiert und nicht None ist
+        dev = getattr(self, 'dev', None)
+        if dev is None:
             return
 
+        # 🚀 HARDCORE DEBUGGING READS (Pylance Safe)
         try:
-            if getattr(self, '_simulation_mode', False):
-                self._last_good_comm_ts = now
-                if getattr(self.right, '_running', False):
-                    self._rt_p1 = random.uniform(1190, 1210)
-                    self._rt_p2 = random.uniform(0, 5)
-                    self._rt_flow = random.uniform(1.2, 1.3)
-                    self._rt_valves = "FILTRATION"
-                elif getattr(self, '_hold_active', False):
-                    self._rt_p1 = random.uniform(0, 5)
-                    bw_set = getattr(self, '_ui_backwash_pressure_mbar', lambda: 300)() 
-                    self._rt_p2 = bw_set + random.uniform(-5, 5)
-                    self._rt_flow = random.uniform(-2.5, -2.4)
-                    self._rt_valves = "BACKWASH"
-                else:
-                    self._rt_p1 = random.uniform(0, 5)
-                    self._rt_p2 = random.uniform(0, 5)
-                    self._rt_flow = random.uniform(-0.01, 0.01)
-                    self._rt_valves = "SIM: IDLE"
-            else:
-                # ── FIX: Jeder Read einzeln abgesichert ──
-                try:
-                    self._rt_p1 = self._dev_read_pressure(channel=1)
-                except Exception:
-                    self._rt_p1 = 0.0
-                try:
-                    self._rt_p2 = self._dev_read_pressure(channel=2)
-                except Exception:
-                    self._rt_p2 = 0.0
-                try:
-                    self._rt_flow = float(self.dev.read_flow()) if self.dev else 0.0
-                except Exception:
-                    self._rt_flow = 0.0
-                try:
-                    self._rt_valves = str(self.dev.get_valve_state()) if self.dev else "UNKNOWN"
-                except Exception:
-                    self._rt_valves = "UNKNOWN"
-                self._last_good_comm_ts = now
-
-            # UI und Server füttern
+            # 1. Flow Sensor
             try:
-                f_val = self._rt_flow if getattr(self, '_rt_flow', None) is not None else 0.0
-                p1_val = getattr(self, '_rt_p1', 0.0) or 0.0
-                p2_val = getattr(self, '_rt_p2', 0.0) or 0.0
-                v_val = getattr(self, '_rt_valves', "UNKNOWN")
-                
-                sample = {
-                    "t": now,
-                    "p1_meas": p1_val,
-                    "p2_meas": p2_val,
-                    "p1_set": 0.0,
-                    "p2_set": 0.0,
-                    "flow": f_val,
-                    "valves": v_val,
-                    "step": self._current_step,
-                    "pressure": {
-                        1: {"meas": p1_val, "set": 0.0},
-                        2: {"meas": p2_val, "set": 0.0}
-                    }
+                self._rt_flow = float(dev.read_flow())
+            except Exception as e:
+                self._rt_flow = 0.0
+                print(f"HW ERROR (Flow): {e}")
+
+            # 2. Pressure Sensors
+            try:
+                if hasattr(dev, "get_pressure_mbar"):
+                    self._rt_p1 = float(dev.get_pressure_mbar(1))
+                    self._rt_p2 = float(dev.get_pressure_mbar(2))
+                elif hasattr(dev, "get_pressure"):
+                    self._rt_p1 = float(dev.get_pressure(1))
+                    self._rt_p2 = float(dev.get_pressure(2))
+                else:
+                    self._rt_p1 = 0.0
+                    self._rt_p2 = 0.0
+            except Exception as e:
+                self._rt_p1 = 0.0
+                self._rt_p2 = 0.0
+                print(f"HW ERROR (Pressure): {e}")
+
+            # 3. Valve State
+            try:
+                if hasattr(dev, "get_valve_state"):
+                    self._rt_valves = str(dev.get_valve_state())
+                else:
+                    self._rt_valves = "UNKNOWN"
+            except Exception as e:
+                self._rt_valves = "UNKNOWN"
+                print(f"HW ERROR (Valves): {e}")
+
+            # 4. UI Update
+            p1_val = getattr(self, '_rt_p1', 0.0)
+            p2_val = getattr(self, '_rt_p2', 0.0)
+            f_val = getattr(self, '_rt_flow', 0.0)
+            v_val = getattr(self, '_rt_valves', "UNKNOWN")
+
+            sample = {
+                "t": now,
+                "p1_meas": p1_val,
+                "p2_meas": p2_val,
+                "flow": f_val,
+                "valves": v_val,
+                "step": "IDLE",
+                "pressure": {
+                    1: {"meas": p1_val, "set": 0.0},
+                    2: {"meas": p2_val, "set": 0.0}
                 }
-                
-                if hasattr(self, "top"):
-                    self.top.update_telemetry(sample)
-
-                if hasattr(self, "right"):
-                    self.right.update_telemetry(sample)
-
-                srv = getattr(self, "server", getattr(self, "monitor", None))
-                if srv is not None:
-                    srv.update_metrics(
-                        flow=f_val,
-                        p1_meas=p1_val,
-                        p2_meas=p2_val,
-                        valves=v_val
-                    )
-            except Exception:
-                pass
+            }
+            
+            if hasattr(self, "top"): 
+                self.top.update_telemetry(sample)
+            if hasattr(self, "right"): 
+                self.right.update_telemetry(sample)
 
         except Exception as e:
-            logging.getLogger(__name__).error(f"Polling error in _poll_realtime: {e}")
+            print(f"CRITICAL POLLING ERROR: {e}")
 
     def _construct_frame(self, cls, config):
         try: return cls(config)

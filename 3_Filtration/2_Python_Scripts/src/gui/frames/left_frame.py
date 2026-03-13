@@ -181,30 +181,25 @@ class LeftFrame(QFrame):
         root.addWidget(self.mod_calc)
 
         # ==========================================
-        # STATE 0 (Mit 3-Wege Schalter)
+        # BNNT KALIBRIERUNG
         # ==========================================
-        self.mod_p0 = EliteModule("STATE 0: FILLING SOLUTION", "#00E5FF", checkable=True)
+        self.mod_calc = EliteModule("BNNT PARAMETERS", "#64748B", checkable=False)
+        self.sp_area = NudgeSpinBox(1.0, 70000.0, 1, 10.0, " mm²", 49480.0)
+        self.sp_calib = NudgeSpinBox(0.001, 10.0, 8, 0.1, " nm/µl", 0.06314815)
+        self.sp_thick = NudgeSpinBox(1.0, 1000.0, 1, 1.0, " nm", 100.0)
         
-        # 🚀 NEU: Auswahl des Füll-Modus
-        self.cmb_fill_mode = QComboBox()
-        self.cmb_fill_mode.addItems(["Auto (Fill Target Vol)", "Continuous (Wait for Click)"])
-        self.cmb_fill_mode.setStyleSheet("background: #0F172A; color: #FFF; border: 1px solid #1E293B; font-family: 'Consolas'; padding: 2px;")
+        self.mod_calc.addRow(0, "Film Area (A):", self.sp_area)
+        self.mod_calc.addRow(1, "Calibration (C):", self.sp_calib)
+        self.mod_calc.addRow(2, "Desired Thick.:", self.sp_thick)
         
-        self.sp_h2o = NudgeSpinBox(0.0, 10000.0, 2, 100.0, " ml", 1400.0)
-        self.sp_fill_p = NudgeSpinBox(0.0, 2000.0, 0, 10.0, " mbar", 300.0)
-        
-        self.mod_p0.addRow(0, "Fill Mode:", self.cmb_fill_mode)
-        self.mod_p0.addRow(1, "H2O Volume:", self.sp_h2o)
-        self.mod_p0.addRow(2, "Fill Pressure:", self.sp_fill_p)
-        
-        self.lbl_total_vol = QLabel("Target Vol: — ml")
-        self.lbl_total_vol.setProperty("is_dynamic_result", True)
-        self.lbl_total_vol.setStyleSheet("color: #00E5FF; font-weight: bold; font-family: 'Consolas'; font-size: 12px; border: none; padding-top: 4px;")
-        self.mod_p0.content_lay.addWidget(self.lbl_total_vol, 3, 0, 1, 2)
-        root.addWidget(self.mod_p0)
+        self.lbl_bnnt = QLabel("Req. BNNT: — ml")
+        self.lbl_bnnt.setProperty("is_dynamic_result", True)
+        self.lbl_bnnt.setStyleSheet("color: #10B981; font-weight: bold; font-family: 'Consolas'; font-size: 12px; border: none; padding-top: 4px;")
+        self.mod_calc.content_lay.addWidget(self.lbl_bnnt, 3, 0, 1, 2)
+        root.addWidget(self.mod_calc)
 
-# ==========================================
-        # STATE 0 (Mit 3-Wege Schalter & ETA)
+        # ==========================================
+        # STATE 0: FILLING SOLUTION
         # ==========================================
         self.mod_p0 = EliteModule("STATE 0: FILLING SOLUTION", "#00E5FF", checkable=True)
         
@@ -214,8 +209,6 @@ class LeftFrame(QFrame):
         
         self.sp_h2o = NudgeSpinBox(0.0, 10000.0, 2, 100.0, " ml", 1400.0)
         self.sp_fill_p = NudgeSpinBox(0.0, 2000.0, 0, 10.0, " mbar", 300.0)
-        
-        # 🚀 NEU: Erwartete Flussrate für ETA
         self.sp_est_flow = NudgeSpinBox(0.1, 500.0, 1, 5.0, " ml/min", 15.0) 
         
         self.mod_p0.addRow(0, "Fill Mode:", self.cmb_fill_mode)

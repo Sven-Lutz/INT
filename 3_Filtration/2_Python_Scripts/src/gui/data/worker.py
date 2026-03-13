@@ -36,6 +36,54 @@ def _is_finite_number(x: Any) -> bool:
         return False
     return v == v and v not in (float("inf"), float("-inf"))
 
+def robust_switch_valves(dev: Any, mode: str, log_signal: Optional[Any] = None) -> None:
+    """Kugelsicherer Ventil-Schalter mit 'Break before Make' Logik."""
+    if dev is None: return
+    mode = mode.upper()
+    
+    # 🚀 FLUIDIC SAFETY: Zuerst IMMER alles schließen (außer wir wollen explizit nur schließen)
+    if mode != "SHUT":
+        try:
+            if hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
+            elif hasattr(dev, "set_valve_state"): dev.set_valve_state("SHUT")
+            import time
+            time.sleep(0.1) # 100ms warten, damit die physischen Relais/Ventile sicher zu sind!
+        except Exception as e:
+            print(f"HW WARNING: Could not pre-shut valves: {e}")
+
+    msg = f"HW CMD: Switching valves to {mode}"
+    print(f">>> {msg}")
+    
+    if log_signal is not None and hasattr(log_signal, "emit"):
+        log_signal.emit(msg, "#94A3B8")
+        
+    try:
+        if mode == "FILLING":
+            if hasattr(dev, "valves_filling_solution"): dev.valves_filling_solution()
+            elif hasattr(dev, "set_valve_state"): dev.set_valve_state("FILLING")
+            else: raise RuntimeError("No FILLING method on device")
+        elif mode == "FILTRATION":
+            if hasattr(dev, "valves_filtration"): dev.valves_filtration()
+            elif hasattr(dev, "set_valve_state"): dev.set_valve_state("FILTRATION")
+            else: raise RuntimeError("No FILTRATION method on device")
+        elif mode == "BACKWASH":
+            if hasattr(dev, "valves_backwash"): dev.valves_backwash()
+            elif hasattr(dev, "set_valve_state"): dev.set_valve_state("BACKWASH")
+            else: raise RuntimeError("No BACKWASH method on device")
+        elif mode == "VENTING":
+            if hasattr(dev, "valves_venting"): dev.valves_venting()
+            elif hasattr(dev, "set_valve_state"): dev.set_valve_state("VENTING")
+            else: raise RuntimeError("No VENTING method on device")
+        elif mode == "SHUT":
+            if hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
+            elif hasattr(dev, "set_valve_state"): dev.set_valve_state("SHUT")
+            else: raise RuntimeError("No SHUT method on device")
+    except Exception as e:
+        err = f"VALVE ERROR ({mode}): {e}"
+        print(f"!!! {err} !!!")
+        if log_signal is not None and hasattr(log_signal, "emit"):
+            log_signal.emit(err, "#FF1744")
+
 class _PressureControllerProto(Protocol):
     def set_pressure(self, *args, **kwargs): ...
     def read_pressure(self, *args, **kwargs): ...
@@ -56,7 +104,6 @@ class _DeviceProto(Protocol):
     def get_pressure_setpoint_mbar(self, channel: int) -> float: ...
     def get_pressure_mbar(self, channel: int) -> float: ...
     def set_pressure_setpoint_mbar(self, *, channel: int, setpoint_mbar: float, ramp: bool = True) -> None: ...
-
 
 # =========================================================================
 # EXPERIMENT CONFIG & DATA CLASSES
@@ -409,10 +456,18 @@ class ExperimentWorker(QObject):
             if p.run_phase_0:
                 self._current_step = Step.FILLING
                 self.step_changed.emit("FILLING")
-                try: dev.set_valve_state("FILLING")
-                except Exception: pass
+                
+                # 🚀 Echte Hardware-Calls für Ventile
+                self.log_msg.emit("HW: Switching to FILLING valves...", "#94A3B8")
+                if hasattr(dev, "valves_filling_solution"):
+                    dev.valves_filling_solution()
+                elif hasattr(dev, "set_valve_state"):
+                    dev.set_valve_state("FILLING")
+                
+                time.sleep(1.0) # Hardware Zeit geben zum Umschalten!
                 
                 if getattr(dev, "pressure_controller", None) is not None:
+                    self.log_msg.emit(f"HW: Setting Pressure to {p.phase_0_pressure_mbar} mbar", "#94A3B8")
                     self._safe_set_pressure_mbar(channel=int(self.cfg.main_pressure_channel), mbar=float(p.phase_0_pressure_mbar))
 
                 if p.phase_0_mode == "continuous":
@@ -435,8 +490,10 @@ class ExperimentWorker(QObject):
                             break
                         time.sleep(0.1)
 
+                # Druck abschalten nach dem Füllen!
                 if getattr(dev, "pressure_controller", None) is not None:
                     self._safe_set_pressure_mbar(channel=int(self.cfg.main_pressure_channel), mbar=0.0)
+                time.sleep(0.5)
 
             # --- PHASE A: RAMP UP ---
             if p.run_phase_a:
