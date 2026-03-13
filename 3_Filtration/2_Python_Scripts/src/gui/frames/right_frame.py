@@ -216,12 +216,18 @@ class TrapezoidWidget(QFrame):
 # =========================================================================
 # VISUALISIERUNG 3: REAL TIME MONITOR TAB (ELITE LEVEL)
 # =========================================================================
-def _to_float(x) -> Optional[float]:
-    try: return None if x is None else float(x)
-    except Exception: return None
-
-def _nan(x: Optional[float]) -> float:
-    return float("nan") if x is None else float(x)
+def _to_float(x) -> float:
+    """
+    Kugelsichere Umwandlung: Keine NaNs, keine Nones.
+    PyQtGraph stürzt ab, wenn es Gradienten-Flächen (fillLevel) mit NaNs zeichnen soll!
+    """
+    try:
+        if x is None: return 0.0
+        v = float(x)
+        # Überprüfen, ob v ein "NaN" (Not a Number) ist
+        return v if v == v else 0.0 
+    except Exception:
+        return 0.0
 
 class MonitorTab(QFrame):
     def __init__(self, parent=None, max_points: int = 2000) -> None:
@@ -249,7 +255,7 @@ class MonitorTab(QFrame):
         self.plot_p = pg.PlotWidget(title="PRESSURE TELEMETRY (mbar)")
         self.plot_flow = pg.PlotWidget(title="FLOW DYNAMICS (mL/min)")
 
-        # 🚀 FIX: Elite Achsen-Styling
+        # Elite Achsen-Styling
         for plot in [self.plot_p, self.plot_flow]:
             plot.showGrid(x=False, y=True, alpha=0.1)
             plot.getAxis('bottom').setPen(pg.mkPen('#1E293B'))
@@ -325,12 +331,17 @@ class MonitorTab(QFrame):
 
     @Slot(dict)
     def ingest_telemetry(self, payload: dict) -> None:
-        t = payload.get("t", time.time())
+        # 🚀 DER WICHTIGSTE FIX: Wir ignorieren die Zeit aus der Payload!
+        # So verhindern wir das Zick-Zack-Zeichnen, falls Worker und Idle-Loop sich überlagern.
+        import time
+        t = time.monotonic()
+        
         flow = _to_float(payload.get("flow"))
         p1 = _to_float(payload.get("p1_meas"))
         p2 = _to_float(payload.get("p2_meas"))
 
-        if self._t0 is None: self._t0 = t
+        if self._t0 is None: 
+            self._t0 = t
         ts = t - self._t0
 
         self._t.append(ts)
@@ -344,11 +355,11 @@ class MonitorTab(QFrame):
             self._p1 = self._p1[-self._max_points :]
             self._p2 = self._p2[-self._max_points :]
 
-        self.curve_flow.setData(self._t, [_nan(v) for v in self._flow])
-        self.curve_p1.setData(self._t, [_nan(v) for v in self._p1])
-        self.curve_p2.setData(self._t, [_nan(v) for v in self._p2])
+        # Da wir Nones und NaNs oben rausgefiltert haben, explodiert setData hier nicht mehr!
+        self.curve_flow.setData(self._t, self._flow)
+        self.curve_p1.setData(self._t, self._p1)
+        self.curve_p2.setData(self._t, self._p2)
         
-        # 🚀 FIX: Werte endlich in die geöffnete CSV schreiben!
         if self._csv_writer is not None and self._csv_file is not None and not self._csv_file.closed:
             try:
                 self._csv_writer.writerow({'t': f"{ts:.3f}", 'flow': flow, 'p1_meas': p1, 'p2_meas': p2})
