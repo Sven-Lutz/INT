@@ -3,10 +3,11 @@ from dataclasses import dataclass
 from typing import Optional, List
 import math
 from PySide6.QtCore import Signal, Slot, Qt, QTimer
-from PySide6.QtGui import QCursor
+from PySide6.QtGui import QCursor, QDesktopServices
+from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
-    QGridLayout, QWidget, QComboBox
+    QGridLayout, QWidget, QComboBox, QPushButton
 )
 from src.gui.data.worker import RunParams
 from src.gui.widgets.hold_button import HoldButton
@@ -26,7 +27,6 @@ class EliteModule(QFrame):
         self.main_lay.setContentsMargins(0, 0, 0, 0)
         self.main_lay.setSpacing(0)
 
-        # Header
         self.header = QFrame()
         self.header.setFixedHeight(26)
         if self.checkable:
@@ -50,7 +50,6 @@ class EliteModule(QFrame):
 
         self.main_lay.addWidget(self.header)
 
-        # Content
         self.content = QFrame()
         self.content.setStyleSheet("background-color: transparent; border: none;")
         self.content_lay = QGridLayout(self.content)
@@ -122,6 +121,7 @@ class EliteModule(QFrame):
 
 class LeftFrame(QFrame):
     params_changed = Signal(RunParams)
+    server_toggle_requested = Signal(bool) # Signal für die main.py
 
     def __init__(self, config=None, parent=None):
         super().__init__(parent)
@@ -131,7 +131,6 @@ class LeftFrame(QFrame):
         self._hold_allowed = True
         self._is_running = False
 
-        # --- DYNAMIC COUNTDOWN TIMER ---
         self.countdown_timer = QTimer(self)
         self.countdown_timer.timeout.connect(self._on_countdown_tick)
         self._active_phase_key = ""
@@ -141,9 +140,7 @@ class LeftFrame(QFrame):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
 
-        # ==========================================
         # MANUAL HOLD
-        # ==========================================
         self.grp_manual = QFrame()
         self.grp_manual.setStyleSheet("QFrame { background: #0B1120; border-radius: 4px; border: 1px solid #1E293B; border-top: 2px solid #EC4899; margin-bottom: 4px; }")
         lay_manual = QVBoxLayout(self.grp_manual)
@@ -162,9 +159,7 @@ class LeftFrame(QFrame):
         lay_manual.addLayout(h_row)
         root.addWidget(self.grp_manual)
 
-        # ==========================================
         # BNNT KALIBRIERUNG
-        # ==========================================
         self.mod_calc = EliteModule("BNNT PARAMETERS", "#64748B", checkable=False)
         self.sp_area = NudgeSpinBox(1.0, 70000.0, 1, 10.0, " mm²", 49480.0)
         self.sp_calib = NudgeSpinBox(0.001, 10.0, 8, 0.1, " nm/µl", 0.06314815)
@@ -180,9 +175,7 @@ class LeftFrame(QFrame):
         self.mod_calc.content_lay.addWidget(self.lbl_bnnt, 3, 0, 1, 2)
         root.addWidget(self.mod_calc)
 
-        # ==========================================
         # STATE 0: FILLING SOLUTION
-        # ==========================================
         self.mod_p0 = EliteModule("STATE 0: FILLING SOLUTION", "#00E5FF", checkable=True)
         
         self.cmb_fill_mode = QComboBox()
@@ -204,33 +197,29 @@ class LeftFrame(QFrame):
         self.mod_p0.content_lay.addWidget(self.lbl_total_vol, 4, 0, 1, 2)
         root.addWidget(self.mod_p0)
 
-        # ==========================================
-        # PHASE A (Mit Manuell-Schalter)
-        # ==========================================
+        # 🚀 PHASE A: RAMP UP (NEUES STUFENLOSES DESIGN)
         self.mod_pa = EliteModule("PHASE A: RAMP UP", "#8B5CF6", checkable=True)
         
         self.cmb_ramp_mode = QComboBox()
-        self.cmb_ramp_mode.addItems(["Auto (Time based)", "Manual (Click for Step)"])
+        self.cmb_ramp_mode.addItems(["Auto (Continuous Rate)", "Manual (Click for Step)"])
         self.cmb_ramp_mode.setStyleSheet("background: #0F172A; color: #FFF; border: 1px solid #1E293B; font-family: 'Consolas'; padding: 2px;")
 
         self.sp_target_p = NudgeSpinBox(0.0, 8000.0, 0, 100.0, " mbar", 2000.0)
-        self.sp_up_step = NudgeSpinBox(1.0, 1000.0, 0, 10.0, " mbar", 250.0)
-        self.sp_up_time = NudgeSpinBox(0.1, 120.0, 1, 1.0, " min", 2.0)
+        self.sp_a_rate = NudgeSpinBox(1.0, 5000.0, 0, 10.0, " mbar/min", 125.0) # Für Auto
+        self.sp_a_step = NudgeSpinBox(1.0, 1000.0, 0, 10.0, " mbar", 250.0) # Für Manual
         
         self.mod_pa.addRow(0, "Ramp Mode:", self.cmb_ramp_mode)
         self.mod_pa.addRow(1, "Target Pres.:", self.sp_target_p)
-        self.mod_pa.addRow(2, "Step Size:", self.sp_up_step)
-        self.mod_pa.addRow(3, "Step Time:", self.sp_up_time)
+        self.mod_pa.addRow(2, "Auto Rate:", self.sp_a_rate)
+        self.mod_pa.addRow(3, "Manual Step:", self.sp_a_step)
         
-        self.lbl_pa_info = QLabel("Steps: — | ETA: — min")
+        self.lbl_pa_info = QLabel("Mode: CONTINUOUS | ETA: — min")
         self.lbl_pa_info.setProperty("is_dynamic_result", True)
         self.lbl_pa_info.setStyleSheet("color: #8B5CF6; font-weight: bold; font-family: 'Consolas'; font-size: 11px; border: none; padding-top: 4px;")
         self.mod_pa.content_lay.addWidget(self.lbl_pa_info, 4, 0, 1, 2)
         root.addWidget(self.mod_pa)
 
-        # ==========================================
         # PHASE B
-        # ==========================================
         self.mod_pb = EliteModule("PHASE B: STEADY STATE", "#F59E0B", checkable=True)
         lbl_b1 = QLabel("B1 holds until 'Target Vol' is reached.")
         lbl_b1.setStyleSheet("color: #64748B; font-size: 10px; font-family: 'Arial'; border: none;")
@@ -240,9 +229,7 @@ class LeftFrame(QFrame):
         self.mod_pb.addRow(1, "B2 V_Extra:", self.sp_v_extra)
         root.addWidget(self.mod_pb)
 
-        # ==========================================
         # PHASE C
-        # ==========================================
         self.mod_pc = EliteModule("PHASE C: RAMP DOWN", "#EC4899", checkable=True)
         self.sp_dn_rate = NudgeSpinBox(1.0, 5000.0, 0, 50.0, " mbar/min", 500.0)
         self.mod_pc.addRow(0, "Ramp Rate:", self.sp_dn_rate)
@@ -253,26 +240,50 @@ class LeftFrame(QFrame):
         self.mod_pc.content_lay.addWidget(self.lbl_pc_info, 1, 0, 1, 2)
         root.addWidget(self.mod_pc)
 
-        # 🚀 VENT MODULE WURDE GELÖSCHT
+        # 🚀 NEU: TELEMETRY SERVER MODUL
+        self.mod_srv = EliteModule("NETWORK MONITOR SERVER", "#10B981", checkable=False)
+        
+        self.btn_toggle_srv = QPushButton("START SERVER")
+        self.btn_toggle_srv.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_toggle_srv.setStyleSheet("background: #0F172A; color: #10B981; border: 1px solid #1E293B; padding: 4px; font-weight: bold; border-radius: 3px;")
+        self.btn_toggle_srv.setCheckable(True)
+        self.btn_toggle_srv.toggled.connect(self._on_server_toggled)
+
+        self.btn_open_web = QPushButton("OPEN DASHBOARD")
+        self.btn_open_web.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_open_web.setStyleSheet("background: #0F172A; color: #94A3B8; border: 1px solid #1E293B; padding: 4px; font-weight: bold; border-radius: 3px;")
+        self.btn_open_web.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("http://127.0.0.1:8000")))
+
+        srv_lay = QHBoxLayout()
+        srv_lay.addWidget(self.btn_toggle_srv)
+        srv_lay.addWidget(self.btn_open_web)
+        self.mod_srv.content_lay.addLayout(srv_lay, 0, 0, 1, 2)
+        root.addWidget(self.mod_srv)
 
         root.addStretch()
         self._current_bnnt_ml = 0.0
         self._wire_signals()
         self._recalc_math()
 
+    def _on_server_toggled(self, checked: bool):
+        if checked:
+            self.btn_toggle_srv.setText("SERVER RUNNING")
+            self.btn_toggle_srv.setStyleSheet("background: #10B981; color: #000; border: none; padding: 4px; font-weight: bold; border-radius: 3px;")
+        else:
+            self.btn_toggle_srv.setText("START SERVER")
+            self.btn_toggle_srv.setStyleSheet("background: #0F172A; color: #10B981; border: 1px solid #1E293B; padding: 4px; font-weight: bold; border-radius: 3px;")
+        self.server_toggle_requested.emit(checked)
+
     def _wire_signals(self):
         widgets = [
             self.sp_area, self.sp_calib, self.sp_thick, self.sp_h2o,
-            self.sp_fill_p, self.sp_est_flow, self.sp_target_p, self.sp_up_step, 
-            self.sp_up_time, self.sp_v_extra, self.sp_dn_rate,
+            self.sp_fill_p, self.sp_est_flow, self.sp_target_p, self.sp_a_rate, 
+            self.sp_a_step, self.sp_v_extra, self.sp_dn_rate,
             self.cmb_fill_mode, self.cmb_ramp_mode
         ]
-        
         for w in widgets: 
-            if isinstance(w, QComboBox):
-                w.currentIndexChanged.connect(self._recalc_math)
-            else:
-                w.valueChanged.connect(self._recalc_math)
+            if isinstance(w, QComboBox): w.currentIndexChanged.connect(self._recalc_math)
+            else: w.valueChanged.connect(self._recalc_math)
         
         self.modules = [self.mod_p0, self.mod_pa, self.mod_pb, self.mod_pc]
         for m in self.modules: m.toggled.connect(self._recalc_math)
@@ -288,7 +299,6 @@ class LeftFrame(QFrame):
         
         tot = self._current_bnnt_ml + self.sp_h2o.value()
         
-        # 🚀 NEU: ETA für Phase 0
         if self.cmb_fill_mode.currentIndex() == 1:
             self.lbl_total_vol.setText("Target Vol: MANUAL STOP")
         else:
@@ -296,20 +306,19 @@ class LeftFrame(QFrame):
             eta_m = (tot / est_flow) if est_flow > 0 else 0
             self.lbl_total_vol.setText(f"Target: {tot:.2f} ml | ETA: {eta_m:.1f} min")
 
-        # ETA Phase A
-        up_s = self.sp_up_step.value()
-        if up_s > 0:
-            steps = math.ceil(self.sp_target_p.value() / up_s)
-            t_min = steps * self.sp_up_time.value()
-            if self.cmb_ramp_mode.currentIndex() == 1:
-                self.lbl_pa_info.setText(f"Steps: {steps} | ETA: MANUAL CLICKS")
-            else:
-                self.lbl_pa_info.setText(f"Steps: {steps} | ETA: {t_min:.1f} min")
+        # 🚀 NEU: Logik für Stufenlos vs Steps
+        if self.cmb_ramp_mode.currentIndex() == 0:
+            rate = self.sp_a_rate.value()
+            eta = self.sp_target_p.value() / rate if rate > 0 else 0
+            self.lbl_pa_info.setText(f"Mode: CONTINUOUS | ETA: {eta:.1f} min")
+        else:
+            step_size = self.sp_a_step.value()
+            steps = math.ceil(self.sp_target_p.value() / step_size) if step_size > 0 else 0
+            self.lbl_pa_info.setText(f"Mode: MANUAL STEPS | Clicks req.: {steps}")
 
-        # ETA Phase C
-        rate = self.sp_dn_rate.value()
-        if rate > 0:
-            c_min = self.sp_target_p.value() / rate
+        rate_c = self.sp_dn_rate.value()
+        if rate_c > 0:
+            c_min = self.sp_target_p.value() / rate_c
             self.lbl_pc_info.setText(f"ETA: {c_min:.1f} min")
 
         self.params_changed.emit(self.get_run_params())
@@ -319,7 +328,7 @@ class LeftFrame(QFrame):
             v_bnnt_ml=self._current_bnnt_ml, v_h2o_ml=self.sp_h2o.value(),
             run_phase_0=self.mod_p0.isChecked(), phase_0_pressure_mbar=self.sp_fill_p.value(),
             run_phase_a=self.mod_pa.isChecked(), phase_a_target_mbar=self.sp_target_p.value(),
-            phase_a_step_mbar=self.sp_up_step.value(), phase_a_time_min=self.sp_up_time.value(),
+            phase_a_rate_mbar_min=self.sp_a_rate.value(), phase_a_step_mbar=self.sp_a_step.value(),
             run_phase_b=self.mod_pb.isChecked(), v_extra_ml=self.sp_v_extra.value(),
             run_phase_c=self.mod_pc.isChecked(), phase_c_rate_mbar_min=self.sp_dn_rate.value()
         )
@@ -329,7 +338,7 @@ class LeftFrame(QFrame):
 
     def set_running(self, running: bool):
         self._is_running = running
-        for m in self.modules + [self.mod_calc]:
+        for m in self.modules + [self.mod_calc, self.mod_srv]:
             m.setEnabled(not running)
         if not running:
             self.countdown_timer.stop()
@@ -343,8 +352,8 @@ class LeftFrame(QFrame):
         if "PHASE_A" in current_step_str: 
             self.mod_pa.setHighlight(True)
             if self.cmb_ramp_mode.currentIndex() == 0:
-                steps = math.ceil(self.sp_target_p.value() / self.sp_up_step.value()) if self.sp_up_step.value() > 0 else 0
-                self._time_left_s = steps * self.sp_up_time.value() * 60
+                rate = self.sp_a_rate.value()
+                self._time_left_s = (self.sp_target_p.value() / rate * 60) if rate > 0 else 0
             else:
                 self._time_left_s = 0
         elif "PHASE_B" in current_step_str: 
@@ -355,7 +364,6 @@ class LeftFrame(QFrame):
             self._time_left_s = (self.sp_target_p.value() / rate * 60) if rate > 0 else 0
         elif "FILLING" in current_step_str or "0" in current_step_str:
             self.mod_p0.setHighlight(True)
-            # 🚀 NEU: Countdown für Phase 0
             tot = self._current_bnnt_ml + self.sp_h2o.value()
             est_flow = self.sp_est_flow.value()
             if self.cmb_fill_mode.currentIndex() == 0 and est_flow > 0:
