@@ -902,12 +902,22 @@ class MainWindow(Qtw.QMainWindow):
         return super().event(e)
 
     def _set_running_ui(self, running: bool, *, reason: str = "") -> None:
+        # 🚀 ANTI-DEADLOCK KILL-SWITCH: 
+        # Niemals das GUI auf den USB-Port zugreifen lassen, wenn der Worker läuft!
+        if running:
+            if hasattr(self, '_rt_timer'):
+                self._rt_timer.stop()
+        else:
+            if hasattr(self, '_rt_timer'):
+                self._rt_timer.start(self.REALTIME_POLL_MS)
+
         try: self.left.set_running(bool(running))
         except Exception: pass
         try: self.right.set_running(bool(running))
         except Exception: pass
         try: self.right.enable_ok(False)
         except Exception: pass
+        
         self._render_manual_state(reason="running_ui")
         self._update_health_banner()
 
