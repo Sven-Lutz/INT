@@ -1,6 +1,6 @@
 from typing import Optional
-from PySide6.QtCore import Slot, Qt, Qt as QtEnum
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget, QProgressBar
+from PySide6.QtCore import Slot, Qt
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QProgressBar
 
 class TopFrame(QFrame):
     def __init__(self, parent=None):
@@ -12,14 +12,16 @@ class TopFrame(QFrame):
         lay.setSpacing(20)
 
         # 1. Branding / Status
-        self.lbl_title = QLabel("LITTLE CHONKER // COMMAND NODE")
+        self.lbl_title = QLabel("SVENs REASON FOR DEPRESSION")
         self.lbl_title.setStyleSheet("color: #F8FAFC; font-weight: 900; font-size: 16px; letter-spacing: 2px;")
         
         self.lbl_status = QLabel("● SIMULATION: IDLE")
         self.lbl_status.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 12px; font-family: 'Consolas';")
         
-        box_brand = QVBoxLayout(); box_brand.setSpacing(2)
-        box_brand.addWidget(self.lbl_title); box_brand.addWidget(self.lbl_status)
+        box_brand = QVBoxLayout()
+        box_brand.setSpacing(2)
+        box_brand.addWidget(self.lbl_title)
+        box_brand.addWidget(self.lbl_status)
         lay.addLayout(box_brand)
         lay.addStretch()
 
@@ -73,15 +75,35 @@ class TopFrame(QFrame):
         parent_layout.addWidget(card)
         return lbl_v, bar
 
+    # 🚀 FIX: Kugelsicherer Konverter gegen Hardware-NaNs
+    def _to_safe_float(self, val) -> Optional[float]:
+        if val is None: 
+            return None
+        try:
+            v = float(val)
+            # Filtert 'NaN' und 'Infinity' knallhart heraus
+            if v == v and v not in (float("inf"), float("-inf")):
+                return v
+            return None
+        except Exception:
+            return None
+
     @Slot(dict)
     def update_telemetry(self, sample: dict):
-        p1 = sample.get("p1_meas")
-        self._set_metric_value(self.val_p_main, self.bar_p_main, p1, "{:.0f} mbar")
+        pressures = sample.get("pressure", {})
         
-        p2 = sample.get("p2_meas")
-        self._set_metric_value(self.val_p_back, self.bar_p_back, p2, "{:.0f} mbar")
+        # P1 Main (prüft flache und verschachtelte Dictionary-Struktur)
+        p1_data = pressures.get(1, pressures.get("1", {}))
+        p1_raw = sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas")
+        self._set_metric_value(self.val_p_main, self.bar_p_main, self._to_safe_float(p1_raw), "{:.0f} mbar")
         
-        f = sample.get("flow")
+        # P2 Backwash
+        p2_data = pressures.get(2, pressures.get("2", {}))
+        p2_raw = sample.get("p2_meas") if sample.get("p2_meas") is not None else p2_data.get("meas")
+        self._set_metric_value(self.val_p_back, self.bar_p_back, self._to_safe_float(p2_raw), "{:.0f} mbar")
+        
+        # Flow
+        f = self._to_safe_float(sample.get("flow"))
         self._set_metric_value(self.val_flow, self.bar_flow, f, "{:.3f} mL/min", is_flow=True)
 
     def _set_metric_value(self, label: QLabel, bar: QProgressBar, value: Optional[float], format_str: str, is_flow: bool = False):
@@ -95,10 +117,13 @@ class TopFrame(QFrame):
         text = f"{prefix}{format_str.format(value)}"
         label.setText(text)
         
-        # Update den Mini-Balken (absoluter Wert)
-        bar.setValue(min(bar.maximum(), int(abs(value))))
+        # 🚀 FIX: Abfangen des ValueError, falls doch etwas schiefgeht!
+        try:
+            bar.setValue(min(bar.maximum(), int(abs(value))))
+        except Exception:
+            bar.setValue(0)
         
-        # Farbcodierung nur für den Flow-Wert! (Druck ist immer positiv und hat eine feste Farbe)
+        # Farbcodierung für Flow-Richtung
         if is_flow:
             if value > 0:
                 label.setStyleSheet(label.styleSheet().replace("color: #FF1744;", "color: #00FF66;").replace("color: #F8FAFC;", "color: #00FF66;"))
@@ -111,18 +136,23 @@ class TopFrame(QFrame):
 
     @Slot(str)
     def update_status(self, status_text: str):
-        # Simuliere eine leuchtende LED neben dem Status
-        if "RUNNING" in status_text.upper():
-            self.lbl_status.setText(f"● {status_text.upper()}")
+        safe_status = str(status_text).upper() if status_text else "UNKNOWN"
+        
+        if "RUNNING" in safe_status:
+            self.lbl_status.setText(f"● {safe_status}")
             self.lbl_status.setStyleSheet("color: #00FF66; font-weight: bold; font-size: 12px; font-family: 'Consolas';")
-        elif "ABORTED" in status_text.upper() or "FAILED" in status_text.upper():
-            self.lbl_status.setText(f"● {status_text.upper()}")
+        elif "ABORTED" in safe_status or "FAILED" in safe_status or "ERROR" in safe_status:
+            self.lbl_status.setText(f"● {safe_status}")
             self.lbl_status.setStyleSheet("color: #FF1744; font-weight: bold; font-size: 12px; font-family: 'Consolas';")
         else:
-            self.lbl_status.setText(f"● {status_text.upper()}")
+            self.lbl_status.setText(f"● {safe_status}")
             self.lbl_status.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 12px; font-family: 'Consolas';")
 
     @Slot(float)
     def set_loss_ml(self, loss_ml: float):
-        self.val_loss.setText(f"{loss_ml:.2f} mL")
-        self.bar_loss.setValue(min(self.bar_loss.maximum(), int(abs(loss_ml))))
+        safe_loss = self._to_safe_float(loss_ml) or 0.0
+        self.val_loss.setText(f"{safe_loss:.2f} mL")
+        try:
+            self.bar_loss.setValue(min(self.bar_loss.maximum(), int(abs(safe_loss))))
+        except Exception:
+            pass
