@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Optional, List
 import math
 from PySide6.QtCore import Signal, Slot, Qt, QTimer
-from PySide6.QtGui import QCursor, QDesktopServices
+from PySide6.QtGui import QCursor, QDesktopServices, QImage, QPixmap
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
@@ -121,7 +121,7 @@ class EliteModule(QFrame):
 
 class LeftFrame(QFrame):
     params_changed = Signal(RunParams)
-    server_toggle_requested = Signal(bool) # Signal für die main.py
+    server_toggle_requested = Signal(bool)
 
     def __init__(self, config=None, parent=None):
         super().__init__(parent)
@@ -177,11 +177,9 @@ class LeftFrame(QFrame):
 
         # STATE 0: FILLING SOLUTION
         self.mod_p0 = EliteModule("STATE 0: FILLING SOLUTION", "#00E5FF", checkable=True)
-        
         self.cmb_fill_mode = QComboBox()
         self.cmb_fill_mode.addItems(["Auto (Fill Target Vol)", "Continuous (Wait for Click)"])
         self.cmb_fill_mode.setStyleSheet("background: #0F172A; color: #FFF; border: 1px solid #1E293B; font-family: 'Consolas'; padding: 2px;")
-        
         self.sp_h2o = NudgeSpinBox(0.0, 10000.0, 2, 100.0, " ml", 1400.0)
         self.sp_fill_p = NudgeSpinBox(0.0, 2000.0, 0, 10.0, " mbar", 300.0)
         self.sp_est_flow = NudgeSpinBox(0.1, 500.0, 1, 5.0, " ml/min", 15.0) 
@@ -197,16 +195,14 @@ class LeftFrame(QFrame):
         self.mod_p0.content_lay.addWidget(self.lbl_total_vol, 4, 0, 1, 2)
         root.addWidget(self.mod_p0)
 
-        # 🚀 PHASE A: RAMP UP (NEUES STUFENLOSES DESIGN)
+        # PHASE A
         self.mod_pa = EliteModule("PHASE A: RAMP UP", "#8B5CF6", checkable=True)
-        
         self.cmb_ramp_mode = QComboBox()
         self.cmb_ramp_mode.addItems(["Auto (Continuous Rate)", "Manual (Click for Step)"])
         self.cmb_ramp_mode.setStyleSheet("background: #0F172A; color: #FFF; border: 1px solid #1E293B; font-family: 'Consolas'; padding: 2px;")
-
         self.sp_target_p = NudgeSpinBox(0.0, 8000.0, 0, 100.0, " mbar", 2000.0)
-        self.sp_a_rate = NudgeSpinBox(1.0, 5000.0, 0, 10.0, " mbar/min", 125.0) # Für Auto
-        self.sp_a_step = NudgeSpinBox(1.0, 1000.0, 0, 10.0, " mbar", 250.0) # Für Manual
+        self.sp_a_rate = NudgeSpinBox(1.0, 5000.0, 0, 10.0, " mbar/min", 125.0)
+        self.sp_a_step = NudgeSpinBox(1.0, 1000.0, 0, 10.0, " mbar", 250.0)
         
         self.mod_pa.addRow(0, "Ramp Mode:", self.cmb_ramp_mode)
         self.mod_pa.addRow(1, "Target Pres.:", self.sp_target_p)
@@ -224,7 +220,6 @@ class LeftFrame(QFrame):
         lbl_b1 = QLabel("B1 holds until 'Target Vol' is reached.")
         lbl_b1.setStyleSheet("color: #64748B; font-size: 10px; font-family: 'Arial'; border: none;")
         self.mod_pb.content_lay.addWidget(lbl_b1, 0, 0, 1, 2)
-        
         self.sp_v_extra = NudgeSpinBox(0.0, 5000.0, 2, 10.0, " ml", 0.0)
         self.mod_pb.addRow(1, "B2 V_Extra:", self.sp_v_extra)
         root.addWidget(self.mod_pb)
@@ -240,24 +235,41 @@ class LeftFrame(QFrame):
         self.mod_pc.content_lay.addWidget(self.lbl_pc_info, 1, 0, 1, 2)
         root.addWidget(self.mod_pc)
 
-        # 🚀 NEU: TELEMETRY SERVER MODUL
+        # 🚀 TELEMETRY SERVER & QR CODE
         self.mod_srv = EliteModule("NETWORK MONITOR SERVER", "#10B981", checkable=False)
+        
+        # IP SICHER ERAHNT (Auch ohne Internet im Labornetzwerk)
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("10.255.255.255", 1))
+            self.local_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            self.local_ip = "127.0.0.1"
+
+        self.server_url = f"http://{self.local_ip}:8000"
         
         self.btn_toggle_srv = QPushButton("START SERVER")
         self.btn_toggle_srv.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_toggle_srv.setStyleSheet("background: #0F172A; color: #10B981; border: 1px solid #1E293B; padding: 4px; font-weight: bold; border-radius: 3px;")
+        self.btn_toggle_srv.setStyleSheet("background: #0F172A; color: #10B981; border: 1px solid #1E293B; padding: 6px; font-weight: bold; border-radius: 3px;")
         self.btn_toggle_srv.setCheckable(True)
         self.btn_toggle_srv.toggled.connect(self._on_server_toggled)
 
-        self.btn_open_web = QPushButton("OPEN DASHBOARD")
-        self.btn_open_web.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_open_web.setStyleSheet("background: #0F172A; color: #94A3B8; border: 1px solid #1E293B; padding: 4px; font-weight: bold; border-radius: 3px;")
-        self.btn_open_web.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("http://127.0.0.1:8000")))
+        self.lbl_url = QLabel(self.server_url)
+        self.lbl_url.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_url.setStyleSheet("color: #00E5FF; font-weight: bold; font-family: 'Consolas'; font-size: 11px;")
 
-        srv_lay = QHBoxLayout()
-        srv_lay.addWidget(self.btn_toggle_srv)
-        srv_lay.addWidget(self.btn_open_web)
-        self.mod_srv.content_lay.addLayout(srv_lay, 0, 0, 1, 2)
+        # QR Code Halterung
+        self.lbl_qr = QLabel()
+        self.lbl_qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_qr.setMinimumHeight(120)
+        self.lbl_qr.setStyleSheet("background: #fff; border-radius: 4px; padding: 5px;")
+        self.lbl_qr.hide() # Erst zeigen, wenn Server gestartet wird
+
+        self.mod_srv.content_lay.addWidget(self.btn_toggle_srv, 0, 0, 1, 2)
+        self.mod_srv.content_lay.addWidget(self.lbl_url, 1, 0, 1, 2)
+        self.mod_srv.content_lay.addWidget(self.lbl_qr, 2, 0, 1, 2)
         root.addWidget(self.mod_srv)
 
         root.addStretch()
@@ -265,13 +277,34 @@ class LeftFrame(QFrame):
         self._wire_signals()
         self._recalc_math()
 
+    def _generate_qr(self):
+        try:
+            import qrcode
+            import io
+            qr = qrcode.QRCode(version=1, box_size=4, border=1)
+            qr.add_data(self.server_url)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            
+            buf = io.BytesIO()
+            img.save(buf)
+            qimg = QImage.fromData(buf.getvalue())
+            pixmap = QPixmap.fromImage(qimg)
+            self.lbl_qr.setPixmap(pixmap)
+        except ImportError:
+            self.lbl_qr.setText("QR Error:\n'pip install qrcode pillow'\nnot found.")
+            self.lbl_qr.setStyleSheet("color: #FF1744; font-weight: bold; font-size: 11px;")
+
     def _on_server_toggled(self, checked: bool):
         if checked:
             self.btn_toggle_srv.setText("SERVER RUNNING")
-            self.btn_toggle_srv.setStyleSheet("background: #10B981; color: #000; border: none; padding: 4px; font-weight: bold; border-radius: 3px;")
+            self.btn_toggle_srv.setStyleSheet("background: #10B981; color: #000; border: none; padding: 6px; font-weight: bold; border-radius: 3px;")
+            self._generate_qr()
+            self.lbl_qr.show()
         else:
             self.btn_toggle_srv.setText("START SERVER")
-            self.btn_toggle_srv.setStyleSheet("background: #0F172A; color: #10B981; border: 1px solid #1E293B; padding: 4px; font-weight: bold; border-radius: 3px;")
+            self.btn_toggle_srv.setStyleSheet("background: #0F172A; color: #10B981; border: 1px solid #1E293B; padding: 6px; font-weight: bold; border-radius: 3px;")
+            self.lbl_qr.hide()
         self.server_toggle_requested.emit(checked)
 
     def _wire_signals(self):
@@ -306,7 +339,6 @@ class LeftFrame(QFrame):
             eta_m = (tot / est_flow) if est_flow > 0 else 0
             self.lbl_total_vol.setText(f"Target: {tot:.2f} ml | ETA: {eta_m:.1f} min")
 
-        # 🚀 NEU: Logik für Stufenlos vs Steps
         if self.cmb_ramp_mode.currentIndex() == 0:
             rate = self.sp_a_rate.value()
             eta = self.sp_target_p.value() / rate if rate > 0 else 0

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from http import server
 import logging
 import time
 import random
@@ -10,7 +11,7 @@ from typing import Deque, Optional, Set, Tuple, Any
 import PySide6.QtWidgets as Qtw
 from PySide6.QtCore import (
     QObject, QEvent, Qt, QThread, QTimer, Signal,
-    QPropertyAnimation, QByteArray, QEasingCurve, Property, QRectF
+    QPropertyAnimation, QByteArray, QEasingCurve, Property, QRectF, Slot
 )
 from PySide6.QtGui import (
     QMouseEvent, QColor, QPainter, QPixmap,
@@ -19,6 +20,7 @@ from PySide6.QtGui import (
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QMessageBox, QGraphicsOpacityEffect
 
+import src
 from src.gui.data.worker import ExperimentConfig
 from src.gui.data import ExperimentWorker, RunParams, worker
 from src.gui.monitor.server import MonitorServer
@@ -26,6 +28,7 @@ from src.gui.health import HealthEvaluator, HealthRules
 from src.gui.style.theme import apply_theme
 from src.utils.config_manager import ConfigManager
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
+from src.backend.core.web_server import TelemetryWebServer, update_web_telemetry
 
 from .frames.left_frame import LeftFrame
 from .frames.right_frame import RightFrame
@@ -566,6 +569,7 @@ class MainWindow(Qtw.QMainWindow):
         layout_live.setSpacing(10)
 
         self.top = self._construct_frame(TopFrame, self.config)
+        self.web_server = TelemetryWebServer(port=8000)
         self.left = self._construct_frame(LeftFrame, self.config)
         self.right = self._construct_frame(RightFrame, self.config)
 
@@ -648,6 +652,15 @@ class MainWindow(Qtw.QMainWindow):
 
         QTimer.singleShot(100, self.hud.play_intro)
         QTimer.singleShot(1000, self._play_boot_sequence)
+
+    @Slot(bool)
+    def _toggle_web_server(self, active: bool):
+        if active: 
+            self.web_server.start()
+            print(">>> WEB SERVER STARTED <<<")
+        else: 
+            self.web_server.stop()
+            print(">>> WEB SERVER STOPPED <<<")
 
     def _play_boot_sequence(self):
         duration = 4000
@@ -1225,6 +1238,7 @@ class MainWindow(Qtw.QMainWindow):
         }
         
         if hasattr(self, "top"): self.top.update_telemetry(sample)
+        update_web_telemetry(sample)
         if hasattr(self, "right"): self.right.update_telemetry(sample)
 
     def _construct_frame(self, cls, config):
