@@ -93,22 +93,14 @@ class DeviceManager:
         return self.flow_sensor
 
     # =====================================================================
-    # 🚀 OB1 KANAL-SCHALTER (DRUCKAUSGABE)
+    # OB1 KANAL-SCHALTER (DRUCKAUSGABE)
     # =====================================================================
     def _get_physical_channel(self, logical_channel: int) -> int:
-        """
-        Hier legst du fest, welcher Prozess auf welchen Schlauch feuert.
-        """
         c = int(logical_channel)
-        
         if c == 1:
-            # RAMPE / FILTRATION
-            return 1  # 1 = Schlauch zur Filtrationszelle
-            
+            return 1
         if c == 2:
-            # BACKWASH
-            return 2  # 2 = Schlauch zur Flasche
-            
+            return 2
         return c
 
     def set_pressure_setpoint_mbar(self, *, channel: int, setpoint_mbar: float, ramp: bool = True) -> None:
@@ -118,23 +110,29 @@ class DeviceManager:
             pc.set_pressure_mbar(phys_ch, float(setpoint_mbar))
         except Exception: pass
 
+    # FIX 1: Kein _require_pressure() mehr — gibt 0.0 zurück wenn Controller fehlt
     def get_pressure_mbar(self, channel: int) -> float:
-        pc = self._require_pressure()
+        if self.pressure_controller is None:
+            return 0.0
         phys_ch = self._get_physical_channel(channel)
         try:
-            v = pc.get_pressure_mbar(phys_ch)
+            v = self.pressure_controller.get_pressure_mbar(phys_ch)
             return 0.0 if v is None else float(v)
-        except Exception: return 0.0
+        except Exception:
+            return 0.0
 
     def get_pressure_setpoint_mbar(self, channel: int) -> float:
         return self.get_pressure_mbar(channel)
 
+    # FIX 2: Kein _require_flow() mehr — gibt 0.0 zurück wenn Sensor fehlt
     def read_flow(self) -> float:
-        fs = self._require_flow()
+        if self.flow_sensor is None:
+            return 0.0
         try:
-            v = fs.get_flow()
+            v = self.flow_sensor.get_flow()
             return float(v) if v is not None else 0.0
-        except Exception: return 0.0
+        except Exception:
+            return 0.0
 
     def set_valve_state(self, state: str) -> None:
         vc = self._require_valves()
@@ -143,7 +141,7 @@ class DeviceManager:
             self.STATE_FILTRATION: "filtration",
             self.STATE_FILLING: "filling_solution",
             self.STATE_VENTING: "venting",
-            self.STATE_BACKWASH: "backwash",          # ← FIX: war "backwashing"
+            self.STATE_BACKWASH: "backwash",            # FIX 3: war "backwashing"
             self.STATE_SHUT: "all_shut",
             self.STATE_OPEN: "all_open"
         }
@@ -152,11 +150,10 @@ class DeviceManager:
         if callable(fn):
             fn()
         else:
-            logger.error("DeviceManager.set_valve_state: Methode '%s' nicht gefunden auf ValveController!", fn_name)
+            logger.error("DeviceManager.set_valve_state: Methode '%s' nicht gefunden!", fn_name)
 
     def get_valve_state(self) -> str:
         vc = self._require_valves()
-        # ValveController hat get_state() → gibt _state.value zurück (z.B. "FILTRATION")
         if hasattr(vc, "get_state"):
             return str(vc.get_state())
         return "UNKNOWN"

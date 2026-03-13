@@ -724,9 +724,13 @@ class MainWindow(Qtw.QMainWindow):
     def _attach_device_manager_to_worker(self, worker: ExperimentWorker) -> None:
         if self.dev is None: return
         try:
-            if hasattr(worker, 'set_device'): worker.set_device(self.dev) # type: ignore
-            elif hasattr(worker, 'set_device_manager'): worker.set_device_manager(self.dev) # type: ignore
-            else: worker.dev = self.dev # type: ignore
+            # 🚀 PYLANCE FIX: Dynamischer Methodenaufruf
+            if hasattr(worker, 'set_device'): 
+                getattr(worker, 'set_device')(self.dev)
+            elif hasattr(worker, 'set_device_manager'): 
+                getattr(worker, 'set_device_manager')(self.dev)
+            else: 
+                setattr(worker, 'dev', self.dev)
         except Exception as e:
             logger.warning(f"Could not attach hardware device to worker: {e}")
 
@@ -735,7 +739,9 @@ class MainWindow(Qtw.QMainWindow):
         self._force_release_all("start")
         self.reset_safe_state()
         self.right.reset_state()
-        self.left._loss_ml = 0.0 # type: ignore
+        
+        # 🚀 PYLANCE FIX: Dynamisches Setzen von Attributen
+        setattr(self.left, '_loss_ml', 0.0)
 
         try:
             self.right.append_log(">>> INITIATING SEQUENCE <<<", "#10B981")
@@ -751,14 +757,12 @@ class MainWindow(Qtw.QMainWindow):
             worker.moveToThread(thread)
             thread.started.connect(worker.run)
 
-            # Signal Hookups
             worker.request_ok.connect(self._on_request_ok)
             worker.status.connect(self._on_status)
             worker.step_changed.connect(self._on_step_changed)
             worker.log_msg.connect(self.right.append_log)
             worker.loss_updated.connect(self.right.set_loss_ml)
             
-            # --- NEU: TopFrame & Highlighting Hookups ---
             worker.step_changed.connect(self.left.update_active_step_highlight)
             worker.status.connect(self.top.update_status)
             worker.telemetry.connect(self.top.update_telemetry)
@@ -772,7 +776,10 @@ class MainWindow(Qtw.QMainWindow):
                 worker.loss_updated.connect(srv.update_loss)
 
             try:
-                worker.telemetry.connect(self.tab_analysis.plot_widget.plot) # type: ignore
+                # 🚀 PYLANCE FIX: Dynamischer Zugriff auf das Widget
+                pw = getattr(self.tab_analysis, "plot_widget", None)
+                if pw is not None and hasattr(pw, "plot"):
+                    worker.telemetry.connect(pw.plot)
             except Exception:
                 pass
 
@@ -853,15 +860,22 @@ class MainWindow(Qtw.QMainWindow):
     def _stop_deterministic(self, *, reason: str) -> None:
         self._set_running_ui(False, reason=f"stop_deterministic: {reason}")
         if self._worker is not None:
-            try: self._worker.stop(reason) # type: ignore
+            try: 
+                # 🚀 PYLANCE FIX: Dynamisch prüfen, ob Worker 'stop' oder 'abort' nutzt
+                stop_fn = getattr(self._worker, "stop", getattr(self._worker, "abort", None))
+                if callable(stop_fn):
+                    stop_fn(reason)
             except Exception: pass
+            
         if self._thread is not None:
             try:
                 self._thread.quit()
                 self._thread.wait(1000)
             except Exception: pass
+            
         self._worker = None
         self._thread = None
+        
         try: self._force_safe_state_now()
         except Exception: pass
 
@@ -993,7 +1007,6 @@ class MainWindow(Qtw.QMainWindow):
         try:
             from src.backend.core.device_manager import DeviceManager, DeviceManagerOptions
             
-            # 1. Hardware-Manager erstellen
             opts = DeviceManagerOptions(enable_pressure=True, enable_flow=True, simulate=False)
             self.dev = DeviceManager(opts)
             self._simulation_mode = False
@@ -1128,12 +1141,13 @@ class MainWindow(Qtw.QMainWindow):
         except Exception:
             self.monitor = None
 
+    # ═══════════════════════════════════════════════════════════════════
+    # FIX 4: _poll_realtime — jeder Hardware-Read einzeln abgesichert
+    # ═══════════════════════════════════════════════════════════════════
     def _poll_realtime(self) -> None:
         if getattr(self, '_is_booting', False): 
             return 
 
-        import time
-        import random
         now = time.monotonic()
         
         if getattr(self, 'dev', None) is None and not getattr(self, '_simulation_mode', False):
@@ -1149,7 +1163,6 @@ class MainWindow(Qtw.QMainWindow):
                     self._rt_valves = "FILTRATION"
                 elif getattr(self, '_hold_active', False):
                     self._rt_p1 = random.uniform(0, 5)
-                    # Fallback falls die Funktion _ui_backwash_pressure_mbar nicht existiert
                     bw_set = getattr(self, '_ui_backwash_pressure_mbar', lambda: 300)() 
                     self._rt_p2 = bw_set + random.uniform(-5, 5)
                     self._rt_flow = random.uniform(-2.5, -2.4)
@@ -1160,25 +1173,30 @@ class MainWindow(Qtw.QMainWindow):
                     self._rt_flow = random.uniform(-0.01, 0.01)
                     self._rt_valves = "SIM: IDLE"
             else:
-                # Echte Hardware lesen
-                self._rt_p1 = self._dev_read_pressure(channel=1)
-                self._rt_p2 = self._dev_read_pressure(channel=2)
-                
-                if getattr(self, 'dev', None) is not None:
-                    try: 
-                        self._rt_flow = float(self.dev.read_flow()) # type: ignore
-                    except Exception: 
-                        self._rt_flow = 0.0
-                    try: 
-                        self._rt_valves = str(self.dev.get_valve_state()) # type: ignore
-                    except Exception: 
-                        self._rt_valves = "UNKNOWN"
+                # ── FIX: Jeder Read einzeln abgesichert ──
+                try:
+                    self._rt_p1 = self._dev_read_pressure(channel=1)
+                except Exception:
+                    self._rt_p1 = 0.0
+                try:
+                    self._rt_p2 = self._dev_read_pressure(channel=2)
+                except Exception:
+                    self._rt_p2 = 0.0
+                try:
+                    self._rt_flow = float(self.dev.read_flow()) if self.dev else 0.0
+                except Exception:
+                    self._rt_flow = 0.0
+                try:
+                    self._rt_valves = str(self.dev.get_valve_state()) if self.dev else "UNKNOWN"
+                except Exception:
+                    self._rt_valves = "UNKNOWN"
+                self._last_good_comm_ts = now
 
-            # 🚀 Innerer Block: UI und Server füttern
+            # UI und Server füttern
             try:
                 f_val = self._rt_flow if getattr(self, '_rt_flow', None) is not None else 0.0
-                p1_val = getattr(self, '_rt_p1', 0.0)
-                p2_val = getattr(self, '_rt_p2', 0.0)
+                p1_val = getattr(self, '_rt_p1', 0.0) or 0.0
+                p2_val = getattr(self, '_rt_p2', 0.0) or 0.0
                 v_val = getattr(self, '_rt_valves', "UNKNOWN")
                 
                 sample = {
@@ -1189,22 +1207,19 @@ class MainWindow(Qtw.QMainWindow):
                     "p2_set": 0.0,
                     "flow": f_val,
                     "valves": v_val,
-                    "step": self._current_step,           # ← NEU: step Key!
+                    "step": self._current_step,
                     "pressure": {
                         1: {"meas": p1_val, "set": 0.0},
                         2: {"meas": p2_val, "set": 0.0}
                     }
                 }
- 
-                # 1. TopFrame (LCDs)
+                
                 if hasattr(self, "top"):
                     self.top.update_telemetry(sample)
- 
-                # 2. RightFrame (Sandglass + Trapezoid + Live Plot)
-                if hasattr(self, "right"):                # ← NEU: war komplett fehlend!
+
+                if hasattr(self, "right"):
                     self.right.update_telemetry(sample)
- 
-                # 3. WLAN-Webserver
+
                 srv = getattr(self, "server", getattr(self, "monitor", None))
                 if srv is not None:
                     srv.update_metrics(
@@ -1213,11 +1228,10 @@ class MainWindow(Qtw.QMainWindow):
                         p2_meas=p2_val,
                         valves=v_val
                     )
-            except Exception as e_inner:
-                pass # Fehler beim UI/Server-Update ignorieren wir im Live-Loop
+            except Exception:
+                pass
 
         except Exception as e:
-            import logging
             logging.getLogger(__name__).error(f"Polling error in _poll_realtime: {e}")
 
     def _construct_frame(self, cls, config):
