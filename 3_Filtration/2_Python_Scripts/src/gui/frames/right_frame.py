@@ -316,24 +316,24 @@ class MonitorTab(QFrame):
     def ingest_telemetry(self, payload: dict) -> None:
         import time
         current_time = time.monotonic()
+
         if self._t0 is None: 
             self._t0 = current_time
+            # 🚀 Graphen-Ansicht beim Start auf 0 bis 60 Sekunden zwingen
+            self.plot_p.setXRange(0, 60)
+            self.plot_flow.setXRange(0, 60)
         
         ts = current_time - self._t0
 
-        # Anti-Zick-Zack Schutzschild
         if len(self._t) > 0 and ts <= self._t[-1]:
             ts = self._t[-1] + 0.005 
 
-        # 🚀 FIX: Werte verschachtelt ODER flach auslesen!
         flow = _to_float(payload.get("flow"))
         
         pressures = payload.get("pressure", {})
-        # Hardware packt die Kanäle oft als int (1) oder string ("1") rein
         p1_data = pressures.get(1, pressures.get("1", {}))
         p2_data = pressures.get(2, pressures.get("2", {}))
 
-        # Wenn "p1_meas" direkt da ist (Sim), nutze es. Sonst suche im "pressure"-Block (Hardware).
         p1_raw = payload.get("p1_meas") if payload.get("p1_meas") is not None else p1_data.get("meas", 0.0)
         p2_raw = payload.get("p2_meas") if payload.get("p2_meas") is not None else p2_data.get("meas", 0.0)
 
@@ -351,9 +351,15 @@ class MonitorTab(QFrame):
             self._p1 = self._p1[-self._max_points :]
             self._p2 = self._p2[-self._max_points :]
 
-        self.curve_flow.setData(self._t, self._flow)
-        self.curve_p1.setData(self._t, self._p1)
-        self.curve_p2.setData(self._t, self._p2)
+        # 🚀 Radar-Scrolling: Die X-Achse wandert nach 60 Sekunden automatisch mit
+        if ts > 60:
+            self.plot_p.setXRange(ts - 60, ts)
+            self.plot_flow.setXRange(ts - 60, ts)
+
+        if len(self._t) > 0:
+            self.curve_flow.setData(self._t, self._flow)
+            self.curve_p1.setData(self._t, self._p1)
+            self.curve_p2.setData(self._t, self._p2)
         
         if self._csv_writer is not None and self._csv_file is not None and not self._csv_file.closed:
             try:
