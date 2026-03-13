@@ -208,12 +208,14 @@ class TrapezoidWidget(QFrame):
 # VISUALISIERUNG 3: REAL TIME MONITOR TAB (ELITE LEVEL - CRASH PROOF)
 # =========================================================================
 def _to_float(x) -> float:
-    """Kugelsicher: Keine NaNs, keine Nones, keine Strings."""
+    """Kugelsicher: Keine NaNs, Nones, Strings oder Dictionaries."""
+    if x is None: return 0.0
     try:
-        if x is None: return 0.0
+        if isinstance(x, dict): # Falls Hardware ein Dict schickt statt einer Zahl
+            return 0.0
         v = float(x)
         return v if v == v else 0.0  # v == v filtert NaN heraus
-    except Exception:
+    except Exception: 
         return 0.0
 
 

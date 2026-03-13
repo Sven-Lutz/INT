@@ -133,8 +133,8 @@ class ValveControllerConfig:
     venting_r1_on: bool = True
     venting_r2_on: bool = False
 
-    backwash_r1_on: bool = False
-    backwash_r2_on: bool = False
+    backwash_r1_on: bool = True
+    backwash_r2_on: bool = True
 
     settle_delay_s: float = 0.0
 
@@ -148,8 +148,8 @@ class ValveControllerConfig:
             relay=relay_cfg,
             safe_state_on_disconnect=safe_mode,
             # Defaults inverted to match physical setup
-            filtration_r1_on=bool(cfg_src.get("filtration_r1_on", False)),
-            filtration_r2_on=bool(cfg_src.get("filtration_r2_on", True)),
+            filtration_r1_on=bool(cfg_src.get("filtration_r1_on", True)),
+            filtration_r2_on=bool(cfg_src.get("filtration_r2_on", False)),
             filling_r1_on=bool(cfg_src.get("filling_r1_on", True)),
             filling_r2_on=bool(cfg_src.get("filling_r2_on", False)),
             venting_r1_on=bool(cfg_src.get("venting_r1_on", True)),

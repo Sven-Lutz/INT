@@ -1176,80 +1176,78 @@ class MainWindow(Qtw.QMainWindow):
     # FIX 4: _poll_realtime — jeder Hardware-Read einzeln abgesichert
     # ═══════════════════════════════════════════════════════════════════
     def _poll_realtime(self) -> None:
-        if getattr(self, '_is_booting', False): 
-            return 
-        if self._experiment_running(): 
-            return # Wenn Worker läuft, darf MainWindow NICHTS machen!
+        if getattr(self, '_is_booting', False): return 
+        if self._experiment_running(): return # Worker runs the show
 
         import time
         now = time.monotonic()
         
-        # Sicherstellen, dass self.dev existiert und nicht None ist
         dev = getattr(self, 'dev', None)
         if dev is None:
             return
 
-        # 🚀 HARDCORE DEBUGGING READS (Pylance Safe)
+        # =========================================================
+        # 🚀 SENSOR DIAGNOSTICS: Zeige genau, was kaputt ist
+        # =========================================================
+        f_val = 0.0
+        p1_val = 0.0
+        p2_val = 0.0
+        v_val = "UNKNOWN"
+
+        # 1. Flow Lesen
         try:
-            # 1. Flow Sensor
-            try:
-                self._rt_flow = float(dev.read_flow())
-            except Exception as e:
-                self._rt_flow = 0.0
-                print(f"HW ERROR (Flow): {e}")
-
-            # 2. Pressure Sensors
-            try:
-                if hasattr(dev, "get_pressure_mbar"):
-                    self._rt_p1 = float(dev.get_pressure_mbar(1))
-                    self._rt_p2 = float(dev.get_pressure_mbar(2))
-                elif hasattr(dev, "get_pressure"):
-                    self._rt_p1 = float(dev.get_pressure(1))
-                    self._rt_p2 = float(dev.get_pressure(2))
-                else:
-                    self._rt_p1 = 0.0
-                    self._rt_p2 = 0.0
-            except Exception as e:
-                self._rt_p1 = 0.0
-                self._rt_p2 = 0.0
-                print(f"HW ERROR (Pressure): {e}")
-
-            # 3. Valve State
-            try:
-                if hasattr(dev, "get_valve_state"):
-                    self._rt_valves = str(dev.get_valve_state())
-                else:
-                    self._rt_valves = "UNKNOWN"
-            except Exception as e:
-                self._rt_valves = "UNKNOWN"
-                print(f"HW ERROR (Valves): {e}")
-
-            # 4. UI Update
-            p1_val = getattr(self, '_rt_p1', 0.0)
-            p2_val = getattr(self, '_rt_p2', 0.0)
-            f_val = getattr(self, '_rt_flow', 0.0)
-            v_val = getattr(self, '_rt_valves', "UNKNOWN")
-
-            sample = {
-                "t": now,
-                "p1_meas": p1_val,
-                "p2_meas": p2_val,
-                "flow": f_val,
-                "valves": v_val,
-                "step": "IDLE",
-                "pressure": {
-                    1: {"meas": p1_val, "set": 0.0},
-                    2: {"meas": p2_val, "set": 0.0}
-                }
-            }
-            
-            if hasattr(self, "top"): 
-                self.top.update_telemetry(sample)
-            if hasattr(self, "right"): 
-                self.right.update_telemetry(sample)
-
+            raw_flow = dev.read_flow()
+            if raw_flow is None:
+                print("HW ERROR: dev.read_flow() returned None!")
+            else:
+                f_val = float(raw_flow)
         except Exception as e:
-            print(f"CRITICAL POLLING ERROR: {e}")
+            print(f"HW ERROR (Flow Exception): {type(e).__name__} - {e}")
+
+        # 2. Pressure Lesen (Main = Ch 1, Backwash = Ch 2)
+        try:
+            if hasattr(dev, "get_pressure_mbar"):
+                p1_val = float(dev.get_pressure_mbar(1))
+                p2_val = float(dev.get_pressure_mbar(2))
+            elif hasattr(dev, "get_pressure"):
+                p1_val = float(dev.get_pressure(1))
+                p2_val = float(dev.get_pressure(2))
+            else:
+                print("HW ERROR: DeviceManager has NO pressure reading methods!")
+        except Exception as e:
+            print(f"HW ERROR (Pressure Exception): {type(e).__name__} - {e}")
+
+        # 3. Valve State Lesen
+        try:
+            if hasattr(dev, "get_valve_state"):
+                v_val = str(dev.get_valve_state())
+        except Exception as e:
+            print(f"HW ERROR (Valve State Exception): {type(e).__name__} - {e}")
+
+        # Daten-Speicherung für die Anzeige
+        self._rt_flow = f_val
+        self._rt_p1 = p1_val
+        self._rt_p2 = p2_val
+        self._rt_valves = v_val
+
+        # =========================================================
+        # UI UPDATE
+        # =========================================================
+        sample = {
+            "t": now,
+            "p1_meas": p1_val,
+            "p2_meas": p2_val,
+            "flow": f_val,
+            "valves": v_val,
+            "step": "IDLE",
+            "pressure": {
+                1: {"meas": p1_val, "set": 0.0},
+                2: {"meas": p2_val, "set": 0.0}
+            }
+        }
+        
+        if hasattr(self, "top"): self.top.update_telemetry(sample)
+        if hasattr(self, "right"): self.right.update_telemetry(sample)
 
     def _construct_frame(self, cls, config):
         try: return cls(config)
