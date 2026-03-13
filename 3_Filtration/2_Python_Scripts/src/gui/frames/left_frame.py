@@ -181,24 +181,6 @@ class LeftFrame(QFrame):
         root.addWidget(self.mod_calc)
 
         # ==========================================
-        # BNNT KALIBRIERUNG
-        # ==========================================
-        self.mod_calc = EliteModule("BNNT PARAMETERS", "#64748B", checkable=False)
-        self.sp_area = NudgeSpinBox(1.0, 70000.0, 1, 10.0, " mm²", 49480.0)
-        self.sp_calib = NudgeSpinBox(0.001, 10.0, 8, 0.1, " nm/µl", 0.06314815)
-        self.sp_thick = NudgeSpinBox(1.0, 1000.0, 1, 1.0, " nm", 100.0)
-        
-        self.mod_calc.addRow(0, "Film Area (A):", self.sp_area)
-        self.mod_calc.addRow(1, "Calibration (C):", self.sp_calib)
-        self.mod_calc.addRow(2, "Desired Thick.:", self.sp_thick)
-        
-        self.lbl_bnnt = QLabel("Req. BNNT: — ml")
-        self.lbl_bnnt.setProperty("is_dynamic_result", True)
-        self.lbl_bnnt.setStyleSheet("color: #10B981; font-weight: bold; font-family: 'Consolas'; font-size: 12px; border: none; padding-top: 4px;")
-        self.mod_calc.content_lay.addWidget(self.lbl_bnnt, 3, 0, 1, 2)
-        root.addWidget(self.mod_calc)
-
-        # ==========================================
         # STATE 0: FILLING SOLUTION
         # ==========================================
         self.mod_p0 = EliteModule("STATE 0: FILLING SOLUTION", "#00E5FF", checkable=True)
