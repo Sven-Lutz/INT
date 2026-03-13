@@ -1157,14 +1157,21 @@ class MainWindow(Qtw.QMainWindow):
                     try: self._rt_valves = str(self.dev.get_valve_state()) # type: ignore
                     except Exception: self._rt_valves = None
 
+            # 🚀 LÖSUNG: Wir nutzen einfach das 'now', das oben schon definiert wurde!
             try:
                 sample = {
+                    "t": now,  
                     "p1_meas": self._rt_p1,
                     "p2_meas": self._rt_p2,
-                    "flow": self._rt_flow
+                    "flow": self._rt_flow if self._rt_flow is not None else 0.0
                 }
+                
+                # 1. Zahlen-LCDs oben füttern
                 self.top.update_telemetry(sample)
-                self.right.update_telemetry(sample)
+                
+                # 2. Den Graphen (self.right) füttern wir hier im Leerlauf BEWUSST NICHT.
+                # Das verhindert den Bug mit der negativen Zeitachse (-1500) aus deinem Screenshot!
+
             except Exception:
                 pass
 
