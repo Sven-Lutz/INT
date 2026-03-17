@@ -256,20 +256,20 @@ class LeftFrame(QFrame):
         self.btn_toggle_srv.setCheckable(True)
         self.btn_toggle_srv.toggled.connect(self._on_server_toggled)
 
-        self.lbl_url = QLabel(self.server_url)
+        self.mod_srv = EliteModule("NETWORK MONITOR SERVER", "#10B981", checkable=False)
+        
+        self.lbl_url = QLabel("Startet im Hintergrund...")
         self.lbl_url.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_url.setStyleSheet("color: #00E5FF; font-weight: bold; font-family: 'Consolas'; font-size: 11px;")
 
-        # QR Code Halterung
         self.lbl_qr = QLabel()
         self.lbl_qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_qr.setMinimumHeight(120)
         self.lbl_qr.setStyleSheet("background: #fff; border-radius: 4px; padding: 5px;")
-        self.lbl_qr.hide() # Erst zeigen, wenn Server gestartet wird
+        self.lbl_qr.hide() # Bleibt versteckt, bis die URL kommt
 
-        self.mod_srv.content_lay.addWidget(self.btn_toggle_srv, 0, 0, 1, 2)
-        self.mod_srv.content_lay.addWidget(self.lbl_url, 1, 0, 1, 2)
-        self.mod_srv.content_lay.addWidget(self.lbl_qr, 2, 0, 1, 2)
+        self.mod_srv.content_lay.addWidget(self.lbl_url, 0, 0, 1, 2)
+        self.mod_srv.content_lay.addWidget(self.lbl_qr, 1, 0, 1, 2)
         root.addWidget(self.mod_srv)
 
         root.addStretch()
@@ -277,35 +277,46 @@ class LeftFrame(QFrame):
         self._wire_signals()
         self._recalc_math()
 
-    def _generate_qr(self):
+    def _generate_qr(self, url: str):
+        """Erzeugt den QR-Code aus der URL und legt ihn ins UI."""
         try:
             import qrcode
             import io
+            from PySide6.QtGui import QImage, QPixmap
+            
             qr = qrcode.QRCode(version=1, box_size=4, border=1)
-            qr.add_data(self.server_url)
+            qr.add_data(url)
             qr.make(fit=True)
             img = qr.make_image(fill_color="black", back_color="white")
             
             buf = io.BytesIO()
-            img.save(buf)
+            img.save(buf, "PNG")
             qimg = QImage.fromData(buf.getvalue())
             pixmap = QPixmap.fromImage(qimg)
             self.lbl_qr.setPixmap(pixmap)
+            self.lbl_qr.show()  # QR-Code einblenden
+            
         except ImportError:
             self.lbl_qr.setText("QR Error:\n'pip install qrcode pillow'\nnot found.")
             self.lbl_qr.setStyleSheet("color: #FF1744; font-weight: bold; font-size: 11px;")
+            self.lbl_qr.show()
 
     def _on_server_toggled(self, checked: bool):
         if checked:
             self.btn_toggle_srv.setText("SERVER RUNNING")
             self.btn_toggle_srv.setStyleSheet("background: #10B981; color: #000; border: none; padding: 6px; font-weight: bold; border-radius: 3px;")
-            self._generate_qr()
+            self._generate_qr(self.server_url)
             self.lbl_qr.show()
         else:
             self.btn_toggle_srv.setText("START SERVER")
             self.btn_toggle_srv.setStyleSheet("background: #0F172A; color: #10B981; border: 1px solid #1E293B; padding: 6px; font-weight: bold; border-radius: 3px;")
             self.lbl_qr.hide()
         self.server_toggle_requested.emit(checked)
+
+    def update_server_url(self, url: str):
+        """Wird vom MainWindow aufgerufen, sobald der Server den Token generiert hat."""
+        self.lbl_url.setText(url)
+        self._generate_qr(url)
 
     def _wire_signals(self):
         widgets = [

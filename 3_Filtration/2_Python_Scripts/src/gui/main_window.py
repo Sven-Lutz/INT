@@ -22,12 +22,11 @@ from PySide6.QtWidgets import QMessageBox, QGraphicsOpacityEffect
 
 from src.gui.data.worker import ExperimentConfig
 from src.gui.data import ExperimentWorker, RunParams, worker
-from src.gui.monitor.server import MonitorServer
+from src.gui.monitor.server import MonitorServer # 🚀 DEIN SERVER IST ZURÜCK!
 from src.gui.health import HealthEvaluator, HealthRules
 from src.gui.style.theme import apply_theme
 from src.utils.config_manager import ConfigManager
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
-from src.backend.core.web_server import TelemetryWebServer, update_web_telemetry
 
 from .frames.left_frame import LeftFrame
 from .frames.right_frame import RightFrame
@@ -43,8 +42,12 @@ def _unwrap_sensor(val) -> float:
     """Entpackt Elveflow-Tupel wie (error_code, value) zu einem reinen Float."""
     if val is None: return 0.0
     if isinstance(val, (list, tuple)):
-        return float(val[-1]) # Nimmt immer den letzten Wert im Tupel
+        return float(val[-1])
     return float(val)
+
+def _safe_float(val) -> float:
+    try: return float(val)
+    except Exception: return 0.0
 
 def _get_nested(d: dict, path: str, default=None):
     cur = d
@@ -95,7 +98,6 @@ class _GlobalInputFilter(QObject):
         if self._space_down:
             self._space_down = False
             self.hold_stopped.emit()
-
 
 class CustomTitleBar(Qtw.QFrame):
     def __init__(self, parent=None):
@@ -571,7 +573,6 @@ class MainWindow(Qtw.QMainWindow):
         layout_live.setSpacing(10)
 
         self.top = self._construct_frame(TopFrame, self.config)
-        self.web_server = TelemetryWebServer(port=8000)
         self.left = self._construct_frame(LeftFrame, self.config)
         self.right = self._construct_frame(RightFrame, self.config)
 
@@ -654,15 +655,6 @@ class MainWindow(Qtw.QMainWindow):
 
         QTimer.singleShot(100, self.hud.play_intro)
         QTimer.singleShot(1000, self._play_boot_sequence)
-
-    @Slot(bool)
-    def _toggle_web_server(self, active: bool):
-        if active:
-            self.web_server.start()
-            logger.info("Web server started")
-        else:
-            self.web_server.stop()
-            logger.info("Web server stopped")
 
     def _play_boot_sequence(self):
         duration = 4000
@@ -748,7 +740,6 @@ class MainWindow(Qtw.QMainWindow):
     def _attach_device_manager_to_worker(self, worker: ExperimentWorker) -> None:
         if self.dev is None: return
         try:
-            # 🚀 PYLANCE FIX: Dynamischer Methodenaufruf
             if hasattr(worker, 'set_device'): 
                 getattr(worker, 'set_device')(self.dev)
             elif hasattr(worker, 'set_device_manager'): 
@@ -764,7 +755,6 @@ class MainWindow(Qtw.QMainWindow):
         self.reset_safe_state()
         self.right.reset_state()
         
-        # 🚀 PYLANCE FIX: Dynamisches Setzen von Attributen
         setattr(self.left, '_loss_ml', 0.0)
 
         try:
@@ -793,14 +783,14 @@ class MainWindow(Qtw.QMainWindow):
             worker.telemetry.connect(self.right.update_telemetry) 
             worker.loss_updated.connect(self.top.set_loss_ml)
 
-            srv = getattr(self, "server", getattr(self, "monitor", None))
-            if srv is not None:
-                worker.status.connect(srv.update_status)
-                worker.step_changed.connect(srv.update_step)
-                worker.loss_updated.connect(srv.update_loss)
+            # 🚀 FIX: Daten an Monitor Server flushen
+            if self.monitor is not None:
+                worker.status.connect(self.monitor.update_status)
+                worker.step_changed.connect(self.monitor.update_step)
+                worker.loss_updated.connect(self.monitor.update_loss)
+                worker.telemetry.connect(self._push_worker_telemetry_to_monitor)
 
             try:
-                # 🚀 PYLANCE FIX: Dynamischer Zugriff auf das Widget
                 pw = getattr(self.tab_analysis, "plot_widget", None)
                 if pw is not None and hasattr(pw, "plot"):
                     worker.telemetry.connect(pw.plot)
@@ -818,6 +808,23 @@ class MainWindow(Qtw.QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
+    @Slot(dict)
+    def _push_worker_telemetry_to_monitor(self, sample: dict):
+        """Sendet die schnellen Live-Daten des Workers an den Monitor-Server."""
+        if not self.monitor: return
+        pressures = sample.get("pressure", {})
+        p1_data = pressures.get(1, pressures.get("1", {}))
+        p2_data = pressures.get(2, pressures.get("2", {}))
+        
+        self.monitor.update_metrics(
+            flow=_safe_float(sample.get("flow")),
+            p1_meas=_safe_float(sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas")),
+            p1_set=_safe_float(sample.get("p1_set") if sample.get("p1_set") is not None else p1_data.get("set")),
+            p2_meas=_safe_float(sample.get("p2_meas") if sample.get("p2_meas") is not None else p2_data.get("meas")),
+            p2_set=_safe_float(sample.get("p2_set") if sample.get("p2_set") is not None else p2_data.get("set")),
+            valves=str(sample.get("valves", "—"))
+        )
+
     def _on_request_ok(self, step, reason):
         self.right.set_ok_banner(step=str(step), reason=str(reason), show=True)
         self._set_ok_enabled(True)
@@ -833,12 +840,10 @@ class MainWindow(Qtw.QMainWindow):
 
     def _on_status(self, msg):
         self.right.set_status(msg)
-        if self.monitor: self.monitor.update_status(msg)
 
     def _on_step_changed(self, step):
         self._current_step = step
         self.right.set_step(step)
-        if self.monitor: self.monitor.update_step(step)
         self._render_manual_state()
 
     def _on_finished(self):
@@ -889,7 +894,6 @@ class MainWindow(Qtw.QMainWindow):
         self._set_running_ui(False, reason=f"stop_deterministic: {reason}")
         if self._worker is not None:
             try: 
-                # 🚀 PYLANCE FIX: Dynamisch prüfen, ob Worker 'stop' oder 'abort' nutzt
                 stop_fn = getattr(self._worker, "stop", getattr(self._worker, "abort", None))
                 if callable(stop_fn):
                     stop_fn(reason)
@@ -919,13 +923,11 @@ class MainWindow(Qtw.QMainWindow):
         return super().event(e)
 
     def _set_running_ui(self, running: bool, *, reason: str = "") -> None:
-        # 🚀 ANTI-DEADLOCK KILL-SWITCH: 
-        # Niemals das GUI auf den USB-Port zugreifen lassen, wenn der Worker läuft!
         if running:
             if hasattr(self, '_rt_timer'):
                 self._rt_timer.stop()
         else:
-            self._rt_t0 = None  # Reset elapsed timer so idle x-axis starts from 0
+            self._rt_t0 = None
             if hasattr(self, '_rt_timer'):
                 self._rt_timer.start(self.REALTIME_POLL_MS)
 
@@ -1098,22 +1100,24 @@ class MainWindow(Qtw.QMainWindow):
         elif self._hold_active:
             self._schedule_hold_setpoint_push()
 
+    # 🚀 FIX: Hold-Aktionen blockieren jetzt NICHT mehr das UI!
     def _begin_manual_hold(self) -> None:
         self._hold_active = True
         self._render_manual_state(reason="hold_down")
-        def _do():
-            try:
-                self._hold_begin_actions()
-                self._push_hold_setpoint_now()
-            except Exception:
-                self._hold_active = False
-                self._render_manual_state(reason="failed")
-        QTimer.singleShot(0, _do)
+        try:
+            self._hold_begin_actions()
+            self._push_hold_setpoint_now()
+        except Exception:
+            self._hold_active = False
+            self._render_manual_state(reason="failed")
 
     def _end_manual_hold(self) -> None:
         self._hold_active = False
         self._render_manual_state(reason="hold_up")
-        QTimer.singleShot(0, lambda: self._hold_end_actions())
+        try:
+            self._hold_end_actions()
+        except Exception:
+            pass
 
     def _force_release_all(self, reason: str) -> None:
         self._hold_sources.clear()
@@ -1121,39 +1125,44 @@ class MainWindow(Qtw.QMainWindow):
         except Exception: pass
         if self._hold_active: self._end_manual_hold()
 
+    # 🚀 FIX: HW-Befehle im Hintergrund-Thread (Hardware-Deadlock beheben)
     def _hold_begin_actions(self) -> None:
         p = self._ui_backwash_pressure_mbar()
         if self._experiment_running():
             if self._worker is not None: self._worker_hold_start_best_effort(self._worker, p)
         else:
             logger.debug("MANUAL HOLD: Requesting BACKWASH")
-            dev = getattr(self, 'dev', None)
-            if dev is not None:
-                try:
-                    if hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
-                    if hasattr(dev, "valves_backwash"): dev.valves_backwash()
-                    elif hasattr(dev, "set_valve_state"): dev.set_valve_state("BACKWASH")
-                    else: logger.error("HW ERROR: No backwash method found on device")
-                except Exception as e:
-                    logger.error("HW VALVE ERROR: %s", e)
+            threading.Thread(target=self._bg_hw_hold_start, args=(p,), daemon=True).start()
 
-            self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=p)
+    def _bg_hw_hold_start(self, p: float):
+        dev = getattr(self, 'dev', None)
+        if dev is not None:
+            try:
+                if hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
+                if hasattr(dev, "valves_backwash"): dev.valves_backwash()
+                elif hasattr(dev, "set_valve_state"): dev.set_valve_state("BACKWASH")
+                else: logger.error("HW ERROR: No backwash method found on device")
+            except Exception as e:
+                logger.error(f"HW VALVE ERROR: {e}")
+        self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=p)
 
     def _hold_end_actions(self) -> None:
         if self._experiment_running():
             if self._worker is not None: self._worker_hold_stop_best_effort(self._worker)
         else:
             logger.debug("MANUAL HOLD RELEASED: Shutting all valves")
-            self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=0.0)
+            threading.Thread(target=self._bg_hw_hold_stop, daemon=True).start()
 
-            dev = getattr(self, 'dev', None)
-            if dev is not None:
-                try:
-                    if hasattr(dev, "all_shut"): dev.all_shut()
-                    elif hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
-                    elif hasattr(dev, "set_valve_state"): dev.set_valve_state("ALL_SHUT")
-                except Exception as e:
-                    logger.error("HW VALVE ERROR: %s", e) 
+    def _bg_hw_hold_stop(self):
+        self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=0.0)
+        dev = getattr(self, 'dev', None)
+        if dev is not None:
+            try:
+                if hasattr(dev, "all_shut"): dev.all_shut()
+                elif hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
+                elif hasattr(dev, "set_valve_state"): dev.set_valve_state("ALL_SHUT")
+            except Exception as e:
+                logger.error(f"HW VALVE ERROR: {e}")
 
     def _schedule_hold_setpoint_push(self, *args) -> None:
         if self._hold_active and not self._hold_setpoint_timer.isActive():
@@ -1176,8 +1185,6 @@ class MainWindow(Qtw.QMainWindow):
         if callable(fn): fn()
 
     def _worker_hold_update_pressure_best_effort(self, w, p) -> None:
-        # ExperimentWorker has no separate "update" method — re-calling start_backwash_hold
-        # updates _hold_pressure_mbar and sets the dirty flag via _on_cmd_start_backwash_hold.
         fn = getattr(w, "update_backwash_hold_pressure", getattr(w, "start_backwash_hold", None))
         if callable(fn): fn(float(p))
 
@@ -1186,8 +1193,26 @@ class MainWindow(Qtw.QMainWindow):
         try:
             self.monitor = MonitorServer(host=str(self.config.get("monitor_host", "0.0.0.0")), port=int(self.config.get("monitor_port", 8765)))
             self.monitor.start()
+            
+            # 🚀 FIX: 2 Sekunden nach Start druckt die Maschine den Link ins Terminal!
+            QTimer.singleShot(2000, self._print_monitor_url)
         except Exception:
             self.monitor = None
+
+    def _print_monitor_url(self):
+        mon = self.monitor
+        # Pylance liebt explizite 'is not None' Checks
+        if mon is not None and hasattr(mon, "url"):
+            link = mon.url()
+            try:
+                self.right.append_log("TELEMETRY SERVER ONLINE:", "#10B981")
+                self.right.append_log(f"-> {link}", "#00E5FF")
+                
+                # 🚀 NEU: Link an das linke Frame für den QR-Code schicken
+                if hasattr(self, "left") and hasattr(self.left, "update_server_url"):
+                    self.left.update_server_url(link)
+            except Exception: 
+                pass
 
     # ═══════════════════════════════════════════════════════════════════
     # _poll_realtime — uses cached hw values; reads happen off main thread
@@ -1203,7 +1228,6 @@ class MainWindow(Qtw.QMainWindow):
 
         dev = getattr(self, 'dev', None)
         if dev is None:
-            # Simulation mode: push a zero-value sample so displays stay alive
             sample = {
                 "t": t_elapsed, "p1_meas": 0.0, "p2_meas": 0.0,
                 "flow": 0.0, "valves": "SIMULATION", "step": "IDLE",
@@ -1216,7 +1240,6 @@ class MainWindow(Qtw.QMainWindow):
             if hasattr(self, "right"): self.right.update_telemetry(sample)
             return
 
-        # Build sample from last cached values (written by background thread)
         with self._rt_hw_lock:
             p1_val = float(self._rt_p1) if self._rt_p1 is not None else 0.0
             p2_val = float(self._rt_p2) if self._rt_p2 is not None else 0.0
@@ -1233,10 +1256,12 @@ class MainWindow(Qtw.QMainWindow):
         }
 
         if hasattr(self, "top"): self.top.update_telemetry(sample)
-        update_web_telemetry(sample)
         if hasattr(self, "right"): self.right.update_telemetry(sample)
+        
+        # 🚀 FIX: Daten an Monitor Server flushen!
+        if self.monitor:
+            self.monitor.update_metrics(flow=f_val, p1_meas=p1_val, p2_meas=p2_val, valves=v_val)
 
-        # Kick off a background hardware read (non-blocking for main thread)
         if not self._rt_hw_reading:
             self._rt_hw_reading = True
             threading.Thread(target=self._do_hw_poll_bg, daemon=True).start()
