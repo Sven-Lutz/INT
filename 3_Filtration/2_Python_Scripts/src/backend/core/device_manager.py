@@ -1,4 +1,3 @@
-# src/backend/core/device_manager.py
 from __future__ import annotations
 
 import logging
@@ -98,10 +97,8 @@ class DeviceManager:
     # =====================================================================
     def _get_physical_channel(self, logical_channel: int) -> int:
         c = int(logical_channel)
-        if c == 1:
-            return 1
-        if c == 2:
-            return 2
+        if c == 1: return 1
+        if c == 2: return 2
         return c
 
     def set_pressure_setpoint_mbar(self, *, channel: int, setpoint_mbar: float, ramp: bool = True) -> None:
@@ -109,31 +106,41 @@ class DeviceManager:
         phys_ch = self._get_physical_channel(channel)
         self._setpoints[int(channel)] = float(setpoint_mbar)
         try:
-            pc.set_pressure_mbar(phys_ch, float(setpoint_mbar))
-        except Exception: pass
+            # 🚀 FIX: Dynamischer Methodenaufruf mit getattr() beruhigt Pylance
+            fn_set = getattr(pc, "set_pressure_mbar", getattr(pc, "set_pressure", None))
+            if callable(fn_set):
+                fn_set(phys_ch, float(setpoint_mbar))
+            else:
+                logger.error("HW ERROR: PressureController hat keine Set-Methode gefunden!")
+        except Exception as e:
+            logger.error(f"HW ERROR beim Druck setzen auf CH{phys_ch}: {e}")
 
-    # FIX 1: Kein _require_pressure() mehr — gibt 0.0 zurück wenn Controller fehlt
     def get_pressure_mbar(self, channel: int) -> float:
         if self.pressure_controller is None:
             return 0.0
         phys_ch = self._get_physical_channel(channel)
         try:
-            v = self.pressure_controller.get_pressure_mbar(phys_ch)
-            return 0.0 if v is None else float(v)
-        except Exception:
+            # 🚀 FIX: : Any sagt Pylance, dass wir den Rückgabetyp absichtlich dynamisch lassen
+            fn_get: Any = getattr(self.pressure_controller, "get_pressure_mbar", getattr(self.pressure_controller, "get_pressure", None))
+            if callable(fn_get):
+                v: Any = fn_get(phys_ch)
+                return 0.0 if v is None else float(v)
+            return 0.0
+        except Exception as e:
+            logger.error(f"HW ERROR beim Druck lesen auf CH{phys_ch}: {e}")
             return 0.0
 
     def get_pressure_setpoint_mbar(self, channel: int) -> float:
         return self._setpoints.get(int(channel), 0.0)
 
-    # FIX 2: Kein _require_flow() mehr — gibt 0.0 zurück wenn Sensor fehlt
     def read_flow(self) -> float:
         if self.flow_sensor is None:
             return 0.0
         try:
             v = self.flow_sensor.get_flow()
             return float(v) if v is not None else 0.0
-        except Exception:
+        except Exception as e:
+            logger.error(f"HW ERROR beim Flow lesen: {e}")
             return 0.0
 
     def set_valve_state(self, state: str) -> None:
@@ -143,16 +150,19 @@ class DeviceManager:
             self.STATE_FILTRATION: "filtration",
             self.STATE_FILLING: "filling_solution",
             self.STATE_VENTING: "venting",
-            self.STATE_BACKWASH: "backwash",            # FIX 3: war "backwashing"
+            self.STATE_BACKWASH: "backwash",
             self.STATE_SHUT: "all_shut",
             self.STATE_OPEN: "all_open"
         }
         fn_name = mapping.get(st, "venting")
         fn: Any = getattr(vc, fn_name, None)
         if callable(fn):
-            fn()
+            try:
+                fn()
+            except Exception as e:
+                logger.error(f"HW VALVE ERROR ({fn_name}): {e}")
         else:
-            logger.error("DeviceManager.set_valve_state: Methode '%s' nicht gefunden!", fn_name)
+            logger.error(f"DeviceManager: Methode '{fn_name}' nicht auf ValveController gefunden!")
 
     def get_valve_state(self) -> str:
         vc = self._require_valves()
@@ -169,7 +179,7 @@ class DeviceManager:
 
     def vent_all(self) -> None:
         try: self.valves_venting()
-        except Exception: pass
+        except Exception as e: logger.error(f"Error in vent_all: {e}")
         if self.pressure_controller is not None:
             for ch in (1, 2):
                 try: self.set_pressure_setpoint_mbar(channel=ch, setpoint_mbar=0.0)
@@ -177,7 +187,7 @@ class DeviceManager:
 
     def set_pressure(self, channel: int, pressure: float, ramp: bool = True):
         val = getattr(pressure, "magnitude", pressure)
-        self.set_pressure_setpoint_mbar(channel=channel, setpoint_mbar=float(val))
+        self.set_pressure_setpoint_mbar(channel=channel, setpoint_mbar=float(val), ramp=ramp)
         
     def get_pressure(self, channel: int) -> float: return self.get_pressure_mbar(channel)
     def get_pressure_setpoint(self, channel: int) -> float: return self.get_pressure_mbar(channel)
@@ -192,7 +202,7 @@ class DeviceManager:
             for ch in (1, 2):
                 try: self.set_pressure_setpoint_mbar(channel=ch, setpoint_mbar=0.0)
                 except Exception: pass
-            try: self.pressure_controller.close()
+            try: self.pressure_controller.close() # 🚀 WICHTIG: Gibt den Elveflow frei!
             except Exception: pass
             self.pressure_controller = None
 
