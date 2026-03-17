@@ -716,6 +716,9 @@ class MainWindow(Qtw.QMainWindow):
         if self._simulation_mode:
             self.right.append_log(">>> RUNNING IN VIRTUAL SIMULATION MODE <<<", "#F59E0B")
 
+        status_text = "SIMULATION: IDLE" if self._simulation_mode else "HARDWARE: IDLE"
+        self.top.update_status(status_text)
+
         self._rt_timer.start(self.REALTIME_POLL_MS)
 
     def _on_space_pressed(self):
@@ -1260,10 +1263,9 @@ class MainWindow(Qtw.QMainWindow):
                 logger.warning("HW ERROR (Pressure): %s - %s", type(e).__name__, e)
 
             try:
-                if hasattr(dev, "get_valve_state"):
-                    valves = str(dev.get_valve_state())
-                elif hasattr(dev, "get_state"):
-                    valves = str(dev.get_state())
+                fn_valve = getattr(dev, "get_valve_state", getattr(dev, "get_state", None))
+                if callable(fn_valve):
+                    valves = str(fn_valve())
             except Exception:
                 pass
 

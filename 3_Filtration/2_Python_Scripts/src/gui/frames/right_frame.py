@@ -25,7 +25,7 @@ class ReactorSphereWidget(QFrame):
         super().__init__(parent)
         self.setMinimumSize(180, 200)
         self.setStyleSheet("background: transparent;")
-        self._fill_pct = 0.5  # Startet bei 50% (Bis zur Membran)
+        self._fill_pct = 0.5  # 0.5 bedeutet exakt auf Membran-Höhe
         self._color = QColor("#00E5FF")
 
     def set_state(self, target_fill: float, phase: str):
@@ -34,12 +34,12 @@ class ReactorSphereWidget(QFrame):
         if abs(diff) < 0.005:
             self._fill_pct = target_fill
         else:
-            self._fill_pct += diff * 0.1  # 10% Annäherung pro Tick
+            self._fill_pct += diff * 0.1
 
         phase_up = phase.upper()
         if "FILL" in phase_up or "0" in phase_up:
             self._color = QColor("#00E5FF")  # Cyan (Wasser + BNNT)
-        elif "A" in phase_up or "B" in phase_up or "C" in phase_up or "FILTRATION" in phase_up:
+        elif "PHASE" in phase_up or "FILTRATION" in phase_up:
             self._color = QColor("#8B5CF6")  # Purple (Druck anliegend)
         elif "VENT" in phase_up:
             self._color = QColor("#10B981")  # Green (Druckabbau)
@@ -55,7 +55,6 @@ class ReactorSphereWidget(QFrame):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
 
-        # Abmessungen der Kugel (Sphere)
         radius = min(w, h) * 0.38
         cx = w / 2
         cy = (h - 20) / 2
@@ -64,10 +63,10 @@ class ReactorSphereWidget(QFrame):
 
         # 1. HINTERGRUND: Dunkles Kugel-Innere
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(15, 23, 42, 200))  # Slate 900
+        p.setBrush(QColor(15, 23, 42, 200))
         p.drawEllipse(sphere_rect)
 
-        # 2. FLÜSSIGKEIT: In der Kugel geclippt
+        # 2. FLÜSSIGKEIT: Nimmt die Form der Kugel an
         if self._fill_pct > 0.01:
             liquid_h = (radius * 2) * self._fill_pct
             liquid_rect = QRectF(cx - radius, (cy + radius) - liquid_h, radius * 2, liquid_h)
@@ -77,7 +76,6 @@ class ReactorSphereWidget(QFrame):
             grad.setColorAt(1.0, self._color.darker(300))
 
             p.save()
-            # 🚀 WICHTIG: Die Flüssigkeit nimmt die Form der Kugel an!
             clip_path = QPainterPath()
             clip_path.addEllipse(sphere_rect)
             p.setClipPath(clip_path)
@@ -117,14 +115,23 @@ class ReactorSphereWidget(QFrame):
 class TrapezoidWidget(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(250, 200)  # Höhe an den Reaktor angepasst
+        self.setMinimumSize(250, 200)
         self.setStyleSheet("background: transparent;")
         self._current_p = 0.0
-        self._max_p = 2000.0
+        self._peak_p = 2000.0
+        self._phase = "IDLE"
 
-    def set_pressure(self, current: float, max_p: float):
-        self._current_p = max(0.0, current)
-        self._max_p = max(1.0, max_p)
+    def set_state(self, current_p: float, setpoint: float, phase: str):
+        self._current_p = max(0.0, current_p)
+        self._phase = phase.upper()
+        
+        # 🚀 FIX: Fängt die höchste Ziel-Marke ab, ohne bei Ramp-Down abzustürzen
+        if setpoint > self._peak_p:
+            self._peak_p = setpoint
+
+        if self._phase == "IDLE" and current_p < 10:
+            self._peak_p = 2000.0  # Visueller Reset
+
         self.update()
 
     def paintEvent(self, event):
@@ -136,67 +143,73 @@ class TrapezoidWidget(QFrame):
         plot_w = w - 2 * pad_x
         plot_h = h - 2 * pad_y
 
-        # 1. BASIS: X-Achse (Massiv)
-        p.setPen(QPen(QColor(30, 41, 59), 3))  # Slate 800
+        # 1. BASIS: X-Achse
+        p.setPen(QPen(QColor(30, 41, 59), 3))
         p.drawLine(pad_x, h - pad_y, w - pad_x, h - pad_y)
 
-        # Geometrie der idealen Rampe berechnen
+        # Geometrie der idealen Rampe
         path = QPainterPath()
-        p1 = QPointF(pad_x, h - pad_y)  # Start
-        p2 = QPointF(pad_x + plot_w * 0.3, pad_y)  # Ende Ramp Up
-        p3 = QPointF(pad_x + plot_w * 0.7, pad_y)  # Ende Steady State
-        p4 = QPointF(pad_x + plot_w, h - pad_y)  # Ende Ramp Down
+        p1 = QPointF(pad_x, h - pad_y)
+        p2 = QPointF(pad_x + plot_w * 0.3, pad_y)
+        p3 = QPointF(pad_x + plot_w * 0.7, pad_y)
+        p4 = QPointF(pad_x + plot_w, h - pad_y)
 
         path.moveTo(p1)
         path.lineTo(p2)
         path.lineTo(p3)
         path.lineTo(p4)
 
-        # 2. HOLOGRAPHISCHE FÜLLUNG (Unter der Kurve)
+        # 2. HOLOGRAPHISCHE FÜLLUNG
         grad_bg = QLinearGradient(0, pad_y, 0, h - pad_y)
-        grad_bg.setColorAt(0.0, QColor(139, 92, 246, 50))  # Purple transparent
-        grad_bg.setColorAt(1.0, QColor(139, 92, 246, 0))  # Fade into dark
+        grad_bg.setColorAt(0.0, QColor(139, 92, 246, 50))
+        grad_bg.setColorAt(1.0, QColor(139, 92, 246, 0))
 
         bg_path = QPainterPath(path)
-        bg_path.lineTo(p1)  # Pfad unten schließen für saubere Füllung
+        bg_path.lineTo(p1)
 
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(grad_bg)
         p.drawPath(bg_path)
 
-        # 3. NEON-KONTUR (Die Soll-Kurve)
+        # 3. NEON-KONTUR
         p.setPen(QPen(QColor(139, 92, 246, 200), 3))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(path)
 
-        # 4. TACTICAL LIVE TRACKER (Wo stehen wir gerade?)
-        norm_p = min(1.0, self._current_p / self._max_p)
+        # 4. TACTICAL LIVE TRACKER
+        disp_max = max(self._peak_p, 100.0)
+        norm_p = min(1.0, max(0.0, self._current_p / disp_max))
+
+        # 🚀 FIX: Absolute Positionierung anhand der Phase!
+        if "PHASE_A" in self._phase:
+            dot_x = pad_x + (norm_p * plot_w * 0.3)
+        elif "PHASE_B" in self._phase:
+            dot_x = pad_x + plot_w * 0.5
+        elif "PHASE_C" in self._phase:
+            down_progress = 1.0 - norm_p
+            dot_x = pad_x + plot_w * 0.7 + (down_progress * plot_w * 0.3)
+        else:
+            dot_x = pad_x
+            norm_p = 0.0
+
         dot_y = (h - pad_y) - (norm_p * plot_h)
 
-        # Logik: Steigt der Druck, sind wir auf der linken Flanke. Ist er Max, in der Mitte.
-        if norm_p < 0.98:
-            dot_x = pad_x + (norm_p * plot_w * 0.3)
-        else:
-            dot_x = pad_x + plot_w * 0.5
-
-            # Gestrichelte Ziellinie (Crosshair) zur Y-Achse
+        # Crosshair
         p.setPen(QPen(QColor(0, 229, 255, 120), 1, Qt.PenStyle.DashLine))
         p.drawLine(QPointF(pad_x, dot_y), QPointF(dot_x, dot_y))
         p.drawLine(QPointF(dot_x, dot_y), QPointF(dot_x, h - pad_y))
 
-        # Der leuchtende Messpunkt (Cyan)
+        # Glow Point
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(0, 229, 255, 60))  # Outer Glow
+        p.setBrush(QColor(0, 229, 255, 60))
         p.drawEllipse(QPointF(dot_x, dot_y), 12, 12)
-        p.setBrush(QColor("#00E5FF"))  # Inner Core
+        p.setBrush(QColor("#00E5FF"))
         p.drawEllipse(QPointF(dot_x, dot_y), 5, 5)
 
-        # Fliegendes Label: Exakter Druck über dem Punkt
+        # Label
         p.setPen(QColor("#F8FAFC"))
         p.setFont(QFont("Consolas", 9, QFont.Weight.Black))
-        # Leicht versetzt oben rechts vom Punkt
         p.drawText(QPointF(dot_x + 10, dot_y - 10), f"{int(self._current_p)}")
-
 
         # 5. TITEL
         p.setPen(QColor("#94A3B8"))
@@ -205,7 +218,6 @@ class TrapezoidWidget(QFrame):
 
 
 def _to_float(x) -> float:
-    """Safe float conversion — handles NaN, None, strings, dicts."""
     if x is None: return 0.0
     try:
         if isinstance(x, dict): return 0.0
@@ -228,6 +240,10 @@ class RightFrame(QFrame):
         super().__init__(parent)
         self.setProperty("surface", "panel")
         self._running = False
+        
+        # 🚀 FIX: Neue States für die physikalische Logik
+        self._ui_phase = "IDLE"
+        self._max_vol = 0.1 
 
         root_path = project_root(__file__)
         ensure_dir(resolve_under(root_path, "logs"))
@@ -350,13 +366,17 @@ class RightFrame(QFrame):
     def reset_state(self):
         self.console.clear()
         self.banner_ok.hide()
+        self._ui_phase = "IDLE"
+        self._max_vol = 0.1
         self.sandglass.set_state(0.5, "IDLE")
-        self.trapezoid.set_pressure(0.0, 2000.0)
+        self.trapezoid.set_state(0.0, 0.0, "IDLE")
         self.realtime_plot.stop_logging()
 
     @Slot(str)
     def set_step(self, step: str):
-        self.append_log(f"--- STEP TRANSITION: {step} ---", "#8B5CF6")
+        # 🚀 FIX: Wir speichern die harte Phase ab!
+        self._ui_phase = step.upper()
+        self.append_log(f"--- STEP TRANSITION: {self._ui_phase} ---", "#8B5CF6")
 
     @Slot(str)
     def set_status(self, msg: str):
@@ -417,48 +437,28 @@ class RightFrame(QFrame):
         pressures = sample.get("pressure", {})
         p1_data = pressures.get(1, pressures.get("1", {}))
 
-        p1_raw = sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas", 0.0)
-        p1_set_raw = sample.get("p1_set") if sample.get("p1_set") is not None else p1_data.get("set", 0.0)
-
-        p1 = _to_float(p1_raw)
-        max_p = _to_float(p1_set_raw)
-
-        if max_p < 10:
-            max_p = max(abs(p1), 100.0) if p1 > 10 else 2000.0
+        p1 = _to_float(sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas", 0.0))
+        p1_set = _to_float(sample.get("p1_set") if sample.get("p1_set") is not None else p1_data.get("set", 0.0))
+        vol = _to_float(sample.get("volume_ml", 0.0))
+        
+        if vol > self._max_vol:
+            self._max_vol = vol
 
         step = str(sample.get("step", "IDLE")).upper()
 
-        self.trapezoid.set_pressure(p1, max_p)
+        self.trapezoid.set_state(p1, p1_set, self._ui_phase)
 
-        # ════════════════════════════════════════════════════════════════════
-        # DIGITAL TWIN LOGIC: Physikalisches Füllvolumen der Kugel
-        # Die Membran liegt exakt bei 0.50 (50%).
-        # Actual step names from worker: FILLING, FILTRATION, VENTING,
-        # BACKWASH_INITIAL, BACKWASH_HOLD, BACKWASH_FINAL, FINISHED, ABORTED
-        # ════════════════════════════════════════════════════════════════════
-        if step == "FILLING":
-            # Phase 0: Backflush füllt die Zelle von unten auf.
-            target_fill = 0.80
-
-        elif step == "FILTRATION":
-            # Filtrationsphasen (A, B1, B2, C): Druck presst Wasser durch Membran.
-            # Visuell sinkt Füllstand von 80% auf 50% proportional zum Druck.
-            p_ratio = min(1.0, max(0.0, p1 / max_p)) if max_p > 0 else 0.0
-            target_fill = 0.80 - (p_ratio * 0.30)
-
+        if "FILLING" in step or "BACKWASH" in step:
+            fill_pct = 0.5 + (vol / self._max_vol) * 0.4 if self._max_vol > 0 else 0.5
+            self.sandglass.set_state(fill_pct, step)
+        
+        elif step == "FILTRATION" or "PHASE" in self._ui_phase:
+            fill_pct = 0.5 + (vol / self._max_vol) * 0.4 if self._max_vol > 0 else 0.5
+            self.sandglass.set_state(fill_pct, self._ui_phase)
+            
         elif step == "VENTING":
-            # Druckabbau: Restwasser wird verdrängt, Füllstand sinkt deutlich.
-            target_fill = 0.30
-
-        elif "BACKWASH" in step:
-            # BACKWASH_INITIAL / BACKWASH_HOLD / BACKWASH_FINAL:
-            # Drückt Flüssigkeit von unten durch die Membran nach oben.
-            target_fill = 0.85
-
+            self.sandglass.set_state(0.5, "VENTING")
         else:
-            # IDLE, FINISHED, ABORTED: Grundzustand, Membranmitte.
-            target_fill = 0.50
+            self.sandglass.set_state(0.5, "IDLE")
 
-            # Sende Ziel-Volumen an die Sphäre
-        self.sandglass.set_state(target_fill, step)
         self.realtime_plot.ingest_telemetry(sample)

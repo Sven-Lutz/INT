@@ -28,13 +28,15 @@ class PhaseCard(QFrame):
 
         self._pill = QLabel("IDLE")
         self._pill.setProperty("role", "pill")
-        self._pill.setAlignment(Qt.AlignCenter)
+        # 🚀 FIX: AlignmentFlag nutzen
+        self._pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         header = QHBoxLayout()
         header.setContentsMargins(12, 12, 12, 8)
         header.setSpacing(8)
         header.addWidget(self._title, 1)
-        header.addWidget(self._pill, 0, Qt.AlignRight)
+        # 🚀 FIX: AlignmentFlag nutzen
+        header.addWidget(self._pill, 0, Qt.AlignmentFlag.AlignRight)
 
         self._form = QFormLayout()
         self._form.setContentsMargins(12, 0, 12, 0)
@@ -92,7 +94,8 @@ class PhaseCard(QFrame):
             return
 
         self._hold_btn = QLabel(label)
-        self._hold_btn.setAlignment(Qt.AlignCenter)
+        # 🚀 FIX: AlignmentFlag nutzen
+        self._hold_btn.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._hold_btn.setProperty("role", "title")
         self._hold_btn.setObjectName("btnHold")
         self._hold_btn.setProperty("holdAllowed", "false")

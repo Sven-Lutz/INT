@@ -12,7 +12,7 @@ class TopFrame(QFrame):
         lay.setSpacing(20)
 
         # 1. Branding / Status
-        self.lbl_title = QLabel("SVENs REASON FOR DEPRESSION")
+        self.lbl_title = QLabel("LITTLE CHONKER // COMMAND NODE")
         self.lbl_title.setStyleSheet("color: #F8FAFC; font-weight: 900; font-size: 16px; letter-spacing: 2px;")
         
         self.lbl_status = QLabel("● SIMULATION: IDLE")
@@ -32,7 +32,6 @@ class TopFrame(QFrame):
         self.val_loss, self.bar_loss = self._add_metric(lay, "VOLUME LOSS", "0.00 mL", "#EC4899", max_val=50)
 
     def _add_metric(self, parent_layout, title: str, initial_val: str, color: str, max_val: int):
-        # Äußerer Rahmen (Cyber-Card mit Gradient und farbigem Top-Rand)
         card = QFrame()
         card.setObjectName("MetricCard")
         card.setStyleSheet(f"""
@@ -49,20 +48,17 @@ class TopFrame(QFrame):
         lay.setContentsMargins(15, 10, 15, 12)
         lay.setSpacing(6)
 
-        # Titel
         lbl_t = QLabel(title)
         lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_t.setStyleSheet("color: #94A3B8; font-weight: bold; font-size: 10px; letter-spacing: 1.5px; border: none; background: transparent;")
         lay.addWidget(lbl_t)
 
-        # Wert
         lbl_v = QLabel(initial_val)
         lbl_v.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_v.setMinimumWidth(120)
         lbl_v.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 18px; font-family: 'Consolas'; border: none; background: transparent;")
         lay.addWidget(lbl_v)
 
-        # Dynamischer Mini-Fortschrittsbalken (Gauge)
         bar = QProgressBar()
         bar.setRange(0, max_val)
         bar.setValue(0)
@@ -77,13 +73,11 @@ class TopFrame(QFrame):
         parent_layout.addWidget(card)
         return lbl_v, bar
 
-    # 🚀 FIX: Kugelsicherer Konverter gegen Hardware-NaNs
     def _to_safe_float(self, val) -> Optional[float]:
         if val is None: 
             return None
         try:
             v = float(val)
-            # Filtert 'NaN' und 'Infinity' knallhart heraus
             if v == v and v not in (float("inf"), float("-inf")):
                 return v
             return None
@@ -94,19 +88,20 @@ class TopFrame(QFrame):
     def update_telemetry(self, sample: dict):
         pressures = sample.get("pressure", {})
         
-        # P1 Main (prüft flache und verschachtelte Dictionary-Struktur)
         p1_data = pressures.get(1, pressures.get("1", {}))
         p1_raw = sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas")
         self._set_metric_value(self.val_p_main, self.bar_p_main, self._to_safe_float(p1_raw), "{:.0f} mbar")
         
-        # P2 Backwash
         p2_data = pressures.get(2, pressures.get("2", {}))
         p2_raw = sample.get("p2_meas") if sample.get("p2_meas") is not None else p2_data.get("meas")
         self._set_metric_value(self.val_p_back, self.bar_p_back, self._to_safe_float(p2_raw), "{:.0f} mbar")
         
-        # Flow
         f = self._to_safe_float(sample.get("flow"))
         self._set_metric_value(self.val_flow, self.bar_flow, f, "{:.3f} mL/min", is_flow=True)
+
+        # 🚀 FIX: Den Live-Loss abfangen und verarbeiten!
+        if "loss_ml" in sample:
+            self.set_loss_ml(sample["loss_ml"])
 
     def _set_metric_value(self, label: QLabel, bar: QProgressBar, value: Optional[float], format_str: str, is_flow: bool = False):
         if value is None:
@@ -119,13 +114,11 @@ class TopFrame(QFrame):
         text = f"{prefix}{format_str.format(value)}"
         label.setText(text)
         
-        # 🚀 FIX: Abfangen des ValueError, falls doch etwas schiefgeht!
         try:
             bar.setValue(min(bar.maximum(), int(abs(value))))
         except Exception:
             bar.setValue(0)
         
-        # Farbcodierung für Flow-Richtung
         if is_flow:
             if value > 0:
                 label.setStyleSheet(label.styleSheet().replace("color: #FF1744;", "color: #00FF66;").replace("color: #F8FAFC;", "color: #00FF66;"))

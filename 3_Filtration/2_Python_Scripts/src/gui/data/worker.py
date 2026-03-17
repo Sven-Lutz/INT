@@ -198,7 +198,9 @@ class ExperimentWorker(QObject):
         self._step_total_s: Optional[float] = None
         self._store: Optional[RunTelemetryStore] = None
         self._on_sample_cb: Optional[Callable] = None
-        
+        self._total_loss_so_far: float = 0.0
+        self._phase_vol_start: Optional[float] = None
+
         self.cmd_start_backwash_hold.connect(self._on_cmd_start_backwash_hold, Qt.ConnectionType.QueuedConnection)
         self.cmd_stop_backwash_hold.connect(self._on_cmd_stop_backwash_hold, Qt.ConnectionType.QueuedConnection)
         self.cmd_abort.connect(self._on_cmd_abort, Qt.ConnectionType.QueuedConnection)
@@ -299,10 +301,11 @@ class ExperimentWorker(QObject):
         try: flow = self._unwrap_sensor(dev.read_flow())
         except Exception: flow = 0.0
 
-        try: 
-            if hasattr(dev, "get_valve_state"): valve_state = str(dev.get_valve_state())
-            else: valve_state = "UNKNOWN"
-        except Exception: valve_state = "UNKNOWN"
+        try:
+            fn_valve = getattr(dev, "get_valve_state", getattr(dev, "get_state", None))
+            valve_state = str(fn_valve()) if callable(fn_valve) else "UNKNOWN"
+        except Exception: 
+            valve_state = "UNKNOWN"
 
         p1_set = p1_meas = p2_set = p2_meas = 0.0
         if getattr(dev, "pressure_controller", None) is not None:
@@ -318,8 +321,12 @@ class ExperimentWorker(QObject):
         try: vol = float(exp.volume_ml)
         except Exception: vol = 0.0
 
-        try: loss = float(getattr(exp, "last_filtration_venting_loss_ml", 0.0))
-        except Exception: loss = 0.0
+        # 🚀 FIX: ECHTE LIVE-LOSS BERECHNUNG!
+        try: 
+            start_vol = float(exp.cfg.initial_volume_ml)
+            loss = start_vol - vol
+        except Exception: 
+            loss = 0.0
 
         sample = {
             "t": t_s,
@@ -328,7 +335,7 @@ class ExperimentWorker(QObject):
             "flow": flow,
             "p1_set": p1_set, "p1_meas": p1_meas,
             "p2_set": p2_set, "p2_meas": p2_meas,
-            "volume_ml": vol, "loss_ml": loss,
+            "volume_ml": vol, "loss_ml": loss, # Dieser Wert pusht jetzt ins TopFrame!
             "valves": valve_state,
             "manual_active": bool(self._hold_active.is_set()),
             "pressure": {
@@ -444,6 +451,7 @@ class ExperimentWorker(QObject):
             if p.run_phase_a:
                 self._current_step = Step.FILTRATION
                 self.step_changed.emit("PHASE_A")
+                self._phase_vol_start = float(self._exp.volume_ml)
                 
                 if p.phase_a_mode == "manual":
                     self.log_msg.emit("Phase A: Manual Step Mode active.", "#8B5CF6")
@@ -473,11 +481,14 @@ class ExperimentWorker(QObject):
                         abort_check_fn=self._should_abort
                     )
                 total_loss += loss_a
+                self._total_loss_so_far += loss_a
+                self._phase_vol_start = None
 
             # --- PHASE B: STEADY STATE & DRY ---
             if p.run_phase_b:
                 self._current_step = Step.FILTRATION
                 self.step_changed.emit("PHASE_B")
+                self._phase_vol_start = float(self._exp.volume_ml)
                 self.status.emit(f"Running Phase B1 (Target: {target_vol:.2f}ml)")
                 self.log_msg.emit(f"Phase B1: Waiting for {target_vol:.2f} mL to pass.", "#F59E0B")
                 self._emit_sample(event="STEP_START_PHASE_B1")
@@ -515,6 +526,10 @@ class ExperimentWorker(QObject):
                         time.sleep(0.2)
                         
                     total_loss += loss_b2
+                    self._total_loss_so_far += loss_b1 + loss_b2
+                else:
+                    self._total_loss_so_far += loss_b1
+                self._phase_vol_start = None
 
             # --- PHASE C: RAMP DOWN ---
             if p.run_phase_c:
@@ -522,6 +537,7 @@ class ExperimentWorker(QObject):
                 self.step_changed.emit("PHASE_C")
                 self.status.emit("Running Phase C (Continuous Ramp down)")
                 self.log_msg.emit("Phase C: Ramping down continuously.", "#EC4899")
+                self._phase_vol_start = float(self._exp.volume_ml)
                 
                 ch = int(self.cfg.main_pressure_channel)
                 start_mbar = self._exp._get_pressure_setpoint_mbar_best(ch)
@@ -540,6 +556,8 @@ class ExperimentWorker(QObject):
                     abort_check_fn=self._should_abort
                 )
                 total_loss += loss_c
+                self._total_loss_so_far += loss_c
+                self._phase_vol_start = None
 
             # --- ABSCHLUSS ---
             self._exp.last_filtration_venting_loss_ml = float(total_loss)
@@ -563,6 +581,8 @@ class ExperimentWorker(QObject):
             self.failed.emit(f"{e}\n\n{tb}")
 
         finally:
+            self._total_loss_so_far = 0.0
+            self._phase_vol_start = None
             try: self._enter_safe_state()
             except Exception: pass
             if self._exp is not None: 
