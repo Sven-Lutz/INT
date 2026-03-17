@@ -92,6 +92,13 @@ class DeviceManager:
         if self.flow_sensor is None: raise RuntimeError("FlowSensor not connected.")
         return self.flow_sensor
 
+    # 🚀 FIX: Hier ist der fehlende Entpacker!
+    def _unwrap(self, val: Any) -> float:
+        if val is None: return 0.0
+        if isinstance(val, (list, tuple)): return float(val[-1])
+        try: return float(val)
+        except Exception: return 0.0
+
     # =====================================================================
     # OB1 KANAL-SCHALTER (DRUCKAUSGABE)
     # =====================================================================
@@ -106,10 +113,12 @@ class DeviceManager:
         phys_ch = self._get_physical_channel(channel)
         self._setpoints[int(channel)] = float(setpoint_mbar)
         try:
-            # 🚀 FIX: Dynamischer Methodenaufruf mit getattr() beruhigt Pylance
             fn_set = getattr(pc, "set_pressure_mbar", getattr(pc, "set_pressure", None))
             if callable(fn_set):
-                fn_set(phys_ch, float(setpoint_mbar))
+                try:
+                    fn_set(phys_ch, float(setpoint_mbar), ramp=ramp)
+                except TypeError:
+                    fn_set(phys_ch, float(setpoint_mbar))
             else:
                 logger.error("HW ERROR: PressureController hat keine Set-Methode gefunden!")
         except Exception as e:
@@ -120,11 +129,10 @@ class DeviceManager:
             return 0.0
         phys_ch = self._get_physical_channel(channel)
         try:
-            # 🚀 FIX: : Any sagt Pylance, dass wir den Rückgabetyp absichtlich dynamisch lassen
             fn_get: Any = getattr(self.pressure_controller, "get_pressure_mbar", getattr(self.pressure_controller, "get_pressure", None))
             if callable(fn_get):
                 v: Any = fn_get(phys_ch)
-                return 0.0 if v is None else float(v)
+                return self._unwrap(v) # Entpackt das Elveflow-Tupel sicher zu float
             return 0.0
         except Exception as e:
             logger.error(f"HW ERROR beim Druck lesen auf CH{phys_ch}: {e}")
@@ -138,7 +146,7 @@ class DeviceManager:
             return 0.0
         try:
             v = self.flow_sensor.get_flow()
-            return float(v) if v is not None else 0.0
+            return self._unwrap(v) # Entpackt das Flow-Tupel sicher zu float
         except Exception as e:
             logger.error(f"HW ERROR beim Flow lesen: {e}")
             return 0.0
@@ -202,7 +210,7 @@ class DeviceManager:
             for ch in (1, 2):
                 try: self.set_pressure_setpoint_mbar(channel=ch, setpoint_mbar=0.0)
                 except Exception: pass
-            try: self.pressure_controller.close() # 🚀 WICHTIG: Gibt den Elveflow frei!
+            try: self.pressure_controller.close()
             except Exception: pass
             self.pressure_controller = None
 

@@ -12,7 +12,7 @@ class TopFrame(QFrame):
         lay.setSpacing(20)
 
         # 1. Branding / Status
-        self.lbl_title = QLabel("LITTLE CHONKER // COMMAND NODE")
+        self.lbl_title = QLabel("Are you working?")
         self.lbl_title.setStyleSheet("color: #F8FAFC; font-weight: 900; font-size: 16px; letter-spacing: 2px;")
         
         self.lbl_status = QLabel("● SIMULATION: IDLE")
