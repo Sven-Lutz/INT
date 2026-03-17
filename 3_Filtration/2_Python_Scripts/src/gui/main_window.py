@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from http import server
 import logging
 import time
 import random
@@ -20,7 +19,6 @@ from PySide6.QtGui import (
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QMessageBox, QGraphicsOpacityEffect
 
-import src
 from src.gui.data.worker import ExperimentConfig
 from src.gui.data import ExperimentWorker, RunParams, worker
 from src.gui.monitor.server import MonitorServer
@@ -556,6 +554,7 @@ class MainWindow(Qtw.QMainWindow):
         self._p2_hist: Deque[Tuple[float, float]] = deque(maxlen=256)
         self._last_trend_mode: Tuple[bool, bool, str, str] = (False, False, "—", "—")
         self._last_manual_state_fp = None
+        self._rt_t0: Optional[float] = None
 
         self.tabs = Qtw.QTabWidget()
         self.tabs.setMouseTracking(True)
@@ -655,12 +654,12 @@ class MainWindow(Qtw.QMainWindow):
 
     @Slot(bool)
     def _toggle_web_server(self, active: bool):
-        if active: 
+        if active:
             self.web_server.start()
-            print(">>> WEB SERVER STARTED <<<")
-        else: 
+            logger.info("Web server started")
+        else:
             self.web_server.stop()
-            print(">>> WEB SERVER STOPPED <<<")
+            logger.info("Web server stopped")
 
     def _play_boot_sequence(self):
         duration = 4000
@@ -842,7 +841,11 @@ class MainWindow(Qtw.QMainWindow):
         except Exception:
             pass
         self._set_running_ui(False)
-        if self._thread: self._thread.quit()
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait(2000)
+        self._worker = None
+        self._thread = None
 
     def _on_failed(self, err):
         self._stop_deterministic(reason=str(err))
@@ -916,6 +919,7 @@ class MainWindow(Qtw.QMainWindow):
             if hasattr(self, '_rt_timer'):
                 self._rt_timer.stop()
         else:
+            self._rt_t0 = None  # Reset elapsed timer so idle x-axis starts from 0
             if hasattr(self, '_rt_timer'):
                 self._rt_timer.start(self.REALTIME_POLL_MS)
 
@@ -1116,38 +1120,34 @@ class MainWindow(Qtw.QMainWindow):
         if self._experiment_running():
             if self._worker is not None: self._worker_hold_start_best_effort(self._worker, p)
         else:
-            print(">>> MANUAL HOLD: Requesting BACKWASH")
+            logger.debug("MANUAL HOLD: Requesting BACKWASH")
             dev = getattr(self, 'dev', None)
             if dev is not None:
-                # Nutze unsere neue sichere Methode (via Import oder direkt)
                 try:
                     if hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
-                    import time; time.sleep(0.05)
-                    
                     if hasattr(dev, "valves_backwash"): dev.valves_backwash()
                     elif hasattr(dev, "set_valve_state"): dev.set_valve_state("BACKWASH")
-                    else: print("!!! HW ERROR: No backwash method found on device !!!")
+                    else: logger.error("HW ERROR: No backwash method found on device")
                 except Exception as e:
-                    print(f"!!! HW VALVE ERROR: {e} !!!")
-                    
+                    logger.error("HW VALVE ERROR: %s", e)
+
             self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=p)
 
     def _hold_end_actions(self) -> None:
         if self._experiment_running():
             if self._worker is not None: self._worker_hold_stop_best_effort(self._worker)
         else:
-            print(">>> MANUAL HOLD RELEASED: Shutting all valves")
+            logger.debug("MANUAL HOLD RELEASED: Shutting all valves")
             self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=0.0)
-            
+
             dev = getattr(self, 'dev', None)
             if dev is not None:
                 try:
-                    # 🚀 FIX: Die EXAKTEN Befehle aus deinem ValveController!
                     if hasattr(dev, "all_shut"): dev.all_shut()
                     elif hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
                     elif hasattr(dev, "set_valve_state"): dev.set_valve_state("ALL_SHUT")
                 except Exception as e:
-                    print(f"!!! HW VALVE ERROR: {e} !!!") 
+                    logger.error("HW VALVE ERROR: %s", e) 
 
     def _schedule_hold_setpoint_push(self, *args) -> None:
         if self._hold_active and not self._hold_setpoint_timer.isActive():
@@ -1170,7 +1170,9 @@ class MainWindow(Qtw.QMainWindow):
         if callable(fn): fn()
 
     def _worker_hold_update_pressure_best_effort(self, w, p) -> None:
-        fn = getattr(w, "update_backwash_hold_pressure", None)
+        # ExperimentWorker has no separate "update" method — re-calling start_backwash_hold
+        # updates _hold_pressure_mbar and sets the dirty flag via _on_cmd_start_backwash_hold.
+        fn = getattr(w, "update_backwash_hold_pressure", getattr(w, "start_backwash_hold", None))
         if callable(fn): fn(float(p))
 
     def _start_monitor(self) -> None:
@@ -1185,23 +1187,23 @@ class MainWindow(Qtw.QMainWindow):
     # FIX 4: _poll_realtime — jeder Hardware-Read einzeln abgesichert
     # ═══════════════════════════════════════════════════════════════════
     def _poll_realtime(self) -> None:
-        if getattr(self, '_is_booting', False): return 
+        if getattr(self, '_is_booting', False): return
         if self._experiment_running(): return
 
-        import time
         now = time.monotonic()
+        if self._rt_t0 is None:
+            self._rt_t0 = now
+        t_elapsed = now - self._rt_t0
+
         dev = getattr(self, 'dev', None)
         if dev is None: return
 
-        # =========================================================
-        # 🚀 FIX: SENSORDATEN SICHER ENTPACKEN
-        # =========================================================
         try:
             raw_flow = dev.read_flow()
             self._rt_flow = _unwrap_sensor(raw_flow)
         except Exception as e:
             self._rt_flow = 0.0
-            print(f"HW ERROR (Flow): {type(e).__name__} - {e}")
+            logger.warning("HW ERROR (Flow): %s - %s", type(e).__name__, e)
 
         try:
             if hasattr(dev, "get_pressure_mbar"):
@@ -1214,7 +1216,7 @@ class MainWindow(Qtw.QMainWindow):
                 self._rt_p1 = 0.0; self._rt_p2 = 0.0
         except Exception as e:
             self._rt_p1 = 0.0; self._rt_p2 = 0.0
-            print(f"HW ERROR (Pressure): {type(e).__name__} - {e}")
+            logger.warning("HW ERROR (Pressure): %s - %s", type(e).__name__, e)
 
         try:
             if hasattr(dev, "get_valve_state"): self._rt_valves = str(dev.get_valve_state())
@@ -1229,7 +1231,7 @@ class MainWindow(Qtw.QMainWindow):
         v_val = getattr(self, '_rt_valves', "UNKNOWN")
 
         sample = {
-            "t": now, "p1_meas": p1_val, "p2_meas": p2_val,
+            "t": t_elapsed, "p1_meas": p1_val, "p2_meas": p2_val,
             "flow": f_val, "valves": v_val, "step": "IDLE",
             "pressure": {
                 1: {"meas": p1_val, "set": 0.0},

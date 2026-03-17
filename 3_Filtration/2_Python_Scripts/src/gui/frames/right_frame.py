@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
 from pathlib import Path
-import csv
-from dataclasses import dataclass
+from typing import Optional
 
 import pyqtgraph as pg
 from PySide6.QtCore import Signal, Slot, Qt, QRectF, QPointF
@@ -16,6 +14,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTextBrowser, QWidget, QTabWidget
 )
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
+from src.gui.frames.monitor_tab import EliteMonitorTab
 
 
 # =========================================================================
@@ -204,222 +203,15 @@ class TrapezoidWidget(QFrame):
         p.drawText(QRectF(0, h - 15, w, 15), Qt.AlignmentFlag.AlignCenter, "PRESSURE PROFILE")
 
 
-# =========================================================================
-# VISUALISIERUNG 3: REAL TIME MONITOR TAB (ELITE LEVEL - CRASH PROOF)
-# =========================================================================
 def _to_float(x) -> float:
-    """Kugelsicher: Keine NaNs, Nones, Strings oder Dictionaries."""
+    """Safe float conversion — handles NaN, None, strings, dicts."""
     if x is None: return 0.0
     try:
-        if isinstance(x, dict): # Falls Hardware ein Dict schickt statt einer Zahl
-            return 0.0
+        if isinstance(x, dict): return 0.0
         v = float(x)
-        return v if v == v else 0.0  # v == v filtert NaN heraus
-    except Exception: 
+        return v if v == v else 0.0
+    except Exception:
         return 0.0
-
-
-class MonitorTab(QFrame):
-    def __init__(self, parent=None, max_points: int = 1500) -> None:
-        super().__init__(parent)
-        self.setStyleSheet("background: transparent;")
-        self._max_points = int(max_points)
-
-        self._t0: Optional[float] = None
-        self._t = []
-        self._flow = []
-        self._p1 = []
-        self._p2 = []
-
-        self._csv_file = None
-        self._csv_writer = None
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(10)
-
-        pg.setConfigOptions(antialias=True)
-        pg.setConfigOption('background', '#050914')
-        pg.setConfigOption('foreground', '#94A3B8')
-
-        self.plot_p = pg.PlotWidget(title="PRESSURE TELEMETRY (mbar)")
-        self.plot_flow = pg.PlotWidget(title="FLOW DYNAMICS (mL/min)")
-
-        # Elite Achsen-Styling
-        for plot in [self.plot_p, self.plot_flow]:
-            plot.showGrid(x=False, y=True, alpha=0.1)
-            plot.getAxis('bottom').setPen(pg.mkPen('#1E293B'))
-            plot.getAxis('bottom').setTextPen(pg.mkPen('#64748B'))
-            plot.getAxis('left').setPen(pg.mkPen('#1E293B'))
-            plot.getAxis('left').setTextPen(pg.mkPen('#64748B'))
-
-        self.plot_flow.getViewBox().setLimits(minYRange=1.0, minXRange=10.0)
-        self.plot_p.getViewBox().setLimits(minYRange=100.0, minXRange=10.0)
-
-        # Flow Gradient (Pink)
-        grad_flow = QLinearGradient(0, 0, 0, 1)
-        grad_flow.setCoordinateMode(QLinearGradient.CoordinateMode.ObjectBoundingMode)
-        grad_flow.setColorAt(0.0, QColor(236, 72, 153, 100))
-        grad_flow.setColorAt(1.0, QColor(236, 72, 153, 0))
-        brush_flow = QBrush(grad_flow)
-
-        pen_flow = pg.mkPen(color='#EC4899', width=3.5)
-        pen_p1 = pg.mkPen(color='#8B5CF6', width=3.5)
-        self.curve_flow = self.plot_flow.plot(
-            [], [],
-            pen=pen_flow,
-            fillLevel=0,
-            brush=brush_flow,
-            symbol='o',
-            symbolSize=4
-        )
-
-        # Pressure Gradient (Lila)
-        grad_p1 = QLinearGradient(0, 0, 0, 1)
-        grad_p1.setCoordinateMode(QLinearGradient.CoordinateMode.ObjectBoundingMode)
-        grad_p1.setColorAt(0.0, QColor(139, 92, 246, 80))
-        grad_p1.setColorAt(1.0, QColor(139, 92, 246, 0))
-        brush_p1 = QBrush(grad_p1)
-
-        self.curve_p1 = self.plot_p.plot(
-            [], [],
-            pen=pen_p1,
-            fillLevel=0,
-            brush=brush_p1,
-            name="P1 Main",
-            symbol='o',
-            symbolSize=4
-        )
-
-        pen_p2 = pg.mkPen(color='#00E5FF', width=2, style=Qt.PenStyle.DashLine)
-        self.curve_p2 = self.plot_p.plot(
-            [], [],
-            pen=pen_p2,
-            name="P2 Backwash",
-            symbol='o',
-            symbolSize=4
-        )
-        root.addWidget(self.plot_p, 1)
-        root.addWidget(self.plot_flow, 1)
-
-    def reset_plot(self):
-        self._t0 = None
-        self._t.clear()
-        self._flow.clear()
-        self._p1.clear()
-        self._p2.clear()
-        self.curve_flow.setData([], [])
-        self.curve_p1.setData([], [])
-        self.curve_p2.setData([], [])
-
-    def start_logging(self, run_name_prefix: str = "Run") -> None:
-        self.reset_plot()
-        self._csv_file = None
-        self._csv_writer = None
-
-        log_dir = resolve_under(project_root(__file__), "logs")
-        ensure_dir(log_dir)
-
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        csv_path = Path(log_dir) / f"{run_name_prefix}_{timestamp}.csv"
-
-        try:
-            self._csv_file = open(csv_path, 'w', newline='')
-            self._csv_writer = csv.DictWriter(self._csv_file, fieldnames=['t', 'flow', 'p1_meas', 'p2_meas'])
-            self._csv_writer.writeheader()
-        except Exception as e:
-            print(f"Error opening CSV file: {e}")
-
-    def stop_logging(self) -> None:
-        if self._csv_file is not None:
-            try:
-                self._csv_file.close()
-            except Exception:
-                pass
-            finally:
-                self._csv_file = None
-                self._csv_writer = None
-
-    @Slot(dict)
-    def ingest_telemetry(self, payload: dict) -> None:
-        import time
-        current_time = time.monotonic()
-
-        if self._t0 is None:
-            self._t0 = current_time
-            # 🚀 Graphen-Ansicht beim Start auf 0 bis 60 Sekunden zwingen
-            self.plot_p.setXRange(0, 60)
-            self.plot_flow.setXRange(0, 60)
-
-        ts = current_time - self._t0
-
-        if len(self._t) > 0 and ts <= self._t[-1]:
-            ts = self._t[-1] + 0.005
-
-        flow = _to_float(payload.get("flow"))
-
-        pressures = payload.get("pressure", {})
-        p1_data = pressures.get(1, pressures.get("1", {}))
-        p2_data = pressures.get(2, pressures.get("2", {}))
-
-        p1_raw = payload.get("p1_meas") if payload.get("p1_meas") is not None else p1_data.get("meas", 0.0)
-        p2_raw = payload.get("p2_meas") if payload.get("p2_meas") is not None else p2_data.get("meas", 0.0)
-
-        p1 = _to_float(p1_raw)
-        p2 = _to_float(p2_raw)
-
-        print(f"ingest: n={len(self._t) + 1}, p1={p1}, p2={p2}, flow={flow}")
-
-        self._t.append(ts)
-        self._flow.append(flow)
-        self._p1.append(p1)
-        self._p2.append(p2)
-
-        if len(self._t) > self._max_points:
-            self._t = self._t[-self._max_points:]
-            self._flow = self._flow[-self._max_points:]
-            self._p1 = self._p1[-self._max_points:]
-            self._p2 = self._p2[-self._max_points:]
-
-        # 🚀 Radar-Scrolling: Die X-Achse wandert nach 60 Sekunden automatisch mit
-        if ts > 60:
-            self.plot_p.setXRange(ts - 60, ts)
-            self.plot_flow.setXRange(ts - 60, ts)
-
-        if len(self._t) > 0:
-            self.curve_flow.setData(self._t, self._flow)
-            self.curve_p1.setData(self._t, self._p1)
-            self.curve_p2.setData(self._t, self._p2)
-
-        if len(self._t) > 1:
-            self.curve_flow.setData(self._t, self._flow)
-            self.curve_p1.setData(self._t, self._p1)
-            self.curve_p2.setData(self._t, self._p2)
-
-            # Sichtbarkeit bei Flatline / Nullwerten erzwingen
-            if max(map(abs, self._flow), default=0.0) < 1e-9:
-                self.plot_flow.setYRange(-1.0, 1.0)
-
-            else:
-                fmin = min(self._flow)
-                fmax = max(self._flow)
-                pad = max(1.0, (fmax - fmin) * 0.15)
-                self.plot_flow.setYRange(fmin - pad, fmax + pad)
-
-            p_all = self._p1 + self._p2
-            if max(map(abs, p_all), default=0.0) < 1e-9:
-                self.plot_p.setYRange(-50.0, 50.0)
-            else:
-                pmin = min(p_all)
-                pmax = max(p_all)
-                pad = max(10.0, (pmax - pmin) * 0.15)
-                self.plot_p.setYRange(pmin - pad, pmax + pad)
-
-                if self._csv_writer is not None and self._csv_file is not None and not self._csv_file.closed:
-                    try:
-                        self._csv_writer.writerow({'t': f"{ts:.3f}", 'flow': flow, 'p1_meas': p1, 'p2_meas': p2})
-                    except Exception:
-                        pass
 
 
 # =========================================================================
@@ -463,7 +255,8 @@ class RightFrame(QFrame):
         viz_lay.addWidget(separator)
         viz_lay.addWidget(self.trapezoid)
 
-        self.realtime_plot = MonitorTab()
+        _log_dir = Path(resolve_under(project_root(__file__), "logs"))
+        self.realtime_plot = EliteMonitorTab(_log_dir, max_points=2000)
 
         self.tabs.addTab(tab_viz, "PHYSICAL MODEL")
         self.tabs.addTab(self.realtime_plot, "LIVE TELEMETRY")
@@ -554,7 +347,7 @@ class RightFrame(QFrame):
     def reset_state(self):
         self.console.clear()
         self.banner_ok.hide()
-        self.sandglass.set_state(0.0, "IDLE")
+        self.sandglass.set_state(0.5, "IDLE")
         self.trapezoid.set_pressure(0.0, 2000.0)
         self.realtime_plot.stop_logging()
 
@@ -618,7 +411,6 @@ class RightFrame(QFrame):
 
     @Slot(dict)
     def update_telemetry(self, sample: dict):
-        print("UPDATE_TELEMETRY CALLED", sample)
         pressures = sample.get("pressure", {})
         p1_data = pressures.get(1, pressures.get("1", {}))
 
@@ -628,7 +420,7 @@ class RightFrame(QFrame):
         p1 = _to_float(p1_raw)
         max_p = _to_float(p1_set_raw)
 
-        if max_p is None or max_p < 10:
+        if max_p < 10:
             max_p = max(abs(p1), 100.0) if p1 > 10 else 2000.0
 
         step = str(sample.get("step", "IDLE")).upper()
@@ -673,9 +465,4 @@ class RightFrame(QFrame):
 
             # Sende Ziel-Volumen an die Sphäre
         self.sandglass.set_state(target_fill, step)
-
-        if "t" not in sample:
-            import time
-            sample["t"] = time.time()
-
         self.realtime_plot.ingest_telemetry(sample)

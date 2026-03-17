@@ -197,7 +197,8 @@ class ExperimentWorker(QObject):
         self._step_t0: Optional[float] = None
         self._step_total_s: Optional[float] = None
         self._store: Optional[RunTelemetryStore] = None
-
+        self._on_sample_cb: Optional[Callable] = None
+        
         self.cmd_start_backwash_hold.connect(self._on_cmd_start_backwash_hold, Qt.ConnectionType.QueuedConnection)
         self.cmd_stop_backwash_hold.connect(self._on_cmd_stop_backwash_hold, Qt.ConnectionType.QueuedConnection)
         self.cmd_abort.connect(self._on_cmd_abort, Qt.ConnectionType.QueuedConnection)
@@ -274,6 +275,7 @@ class ExperimentWorker(QObject):
 
         while not self._ok_event.wait(timeout=0.1):
             self._raise_if_abort()
+            self._emit_sample(event=f"WAITING_OK_{step.value}")
 
     def _ensure_t0(self) -> None:
         if self._t0 is None:
@@ -384,6 +386,7 @@ class ExperimentWorker(QObject):
             self._raise_if_abort()
 
             self._exp = Experimentator(dev, self.cfg) # type: ignore
+            self._exp._on_sample = lambda ev="": self._emit_sample(event=ev)
             self._t0 = None
 
             try:
@@ -587,6 +590,7 @@ class Experimentator:
         self.last_filtration_venting_loss_ml: float = 0.0
         self._loop_idx: int = 0
         self._step_start_volume: float = self.volume_ml
+        self._on_sample: Optional[Callable[[str], None]] = None
         
         root = project_root(__file__)
         log_dir_abs = Path(ensure_dir(resolve_under(root, cfg.log_dir)))
@@ -781,6 +785,9 @@ class Experimentator:
         })
         self._rows_since_flush += 1
         self._flush(force=False)
+        if self._on_sample is not None:
+            try: self._on_sample(str(event or ""))
+            except Exception: pass
 
     def step_staircase_ramp(self, *, target_pressure_mbar: float, step_size_mbar: float, step_time_s: float, wait_for_ok_fn: Optional[Callable[[str], None]] = None) -> float:
         ch = int(self.cfg.main_pressure_channel)
@@ -884,10 +891,12 @@ class Experimentator:
             net_ml_s = self._update_volume(dt_s, flow_raw, net_sign=-1.0) 
             removed = max(0.0, v_start - float(self.volume_ml))
             self._log_row(mode, dt_s, flow_raw, flow_ml_s, net_flow_ml_s=net_ml_s, pressure_channel=ch)
+            
             self._safety_check(mode)
             if removed >= target_volume_ml_to_remove: break
             time.sleep(float(self.cfg.sample_period_s))
 
         removed = max(0.0, v_start - float(self.volume_ml))
         self._log_row(mode, 0.0, float("nan"), 0.0, pressure_channel=ch, event=f"END_STEADY_STATE removed={removed:.4f}")
+
         return removed

@@ -11,6 +11,8 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib as mpl
 
+from src.utils.path_utils import project_root, resolve_under
+
 # Matplotlib Stealth-Konfiguration
 mpl.rcParams['toolbar'] = 'None'
 mpl.rcParams['font.family'] = 'Consolas'
@@ -134,7 +136,8 @@ class AnalysisFrame(Qtw.QWidget):
         ax.grid(True, color='#0F172A', linestyle='--', alpha=0.5)
 
     def _load_file(self):
-        file_path, _ = Qtw.QFileDialog.getOpenFileName(self, "LOAD PELLIKAN LOG", "logs", "CSV Files (*.csv)")
+        start_dir = str(resolve_under(project_root(__file__), "logs/runs"))
+        file_path, _ = Qtw.QFileDialog.getOpenFileName(self, "LOAD PELLIKAN LOG", start_dir, "CSV Files (*.csv)")
         if not file_path: return
 
         try:
@@ -148,35 +151,54 @@ class AnalysisFrame(Qtw.QWidget):
 
     def _update_view(self):
         if self.data is None: return
-        
-        # 1. Datenvorbereitung
-        cols = {c.lower(): c for c in self.data.columns}
-        t = self.data[cols.get('t_s', self.data.columns[1])]
-        p1 = self.data[cols.get('p1_meas', self.data.columns[4])]
-        p2 = self.data[cols.get('p2_meas', self.data.columns[5])]
-        flow = self.data[cols.get('flow', self.data.columns[3])]
 
-        # 2. Stats Board aktualisieren
+        # 1. Column lookup — supports both RunTelemetryStore (t_s) and MonitorTab (t) CSVs
+        cols = {c.lower(): c for c in self.data.columns}
+        t_col  = cols.get('t_s') or cols.get('t')
+        p1_col = cols.get('p1_meas')
+        p2_col = cols.get('p2_meas')
+        fl_col = cols.get('flow')
+
+        if not t_col or not fl_col or not p1_col:
+            Qtw.QMessageBox.warning(self, "FORMAT ERROR",
+                "Required columns (t_s/t, flow, p1_meas) not found.\n"
+                "Please load a PelliKAn telemetry CSV.")
+            return
+
+        # Force numeric — CSV stores formatted strings; coerce bad values to NaN
+        t    = pd.to_numeric(self.data[t_col],  errors='coerce')
+        p1   = pd.to_numeric(self.data[p1_col], errors='coerce')
+        p2   = pd.to_numeric(self.data[p2_col], errors='coerce') if p2_col else pd.Series(dtype=float)
+        flow = pd.to_numeric(self.data[fl_col], errors='coerce')
+
+        # 2. Stats Board — _clear_stats already adds a trailing stretch; don't add another
         self._clear_stats()
-        self.stats_lay.insertWidget(0, StatBox("Peak Pressure", f"{p1.max():.0f}", "mbar", "#EC4899"))
-        self.stats_lay.insertWidget(1, StatBox("Avg Flow", f"{flow.mean():.3f}", "mL/min", "#00E5FF"))
-        self.stats_lay.insertWidget(2, StatBox("Duration", f"{t.max()/60:.1f}", "min", "#8B5CF6"))
-        self.stats_lay.addStretch()
+        peak_p  = p1.max()
+        avg_f   = flow.mean()
+        dur_min = t.max() / 60.0
+        self.stats_lay.insertWidget(0, StatBox("Peak Pressure", f"{peak_p:.0f}"  if pd.notna(peak_p)  else "—", "mbar",   "#EC4899"))
+        self.stats_lay.insertWidget(1, StatBox("Avg Flow",      f"{avg_f:.3f}"   if pd.notna(avg_f)   else "—", "mL/min", "#00E5FF"))
+        self.stats_lay.insertWidget(2, StatBox("Duration",      f"{dur_min:.1f}" if pd.notna(dur_min) else "—", "min",    "#8B5CF6"))
 
         # 3. Plots zeichnen
         self.ax_p.clear()
         self.ax_f.clear()
 
-        # Druck-Plot
-        self.ax_p.plot(t, p1, color='#EC4899', linewidth=1.5, label='Main P1')
-        self.ax_p.plot(t, p2, color='#8B5CF6', linewidth=1.2, label='Backwash P2', linestyle='--')
-        self.ax_p.fill_between(t, p1, color='#EC4899', alpha=0.05)
+        valid = t.notna()
+        t_plot  = t[valid]
+        p1_plot = p1[valid]
+        p2_plot = p2[valid] if len(p2) else p2
+        fl_plot = flow[valid]
+
+        self.ax_p.plot(t_plot, p1_plot, color='#EC4899', linewidth=1.5, label='Main P1')
+        if len(p2_plot):
+            self.ax_p.plot(t_plot, p2_plot, color='#8B5CF6', linewidth=1.2, label='Backwash P2', linestyle='--')
+        self.ax_p.fill_between(t_plot, p1_plot, color='#EC4899', alpha=0.05)
         self._apply_ax_style(self.ax_p, "PRESSURE TELEMETRY (MBAR)")
         self.ax_p.legend(facecolor='#050914', edgecolor='#1E2937', fontsize=8)
 
-        # Flow-Plot
-        self.ax_f.plot(t, flow, color='#00E5FF', linewidth=1.5)
-        self.ax_f.fill_between(t, flow, color='#00E5FF', alpha=0.1)
+        self.ax_f.plot(t_plot, fl_plot, color='#00E5FF', linewidth=1.5)
+        self.ax_f.fill_between(t_plot, fl_plot, color='#00E5FF', alpha=0.1)
         self._apply_ax_style(self.ax_f, "FLOW DYNAMICS (ML/MIN)")
         self.ax_f.set_xlabel("TIME (S)", color='#475569', fontsize=8)
 
@@ -188,23 +210,38 @@ class AnalysisFrame(Qtw.QWidget):
         if not save_path: return
 
         try:
-            # Wir nutzen den "White-Mode" für den Export (Drucker-freundlich)
+            cols = {c.lower(): c for c in self.data.columns}
+            t_col  = cols.get('t_s') or cols.get('t')
+            p1_col = cols.get('p1_meas')
+            p2_col = cols.get('p2_meas')
+            fl_col = cols.get('flow')
+
+            if not t_col or not fl_col or not p1_col:
+                Qtw.QMessageBox.warning(self, "FORMAT ERROR", "Required columns not found for export.")
+                return
+
+            t    = pd.to_numeric(self.data[t_col],  errors='coerce')
+            p1   = pd.to_numeric(self.data[p1_col], errors='coerce')
+            p2   = pd.to_numeric(self.data[p2_col], errors='coerce') if p2_col else None
+            flow = pd.to_numeric(self.data[fl_col], errors='coerce')
+            valid = t.notna()
+
             with plt.style.context('default'):
                 fig_print = plt.figure(figsize=(8.5, 11))
-                fig_print.suptitle(f"PELLIKAN OS // FILTRATION REPORT\nFile: {os.path.basename(self.current_file_path)}", 
-                                 fontsize=14, fontweight='bold', fontfamily='monospace')
+                fig_print.suptitle(f"PELLIKAN OS // FILTRATION REPORT\nFile: {os.path.basename(self.current_file_path)}",
+                                   fontsize=14, fontweight='bold', fontfamily='monospace')
 
                 ax1 = fig_print.add_subplot(211)
                 ax2 = fig_print.add_subplot(212)
 
-                t = self.data.iloc[:, 1] # t_s
-                ax1.plot(t, self.data['p1_meas'], color='#EC4899', label='P1 Main')
-                ax1.plot(t, self.data['p2_meas'], color='#8B5CF6', label='P2 Backwash', linestyle='--')
+                ax1.plot(t[valid], p1[valid], color='#EC4899', label='P1 Main')
+                if p2 is not None:
+                    ax1.plot(t[valid], p2[valid], color='#8B5CF6', label='P2 Backwash', linestyle='--')
                 ax1.set_ylabel("Pressure (mbar)")
                 ax1.grid(True, alpha=0.2)
                 ax1.legend()
 
-                ax2.plot(t, self.data['flow'], color='#0284C7')
+                ax2.plot(t[valid], flow[valid], color='#0284C7')
                 ax2.set_ylabel("Flow Rate (mL/min)")
                 ax2.set_xlabel("Time (s)")
                 ax2.grid(True, alpha=0.2)

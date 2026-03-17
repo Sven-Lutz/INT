@@ -21,13 +21,11 @@ logger = logging.getLogger(__name__)
 def ts_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
-
 def _safe_json(x: Any) -> str:
     try:
         return json.dumps(x, ensure_ascii=False, separators=(",", ":"), default=str)
     except Exception:
         return json.dumps(str(x), ensure_ascii=False, separators=(",", ":"))
-
 
 def _as_plain(obj: Any) -> Any:
     if obj is None:

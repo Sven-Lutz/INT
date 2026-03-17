@@ -46,7 +46,7 @@ class EliteMonitorTab(Qtw.QFrame):
         root.setSpacing(2)
 
         # --- PLOT CONFIGURATION ---
-        pg.setConfigOptions(antialias=True, useOpenGL=True) # OpenGL für maximale Performance
+        pg.setConfigOptions(antialias=True)
         
         # 1. Plot für Druck (P1 & P2)
         self.plot_p = pg.PlotWidget()
@@ -119,6 +119,11 @@ class EliteMonitorTab(Qtw.QFrame):
             self._flow.clear()
             self._p1.clear()
             self._p2.clear()
+            self.curve_flow.setData([], [])
+            self.curve_p1.setData([], [])
+            self.curve_p2.setData([], [])
+            self.plot_p.setXRange(0, 60)
+            self.plot_flow.setXRange(0, 60)
 
             self.lbl_status.setText("● RECORDING LIVE DATA")
             self.lbl_status.setStyleSheet("color: #FF1744; font-family: 'Consolas'; font-size: 9px; font-weight: bold;")
@@ -137,30 +142,42 @@ class EliteMonitorTab(Qtw.QFrame):
 
     @Slot(dict)
     def ingest_telemetry(self, payload: dict) -> None:
-        raw_t = payload.get("t", time.time())
-        if self._t0 is None: self._t0 = raw_t
-        
+        raw_t = payload.get("t", time.monotonic())
+        if self._t0 is None:
+            self._t0 = raw_t
+            self.plot_p.setXRange(0, 60)
+            self.plot_flow.setXRange(0, 60)
+
         ts = raw_t - self._t0
+
+        # Monotonic guard: never go backwards in time
+        if self._t and ts <= self._t[-1]:
+            ts = self._t[-1] + 0.005
+
         flow = _to_float(payload.get("flow"))
-        p1 = _to_float(payload.get("p1_meas"))
-        p2 = _to_float(payload.get("p2_meas"))
-        
-        # Daten in Deques schieben
+        p1   = _to_float(payload.get("p1_meas"))
+        p2   = _to_float(payload.get("p2_meas"))
+
         self._t.append(ts)
         self._flow.append(_nan(flow))
         self._p1.append(_nan(p1))
         self._p2.append(_nan(p2))
 
-        # Plots aktualisieren (direkt von den Deques)
-        self.curve_flow.setData(list(self._t), list(self._flow))
-        self.curve_p1.setData(list(self._t), list(self._p1))
-        self.curve_p2.setData(list(self._t), list(self._p2))
-
-        # CSV Writing
+        # CSV write
         if self._csv_w and self._csv_fp:
-            step = str(payload.get("step", "—"))
+            step   = str(payload.get("step",   "—"))
             valves = str(payload.get("valves", "—"))
             self._csv_w.writerow([raw_t, f"{ts:.3f}", step, flow, p1, p2, valves])
+
+        # Scrolling x-axis after 60 s
+        if ts > 60:
+            self.plot_p.setXRange(ts - 60, ts)
+            self.plot_flow.setXRange(ts - 60, ts)
+
+        t_list = list(self._t)
+        self.curve_flow.setData(t_list, list(self._flow))
+        self.curve_p1.setData(t_list, list(self._p1))
+        self.curve_p2.setData(t_list, list(self._p2))
 
 def _to_float(x: Any) -> Optional[float]:
     try: return float(x) if x is not None else None
