@@ -36,11 +36,13 @@ class TopFrame(QFrame):
         card = QFrame()
         card.setObjectName("MetricCard")
         card.setStyleSheet(f"""
-            QFrame#MetricCard {{ 
+            QFrame#MetricCard {{
                 background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #111827, stop:1 #050914);
-                border: 1px solid #1E293B; 
-                border-radius: 6px; 
                 border-top: 3px solid {color};
+                border-right: 1px solid #1E293B;
+                border-bottom: 1px solid #1E293B;
+                border-left: 1px solid #1E293B;
+                border-radius: 6px;
             }}
         """)
         lay = QVBoxLayout(card)

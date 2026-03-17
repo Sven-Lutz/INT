@@ -1196,7 +1196,19 @@ class MainWindow(Qtw.QMainWindow):
         t_elapsed = now - self._rt_t0
 
         dev = getattr(self, 'dev', None)
-        if dev is None: return
+        if dev is None:
+            # Simulation mode: push a zero-value sample so displays stay alive
+            sample = {
+                "t": t_elapsed, "p1_meas": 0.0, "p2_meas": 0.0,
+                "flow": 0.0, "valves": "SIMULATION", "step": "IDLE",
+                "pressure": {
+                    1: {"meas": 0.0, "set": 0.0},
+                    2: {"meas": 0.0, "set": 0.0},
+                },
+            }
+            if hasattr(self, "top"): self.top.update_telemetry(sample)
+            if hasattr(self, "right"): self.right.update_telemetry(sample)
+            return
 
         try:
             raw_flow = dev.read_flow()
