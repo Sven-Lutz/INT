@@ -13,7 +13,6 @@ from src.hardware.drivers.elveflow import (
     Elveflow_Calibration_Save,
 )
 
-# --------- CONFIG (edit if needed) ---------
 DEVICE = "ASRL10::INSTR"
 REGS = (5, 0, 0, 0)
 

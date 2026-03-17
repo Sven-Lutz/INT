@@ -22,7 +22,7 @@ from PySide6.QtWidgets import QMessageBox, QGraphicsOpacityEffect
 
 from src.gui.data.worker import ExperimentConfig
 from src.gui.data import ExperimentWorker, RunParams, worker
-from src.gui.monitor.server import MonitorServer # 🚀 DEIN SERVER IST ZURÜCK!
+from src.gui.monitor.server import MonitorServer
 from src.gui.health import HealthEvaluator, HealthRules
 from src.gui.style.theme import apply_theme
 from src.utils.config_manager import ConfigManager
@@ -39,7 +39,6 @@ MAIN_CH = 1
 BACKWASH_CH = 2
 
 def _unwrap_sensor(val) -> float:
-    """Entpackt Elveflow-Tupel wie (error_code, value) zu einem reinen Float."""
     if val is None: return 0.0
     if isinstance(val, (list, tuple)):
         return float(val[-1])
@@ -492,6 +491,9 @@ class MainWindow(Qtw.QMainWindow):
         self.central_bg.setMouseTracking(True)
         self.setCentralWidget(self.central_bg)
 
+        # 🚀 DER HARDWARE-MUTEX: Verhindert, dass Threads gleichzeitig den Port abschießen
+        self._hw_mutex = threading.RLock()
+
         self.master_grid = Qtw.QGridLayout(self.central_bg)
         self.master_grid.setContentsMargins(0, 0, 0, 0)
 
@@ -783,7 +785,6 @@ class MainWindow(Qtw.QMainWindow):
             worker.telemetry.connect(self.right.update_telemetry) 
             worker.loss_updated.connect(self.top.set_loss_ml)
 
-            # 🚀 FIX: Daten an Monitor Server flushen
             if self.monitor is not None:
                 worker.status.connect(self.monitor.update_status)
                 worker.step_changed.connect(self.monitor.update_step)
@@ -810,7 +811,6 @@ class MainWindow(Qtw.QMainWindow):
 
     @Slot(dict)
     def _push_worker_telemetry_to_monitor(self, sample: dict):
-        """Sendet die schnellen Live-Daten des Workers an den Monitor-Server."""
         if not self.monitor: return
         pressures = sample.get("pressure", {})
         p1_data = pressures.get(1, pressures.get("1", {}))
@@ -964,18 +964,20 @@ class MainWindow(Qtw.QMainWindow):
         self._safe_state_forced = True
         self._update_health_banner()
         if self.dev is None: return
-        try:
-            fn = getattr(self.dev, "vent_all", None)
-            if callable(fn):
-                fn()
-                return
-        except Exception: pass
-        try: self._dev_set_pressure_setpoint_best_effort(channel=MAIN_CH, value_mbar=0.0, ramp=True)
-        except Exception: pass
-        try: self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=0.0, ramp=True)
-        except Exception: pass
-        try: self._dev_set_valve_state("VENTING")
-        except Exception: pass
+        
+        with self._hw_mutex:
+            try:
+                fn = getattr(self.dev, "vent_all", None)
+                if callable(fn):
+                    fn()
+                    return
+            except Exception: pass
+            try: self._dev_set_pressure_setpoint_best_effort(channel=MAIN_CH, value_mbar=0.0, ramp=True)
+            except Exception: pass
+            try: self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=0.0, ramp=True)
+            except Exception: pass
+            try: self._dev_set_valve_state("VENTING")
+            except Exception: pass
 
     def _hold_is_allowed_now(self) -> bool:
         if not self._experiment_running(): return True
@@ -1100,7 +1102,6 @@ class MainWindow(Qtw.QMainWindow):
         elif self._hold_active:
             self._schedule_hold_setpoint_push()
 
-    # 🚀 FIX: Hold-Aktionen blockieren jetzt NICHT mehr das UI!
     def _begin_manual_hold(self) -> None:
         self._hold_active = True
         self._render_manual_state(reason="hold_down")
@@ -1125,7 +1126,6 @@ class MainWindow(Qtw.QMainWindow):
         except Exception: pass
         if self._hold_active: self._end_manual_hold()
 
-    # 🚀 FIX: HW-Befehle im Hintergrund-Thread (Hardware-Deadlock beheben)
     def _hold_begin_actions(self) -> None:
         p = self._ui_backwash_pressure_mbar()
         if self._experiment_running():
@@ -1135,16 +1135,17 @@ class MainWindow(Qtw.QMainWindow):
             threading.Thread(target=self._bg_hw_hold_start, args=(p,), daemon=True).start()
 
     def _bg_hw_hold_start(self, p: float):
-        dev = getattr(self, 'dev', None)
-        if dev is not None:
-            try:
-                if hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
-                if hasattr(dev, "valves_backwash"): dev.valves_backwash()
-                elif hasattr(dev, "set_valve_state"): dev.set_valve_state("BACKWASH")
-                else: logger.error("HW ERROR: No backwash method found on device")
-            except Exception as e:
-                logger.error(f"HW VALVE ERROR: {e}")
-        self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=p)
+        with self._hw_mutex:
+            dev = getattr(self, 'dev', None)
+            if dev is not None:
+                try:
+                    if hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
+                    if hasattr(dev, "valves_backwash"): dev.valves_backwash()
+                    elif hasattr(dev, "set_valve_state"): dev.set_valve_state("BACKWASH")
+                    else: logger.error("HW ERROR: No backwash method found on device")
+                except Exception as e:
+                    logger.error(f"HW VALVE ERROR: {e}")
+            self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=p)
 
     def _hold_end_actions(self) -> None:
         if self._experiment_running():
@@ -1154,15 +1155,16 @@ class MainWindow(Qtw.QMainWindow):
             threading.Thread(target=self._bg_hw_hold_stop, daemon=True).start()
 
     def _bg_hw_hold_stop(self):
-        self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=0.0)
-        dev = getattr(self, 'dev', None)
-        if dev is not None:
-            try:
-                if hasattr(dev, "all_shut"): dev.all_shut()
-                elif hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
-                elif hasattr(dev, "set_valve_state"): dev.set_valve_state("ALL_SHUT")
-            except Exception as e:
-                logger.error(f"HW VALVE ERROR: {e}")
+        with self._hw_mutex:
+            self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=0.0)
+            dev = getattr(self, 'dev', None)
+            if dev is not None:
+                try:
+                    if hasattr(dev, "all_shut"): dev.all_shut()
+                    elif hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
+                    elif hasattr(dev, "set_valve_state"): dev.set_valve_state("ALL_SHUT")
+                except Exception as e:
+                    logger.error(f"HW VALVE ERROR: {e}")
 
     def _schedule_hold_setpoint_push(self, *args) -> None:
         if self._hold_active and not self._hold_setpoint_timer.isActive():
@@ -1174,7 +1176,8 @@ class MainWindow(Qtw.QMainWindow):
         if self._experiment_running() and self._worker:
             self._worker_hold_update_pressure_best_effort(self._worker, p)
         else:
-            self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=p)
+            with self._hw_mutex:
+                self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=p)
 
     def _worker_hold_start_best_effort(self, w, p) -> None:
         fn = getattr(w, "start_backwash_hold", None)
@@ -1193,26 +1196,20 @@ class MainWindow(Qtw.QMainWindow):
         try:
             self.monitor = MonitorServer(host=str(self.config.get("monitor_host", "0.0.0.0")), port=int(self.config.get("monitor_port", 8765)))
             self.monitor.start()
-            
-            # 🚀 FIX: 2 Sekunden nach Start druckt die Maschine den Link ins Terminal!
             QTimer.singleShot(2000, self._print_monitor_url)
         except Exception:
             self.monitor = None
 
     def _print_monitor_url(self):
         mon = self.monitor
-        # Pylance liebt explizite 'is not None' Checks
         if mon is not None and hasattr(mon, "url"):
             link = mon.url()
             try:
                 self.right.append_log("TELEMETRY SERVER ONLINE:", "#10B981")
                 self.right.append_log(f"-> {link}", "#00E5FF")
-                
-                # 🚀 NEU: Link an das linke Frame für den QR-Code schicken
                 if hasattr(self, "left") and hasattr(self.left, "update_server_url"):
                     self.left.update_server_url(link)
-            except Exception: 
-                pass
+            except Exception: pass
 
     # ═══════════════════════════════════════════════════════════════════
     # _poll_realtime — uses cached hw values; reads happen off main thread
@@ -1258,7 +1255,6 @@ class MainWindow(Qtw.QMainWindow):
         if hasattr(self, "top"): self.top.update_telemetry(sample)
         if hasattr(self, "right"): self.right.update_telemetry(sample)
         
-        # 🚀 FIX: Daten an Monitor Server flushen!
         if self.monitor:
             self.monitor.update_metrics(flow=f_val, p1_meas=p1_val, p2_meas=p2_val, valves=v_val)
 
@@ -1267,32 +1263,32 @@ class MainWindow(Qtw.QMainWindow):
             threading.Thread(target=self._do_hw_poll_bg, daemon=True).start()
 
     def _do_hw_poll_bg(self) -> None:
-        """Background thread: reads hardware without blocking the Qt main thread."""
         dev = getattr(self, 'dev', None)
         p1, p2, flow, valves = 0.0, 0.0, 0.0, "UNKNOWN"
 
         if dev is not None:
-            try:
-                flow = _unwrap_sensor(dev.read_flow())
-            except Exception as e:
-                logger.warning("HW ERROR (Flow): %s - %s", type(e).__name__, e)
+            with self._hw_mutex:
+                try:
+                    flow = _unwrap_sensor(dev.read_flow())
+                except Exception as e:
+                    logger.warning("HW ERROR (Flow): %s - %s", type(e).__name__, e)
 
-            try:
-                if hasattr(dev, "get_pressure_mbar"):
-                    p1 = _unwrap_sensor(dev.get_pressure_mbar(1))
-                    p2 = _unwrap_sensor(dev.get_pressure_mbar(2))
-                elif hasattr(dev, "get_pressure"):
-                    p1 = _unwrap_sensor(dev.get_pressure(1))
-                    p2 = _unwrap_sensor(dev.get_pressure(2))
-            except Exception as e:
-                logger.warning("HW ERROR (Pressure): %s - %s", type(e).__name__, e)
+                try:
+                    if hasattr(dev, "get_pressure_mbar"):
+                        p1 = _unwrap_sensor(dev.get_pressure_mbar(1))
+                        p2 = _unwrap_sensor(dev.get_pressure_mbar(2))
+                    elif hasattr(dev, "get_pressure"):
+                        p1 = _unwrap_sensor(dev.get_pressure(1))
+                        p2 = _unwrap_sensor(dev.get_pressure(2))
+                except Exception as e:
+                    logger.warning("HW ERROR (Pressure): %s - %s", type(e).__name__, e)
 
-            try:
-                fn_valve = getattr(dev, "get_valve_state", getattr(dev, "get_state", None))
-                if callable(fn_valve):
-                    valves = str(fn_valve())
-            except Exception:
-                pass
+                try:
+                    fn_valve = getattr(dev, "get_valve_state", getattr(dev, "get_state", None))
+                    if callable(fn_valve):
+                        valves = str(fn_valve())
+                except Exception:
+                    pass
 
         with self._rt_hw_lock:
             self._rt_p1 = p1
