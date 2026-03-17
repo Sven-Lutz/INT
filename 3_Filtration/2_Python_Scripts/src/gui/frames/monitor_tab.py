@@ -60,12 +60,12 @@ class EliteMonitorTab(Qtw.QFrame):
         self.plot_flow.setXLink(self.plot_p)
 
         # --- CURVES & GRADIENTS ---
-        # Flow Curve (Neon Pink)
+        # Flow Curve (Neon Pink) with fill to y=0
         pen_flow = pg.mkPen(color='#EC4899', width=2)
-        self.curve_flow = self.plot_flow.plot(pen=pen_flow, name="Flow")
-        # Subtiler Glow/Fill für Flow
-        fill_flow = pg.FillBetweenItem(self.plot_flow.plot(), self.curve_flow, brush=QColor(236, 72, 153, 20))
-        self.plot_flow.addItem(fill_flow)
+        self.curve_flow = self.plot_flow.plot(
+            pen=pen_flow, name="Flow",
+            fillLevel=0, fillBrush=QColor(236, 72, 153, 20),
+        )
 
         # P1 Curve (Purple)
         pen_p1 = pg.mkPen(color='#8B5CF6', width=2)
@@ -103,8 +103,8 @@ class EliteMonitorTab(Qtw.QFrame):
         pw.getAxis('bottom').setLabel("Time", units="s", color='#94A3B8', **{'font-size': '8pt'})
         pw.getAxis('left').setTickFont(QFont("Consolas", 7))
         pw.getAxis('bottom').setTickFont(QFont("Consolas", 7))
-        # Verhindert Zittern der Achsen
-        pw.getViewBox().setLimits(minXRange=5)
+        # Verhindert Zittern der Achsen und Zoom in winzige Wertebereiche
+        pw.getViewBox().setLimits(minXRange=5, minYRange=1)
 
     def start_logging(self, run_name_prefix: str = "run") -> None:
         ts = time.strftime("%Y%m%d_%H%M%S")
@@ -136,6 +136,17 @@ class EliteMonitorTab(Qtw.QFrame):
             self._csv_fp.close()
             self._csv_fp = None
             self._csv_w = None
+        # Reset plot state so idle telemetry starts fresh
+        self._t0 = None
+        self._t.clear()
+        self._flow.clear()
+        self._p1.clear()
+        self._p2.clear()
+        self.curve_flow.setData([], [])
+        self.curve_p1.setData([], [])
+        self.curve_p2.setData([], [])
+        self.plot_p.setXRange(0, 60)
+        self.plot_flow.setXRange(0, 60)
         self.lbl_status.setText("📡 TELEMETRY: IDLE")
         self.lbl_status.setStyleSheet("color: #64748B; font-family: 'Consolas'; font-size: 9px; font-weight: bold;")
         self.lbl_path.setText("")
@@ -180,7 +191,12 @@ class EliteMonitorTab(Qtw.QFrame):
         self.curve_p2.setData(t_list, list(self._p2))
 
 def _to_float(x: Any) -> Optional[float]:
-    try: return float(x) if x is not None else None
+    try:
+        if x is None: return None
+        v = float(x)
+        # Filter inf and NaN — pyqtgraph renders NaN as a gap, inf causes axis blowup
+        if v != v or v in (float("inf"), float("-inf")): return None
+        return v
     except: return None
 
 def _nan(x: Optional[float]) -> float:

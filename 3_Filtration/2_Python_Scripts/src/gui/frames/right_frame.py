@@ -46,7 +46,7 @@ class ReactorSphereWidget(QFrame):
         elif "BACKWASH" in phase_up:
             self._color = QColor("#EC4899")  # Pink (Rückspülung)
         else:
-            self._color = QColor("#334155")  # Slate (Idle)
+            self._color = QColor("#0EA5E9")  # Sky Blue (Idle)
 
         self.update()
 
@@ -197,6 +197,7 @@ class TrapezoidWidget(QFrame):
         # Leicht versetzt oben rechts vom Punkt
         p.drawText(QPointF(dot_x + 10, dot_y - 10), f"{int(self._current_p)}")
 
+
         # 5. TITEL
         p.setPen(QColor("#94A3B8"))
         p.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
@@ -246,6 +247,7 @@ class RightFrame(QFrame):
         """)
 
         tab_viz = QWidget()
+        tab_viz.setStyleSheet("background-color: #050914;")
         viz_lay = QHBoxLayout(tab_viz)
         self.sandglass = ReactorSphereWidget()
         self.trapezoid = TrapezoidWidget()
@@ -429,39 +431,32 @@ class RightFrame(QFrame):
         self.trapezoid.set_pressure(p1, max_p)
 
         # ════════════════════════════════════════════════════════════════════
-        # 🚀 DIGITAL TWIN LOGIC: Physikalisches Füllvolumen der Kugel
+        # DIGITAL TWIN LOGIC: Physikalisches Füllvolumen der Kugel
         # Die Membran liegt exakt bei 0.50 (50%).
+        # Actual step names from worker: FILLING, FILTRATION, VENTING,
+        # BACKWASH_INITIAL, BACKWASH_HOLD, BACKWASH_FINAL, FINISHED, ABORTED
         # ════════════════════════════════════════════════════════════════════
-        if "0" in step or "FILL" in step:
-            # Zelle wird mit V_BNNT + V_H2O gefüllt.
-            # Rest nach oben ist Luft (ca 80% Füllstand visuell)
+        if step == "FILLING":
+            # Phase 0: Backflush füllt die Zelle von unten auf.
             target_fill = 0.80
 
-        elif "A" in step:
-            # Rampe baut Druck auf. Wasser wird durch die Membran gepresst.
-            # Flüssigkeit sinkt von 80% in Richtung 50%.
+        elif step == "FILTRATION":
+            # Filtrationsphasen (A, B1, B2, C): Druck presst Wasser durch Membran.
+            # Visuell sinkt Füllstand von 80% auf 50% proportional zum Druck.
             p_ratio = min(1.0, max(0.0, p1 / max_p)) if max_p > 0 else 0.0
             target_fill = 0.80 - (p_ratio * 0.30)
 
-        elif "B1" in step or ("B" in step and "2" not in step):
-            # Phase B1: Zieldruck erreicht, wir pressen weiter bis zur Membran.
-            target_fill = 0.50
-
-        elif "B2" in step:
-            # Phase B2: Extra-Trocknung (V_extra).
-            # Flüssigkeit verschwindet unter die Membran in den unteren Bereich.
-            target_fill = 0.40
-
-        elif "C" in step or "VENT" in step:
-            # Phase C: Ramp Down / Venting. Restwasser wird verdrängt (V_rd).
+        elif step == "VENTING":
+            # Druckabbau: Restwasser wird verdrängt, Füllstand sinkt deutlich.
             target_fill = 0.30
 
         elif "BACKWASH" in step:
-            # Backwash drückt Flüssigkeit von unten durch die Membran nach oben.
+            # BACKWASH_INITIAL / BACKWASH_HOLD / BACKWASH_FINAL:
+            # Drückt Flüssigkeit von unten durch die Membran nach oben.
             target_fill = 0.85
 
         else:
-            # IDLE: Grundzustand. Unter der Membran voll, drüber leer.
+            # IDLE, FINISHED, ABORTED: Grundzustand, Membranmitte.
             target_fill = 0.50
 
             # Sende Ziel-Volumen an die Sphäre
