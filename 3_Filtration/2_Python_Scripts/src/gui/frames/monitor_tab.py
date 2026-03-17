@@ -51,10 +51,14 @@ class EliteMonitorTab(Qtw.QFrame):
         # 1. Plot für Druck (P1 & P2)
         self.plot_p = pg.PlotWidget()
         self._style_plot(self.plot_p, "PRESSURE TELEMETRY", "mbar")
-        
+        self.plot_p.setXRange(0, 60)
+        self.plot_p.setYRange(-50, 2500)
+
         # 2. Plot für Flussrate
         self.plot_flow = pg.PlotWidget()
         self._style_plot(self.plot_flow, "FLOW DYNAMICS", "mL/min")
+        self.plot_flow.setXRange(0, 60)
+        self.plot_flow.setYRange(-2, 60)
 
         # Verknüpfung der X-Achsen (Zooming/Panning synchronisiert)
         self.plot_flow.setXLink(self.plot_p)
@@ -103,8 +107,9 @@ class EliteMonitorTab(Qtw.QFrame):
         pw.getAxis('bottom').setLabel("Time", units="s", color='#94A3B8', **{'font-size': '8pt'})
         pw.getAxis('left').setTickFont(QFont("Consolas", 7))
         pw.getAxis('bottom').setTickFont(QFont("Consolas", 7))
-        # Verhindert Zittern der Achsen und Zoom in winzige Wertebereiche
-        pw.getViewBox().setLimits(minXRange=5, minYRange=1)
+        # Disable auto-range: we set ranges manually to prevent wild rescaling on real hardware
+        pw.enableAutoRange(False)
+        pw.getViewBox().setLimits(minXRange=5, minYRange=10)
 
     def start_logging(self, run_name_prefix: str = "run") -> None:
         ts = time.strftime("%Y%m%d_%H%M%S")
@@ -123,7 +128,9 @@ class EliteMonitorTab(Qtw.QFrame):
             self.curve_p1.setData([], [])
             self.curve_p2.setData([], [])
             self.plot_p.setXRange(0, 60)
+            self.plot_p.setYRange(-50, 2500)
             self.plot_flow.setXRange(0, 60)
+            self.plot_flow.setYRange(-2, 60)
 
             self.lbl_status.setText("● RECORDING LIVE DATA")
             self.lbl_status.setStyleSheet("color: #FF1744; font-family: 'Consolas'; font-size: 9px; font-weight: bold;")
@@ -146,7 +153,9 @@ class EliteMonitorTab(Qtw.QFrame):
         self.curve_p1.setData([], [])
         self.curve_p2.setData([], [])
         self.plot_p.setXRange(0, 60)
+        self.plot_p.setYRange(-50, 2500)
         self.plot_flow.setXRange(0, 60)
+        self.plot_flow.setYRange(-2, 60)
         self.lbl_status.setText("📡 TELEMETRY: IDLE")
         self.lbl_status.setStyleSheet("color: #64748B; font-family: 'Consolas'; font-size: 9px; font-weight: bold;")
         self.lbl_path.setText("")

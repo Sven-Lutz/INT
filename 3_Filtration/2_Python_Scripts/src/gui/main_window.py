@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 import random
 import math
@@ -550,6 +551,8 @@ class MainWindow(Qtw.QMainWindow):
         self._last_error_full = ""
         self._safe_state_forced = False
         self._rt_p1 = self._rt_p2 = self._rt_flow = self._rt_valves = None
+        self._rt_hw_lock = threading.Lock()
+        self._rt_hw_reading = False
         self._p1_hist: Deque[Tuple[float, float]] = deque(maxlen=256)
         self._p2_hist: Deque[Tuple[float, float]] = deque(maxlen=256)
         self._last_trend_mode: Tuple[bool, bool, str, str] = (False, False, "—", "—")
@@ -1184,7 +1187,7 @@ class MainWindow(Qtw.QMainWindow):
             self.monitor = None
 
     # ═══════════════════════════════════════════════════════════════════
-    # FIX 4: _poll_realtime — jeder Hardware-Read einzeln abgesichert
+    # _poll_realtime — uses cached hw values; reads happen off main thread
     # ═══════════════════════════════════════════════════════════════════
     def _poll_realtime(self) -> None:
         if getattr(self, '_is_booting', False): return
@@ -1210,37 +1213,12 @@ class MainWindow(Qtw.QMainWindow):
             if hasattr(self, "right"): self.right.update_telemetry(sample)
             return
 
-        try:
-            raw_flow = dev.read_flow()
-            self._rt_flow = _unwrap_sensor(raw_flow)
-        except Exception as e:
-            self._rt_flow = 0.0
-            logger.warning("HW ERROR (Flow): %s - %s", type(e).__name__, e)
-
-        try:
-            if hasattr(dev, "get_pressure_mbar"):
-                self._rt_p1 = _unwrap_sensor(dev.get_pressure_mbar(1))
-                self._rt_p2 = _unwrap_sensor(dev.get_pressure_mbar(2))
-            elif hasattr(dev, "get_pressure"):
-                self._rt_p1 = _unwrap_sensor(dev.get_pressure(1))
-                self._rt_p2 = _unwrap_sensor(dev.get_pressure(2))
-            else:
-                self._rt_p1 = 0.0; self._rt_p2 = 0.0
-        except Exception as e:
-            self._rt_p1 = 0.0; self._rt_p2 = 0.0
-            logger.warning("HW ERROR (Pressure): %s - %s", type(e).__name__, e)
-
-        try:
-            if hasattr(dev, "get_valve_state"): self._rt_valves = str(dev.get_valve_state())
-            elif hasattr(dev, "get_state"): self._rt_valves = str(dev.get_state())
-            else: self._rt_valves = "UNKNOWN"
-        except Exception:
-            self._rt_valves = "UNKNOWN"
-
-        p1_val = getattr(self, '_rt_p1', 0.0)
-        p2_val = getattr(self, '_rt_p2', 0.0)
-        f_val = getattr(self, '_rt_flow', 0.0)
-        v_val = getattr(self, '_rt_valves', "UNKNOWN")
+        # Build sample from last cached values (written by background thread)
+        with self._rt_hw_lock:
+            p1_val = float(self._rt_p1) if self._rt_p1 is not None else 0.0
+            p2_val = float(self._rt_p2) if self._rt_p2 is not None else 0.0
+            f_val  = float(self._rt_flow) if self._rt_flow is not None else 0.0
+            v_val  = str(self._rt_valves) if self._rt_valves is not None else "UNKNOWN"
 
         sample = {
             "t": t_elapsed, "p1_meas": p1_val, "p2_meas": p2_val,
@@ -1250,10 +1228,51 @@ class MainWindow(Qtw.QMainWindow):
                 2: {"meas": p2_val, "set": 0.0}
             }
         }
-        
+
         if hasattr(self, "top"): self.top.update_telemetry(sample)
         update_web_telemetry(sample)
         if hasattr(self, "right"): self.right.update_telemetry(sample)
+
+        # Kick off a background hardware read (non-blocking for main thread)
+        if not self._rt_hw_reading:
+            self._rt_hw_reading = True
+            threading.Thread(target=self._do_hw_poll_bg, daemon=True).start()
+
+    def _do_hw_poll_bg(self) -> None:
+        """Background thread: reads hardware without blocking the Qt main thread."""
+        dev = getattr(self, 'dev', None)
+        p1, p2, flow, valves = 0.0, 0.0, 0.0, "UNKNOWN"
+
+        if dev is not None:
+            try:
+                flow = _unwrap_sensor(dev.read_flow())
+            except Exception as e:
+                logger.warning("HW ERROR (Flow): %s - %s", type(e).__name__, e)
+
+            try:
+                if hasattr(dev, "get_pressure_mbar"):
+                    p1 = _unwrap_sensor(dev.get_pressure_mbar(1))
+                    p2 = _unwrap_sensor(dev.get_pressure_mbar(2))
+                elif hasattr(dev, "get_pressure"):
+                    p1 = _unwrap_sensor(dev.get_pressure(1))
+                    p2 = _unwrap_sensor(dev.get_pressure(2))
+            except Exception as e:
+                logger.warning("HW ERROR (Pressure): %s - %s", type(e).__name__, e)
+
+            try:
+                if hasattr(dev, "get_valve_state"):
+                    valves = str(dev.get_valve_state())
+                elif hasattr(dev, "get_state"):
+                    valves = str(dev.get_state())
+            except Exception:
+                pass
+
+        with self._rt_hw_lock:
+            self._rt_p1 = p1
+            self._rt_p2 = p2
+            self._rt_flow = flow
+            self._rt_valves = valves
+            self._rt_hw_reading = False
 
     def _construct_frame(self, cls, config):
         try: return cls(config)

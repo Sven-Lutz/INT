@@ -38,6 +38,7 @@ class DeviceManager:
         
         self.pressure_controller: Optional[PressureController] = None
         self.flow_sensor: Optional[FlowSensor] = None
+        self._setpoints: dict = {1: 0.0, 2: 0.0}
 
         if self.opts.simulate:
             return
@@ -106,6 +107,7 @@ class DeviceManager:
     def set_pressure_setpoint_mbar(self, *, channel: int, setpoint_mbar: float, ramp: bool = True) -> None:
         pc = self._require_pressure()
         phys_ch = self._get_physical_channel(channel)
+        self._setpoints[int(channel)] = float(setpoint_mbar)
         try:
             pc.set_pressure_mbar(phys_ch, float(setpoint_mbar))
         except Exception: pass
@@ -122,7 +124,7 @@ class DeviceManager:
             return 0.0
 
     def get_pressure_setpoint_mbar(self, channel: int) -> float:
-        return self.get_pressure_mbar(channel)
+        return self._setpoints.get(int(channel), 0.0)
 
     # FIX 2: Kein _require_flow() mehr — gibt 0.0 zurück wenn Sensor fehlt
     def read_flow(self) -> float:
