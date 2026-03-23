@@ -1263,29 +1263,32 @@ class MainWindow(Qtw.QMainWindow):
 
         if dev is not None:
             with self._hw_mutex:
+                # 1. FLOW SENSOR
                 try:
-                    flow_obj = getattr(dev, "flow", dev)
-                    if hasattr(flow_obj, "get_flow"):
-                        flow = _unwrap_sensor(flow_obj.get_flow())
-                    elif hasattr(flow_obj, "read_flow"):
-                        flow = _unwrap_sensor(flow_obj.read_flow())
+                    if hasattr(dev, "read_flow"):
+                        flow = _unwrap_sensor(dev.read_flow())
+                    elif hasattr(dev, "get_flow"):
+                        flow = _unwrap_sensor(dev.get_flow())
                 except Exception as e:
                     logger.warning(f"HW ERROR (Flow): {e}")
 
+                # 2. PRESSURE CONTROLLER
                 try:
-                    press_obj = getattr(dev, "pressure", dev)
-                    if hasattr(press_obj, "get_pressure_mbar"):
-                        p1 = _unwrap_sensor(press_obj.get_pressure_mbar(1))
-                        p2 = _unwrap_sensor(press_obj.get_pressure_mbar(2))
-                    elif hasattr(press_obj, "get_pressure"):
-                        p1 = _unwrap_sensor(press_obj.get_pressure(1))
-                        p2 = _unwrap_sensor(press_obj.get_pressure(2))
+                    if hasattr(dev, "get_pressure_mbar"):
+                        p1 = _unwrap_sensor(dev.get_pressure_mbar(1))
+                        p2 = _unwrap_sensor(dev.get_pressure_mbar(2))
+                    elif hasattr(dev, "get_pressure"):
+                        p1 = _unwrap_sensor(dev.get_pressure(1))
+                        p2 = _unwrap_sensor(dev.get_pressure(2))
+                    elif hasattr(dev, "read_pressure"):
+                        p1 = _unwrap_sensor(dev.read_pressure(1))
+                        p2 = _unwrap_sensor(dev.read_pressure(2))
                 except Exception as e:
                     logger.warning(f"HW ERROR (Pressure): {e}")
 
+                # 3. VALVES
                 try:
-                    valve_obj = getattr(dev, "valves", getattr(dev, "relais", dev))
-                    fn_valve = getattr(valve_obj, "get_state", getattr(valve_obj, "get_valve_state", None))
+                    fn_valve = getattr(dev, "get_valve_state", getattr(dev, "get_state", None))
                     if callable(fn_valve):
                         valves = str(fn_valve())
                 except Exception:
