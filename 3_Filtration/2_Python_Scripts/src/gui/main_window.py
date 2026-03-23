@@ -439,28 +439,27 @@ class PelicanHUD(Qtw.QWidget):
     def _master_tick(self):
         self._master_tick_counter += 1
         
-        # Maus-Parallax Effekt
         self.current_dx += (self.target_dx - self.current_dx) * 0.1
         self.current_dy += (self.target_dy - self.current_dy) * 0.1
         w, h = self.width(), self.height()
         if w > 100 and h > 100:
             self.box.move(int((w - self.box.width()) / 2 + self.current_dx), int((h - self.box.height()) / 2 + self.current_dy))
 
-        # Animationen (Flüssigkeit & Scanlines)
         self.logo.update_physics()
         if self._master_tick_counter % 2 == 0: 
             self.scanlines.tick()
 
-        # Typewriter-Effekt für den Text in der Mitte
         if self._tw_idx < len(self._tw_target):
             self._tw_current += self._tw_target[self._tw_idx]
             self._tw_idx += 1
             self._render_text()
 
-        # Blinkender Cursor
         if self._master_tick_counter % 10 == 0:
             self._cursor_visible = not self._cursor_visible
             self._render_text()
+
+    def lock_telemetry(self):
+        pass
 
     def _render_text(self):
         cursor = " █" if self._cursor_visible else "  "
@@ -791,8 +790,8 @@ class MainWindow(Qtw.QMainWindow):
             
             worker.step_changed.connect(self.left.update_active_step_highlight)
             worker.status.connect(self.top.update_status)
-            worker.telemetry.connect(self.top.update_telemetry)
-            worker.telemetry.connect(self.right.update_telemetry) 
+            #worker.telemetry.connect(self.top.update_telemetry)
+            #worker.telemetry.connect(self.right.update_telemetry) 
             worker.loss_updated.connect(self.top.set_loss_ml)
 
             if self.monitor is not None:
@@ -934,11 +933,10 @@ class MainWindow(Qtw.QMainWindow):
 
     def _set_running_ui(self, running: bool, *, reason: str = "") -> None:
         if running:
-            if hasattr(self, '_rt_timer'):
-                self._rt_timer.stop()
+            pass 
         else:
             self._rt_t0 = None
-            if hasattr(self, '_rt_timer'):
+            if hasattr(self, '_rt_timer') and not self._rt_timer.isActive():
                 self._rt_timer.start(self.REALTIME_POLL_MS)
 
         try: self.left.set_running(bool(running))
@@ -1222,44 +1220,25 @@ class MainWindow(Qtw.QMainWindow):
                     self.left.update_server_url(link)
             except Exception: pass
 
-    # ═══════════════════════════════════════════════════════════════════
-    # _poll_realtime — uses cached hw values; reads happen off main thread
-    # ═══════════════════════════════════════════════════════════════════
     def _poll_realtime(self) -> None:
-        if getattr(self, '_is_booting', False): return
-        if self._experiment_running(): return
-
         now = time.monotonic()
         if self._rt_t0 is None:
             self._rt_t0 = now
         t_elapsed = now - self._rt_t0
-
-        dev = getattr(self, 'dev', None)
-        if dev is None:
-            sample = {
-                "t": t_elapsed, "p1_meas": 0.0, "p2_meas": 0.0,
-                "flow": 0.0, "valves": "SIMULATION", "step": "IDLE",
-                "pressure": {
-                    1: {"meas": 0.0, "set": 0.0},
-                    2: {"meas": 0.0, "set": 0.0},
-                },
-            }
-            if hasattr(self, "top"): self.top.update_telemetry(sample)
-            if hasattr(self, "right"): self.right.update_telemetry(sample)
-            return
 
         with self._rt_hw_lock:
             p1_val = float(self._rt_p1) if self._rt_p1 is not None else 0.0
             p2_val = float(self._rt_p2) if self._rt_p2 is not None else 0.0
             f_val  = float(self._rt_flow) if self._rt_flow is not None else 0.0
             v_val  = str(self._rt_valves) if self._rt_valves is not None else "UNKNOWN"
+            latency = getattr(self, '_rt_hw_latency_ms', 0.0)
 
         sample = {
             "t": t_elapsed, "p1_meas": p1_val, "p2_meas": p2_val,
-            "flow": f_val, "valves": v_val, "step": "IDLE",
+            "flow": f_val, "valves": v_val, "step": self._current_step,
             "pressure": {
-                1: {"meas": p1_val, "set": 0.0},
-                2: {"meas": p2_val, "set": 0.0}
+                1: {"meas": p1_val, "set": getattr(self, "_last_p1_set", 0.0)},
+                2: {"meas": p2_val, "set": getattr(self, "_last_p2_set", 0.0)}
             }
         }
 
@@ -1269,43 +1248,57 @@ class MainWindow(Qtw.QMainWindow):
         if self.monitor:
             self.monitor.update_metrics(flow=f_val, p1_meas=p1_val, p2_meas=p2_val, valves=v_val)
 
+        if getattr(self, '_is_booting', False) and hasattr(self, 'hud'):
+            self.hud.update_real_diagnostics(p1_val, f_val, latency)
+
         if not self._rt_hw_reading:
             self._rt_hw_reading = True
             threading.Thread(target=self._do_hw_poll_bg, daemon=True).start()
 
     def _do_hw_poll_bg(self) -> None:
+        t0 = time.perf_counter()
+
         dev = getattr(self, 'dev', None)
         p1, p2, flow, valves = 0.0, 0.0, 0.0, "UNKNOWN"
 
         if dev is not None:
             with self._hw_mutex:
                 try:
-                    flow = _unwrap_sensor(dev.read_flow())
+                    flow_obj = getattr(dev, "flow", dev)
+                    if hasattr(flow_obj, "get_flow"):
+                        flow = _unwrap_sensor(flow_obj.get_flow())
+                    elif hasattr(flow_obj, "read_flow"):
+                        flow = _unwrap_sensor(flow_obj.read_flow())
                 except Exception as e:
-                    logger.warning("HW ERROR (Flow): %s - %s", type(e).__name__, e)
+                    logger.warning(f"HW ERROR (Flow): {e}")
 
                 try:
-                    if hasattr(dev, "get_pressure_mbar"):
-                        p1 = _unwrap_sensor(dev.get_pressure_mbar(1))
-                        p2 = _unwrap_sensor(dev.get_pressure_mbar(2))
-                    elif hasattr(dev, "get_pressure"):
-                        p1 = _unwrap_sensor(dev.get_pressure(1))
-                        p2 = _unwrap_sensor(dev.get_pressure(2))
+                    press_obj = getattr(dev, "pressure", dev)
+                    if hasattr(press_obj, "get_pressure_mbar"):
+                        p1 = _unwrap_sensor(press_obj.get_pressure_mbar(1))
+                        p2 = _unwrap_sensor(press_obj.get_pressure_mbar(2))
+                    elif hasattr(press_obj, "get_pressure"):
+                        p1 = _unwrap_sensor(press_obj.get_pressure(1))
+                        p2 = _unwrap_sensor(press_obj.get_pressure(2))
                 except Exception as e:
-                    logger.warning("HW ERROR (Pressure): %s - %s", type(e).__name__, e)
+                    logger.warning(f"HW ERROR (Pressure): {e}")
 
                 try:
-                    fn_valve = getattr(dev, "get_valve_state", getattr(dev, "get_state", None))
+                    valve_obj = getattr(dev, "valves", getattr(dev, "relais", dev))
+                    fn_valve = getattr(valve_obj, "get_state", getattr(valve_obj, "get_valve_state", None))
                     if callable(fn_valve):
                         valves = str(fn_valve())
                 except Exception:
                     pass
+
+        t1 = time.perf_counter() 
 
         with self._rt_hw_lock:
             self._rt_p1 = p1
             self._rt_p2 = p2
             self._rt_flow = flow
             self._rt_valves = valves
+            self._rt_hw_latency_ms = (t1 - t0) * 1000.0
             self._rt_hw_reading = False
 
     def _construct_frame(self, cls, config):
