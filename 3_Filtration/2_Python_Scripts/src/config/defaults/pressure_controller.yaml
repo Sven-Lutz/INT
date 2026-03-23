@@ -1,12 +1,10 @@
 # src/config/defaults/pressure_controller.yaml
 backend: elveflow
-
-device_name: "ASRL10::INSTR"
-regulator_types: [5, 5, 0, 0]
-
-calib_path: "C:\\Users\\Operator\\PelliKAn\\3_Filtration\\4_Config\\Calibration\\OB1_Calib_latest.txt"
-autoload_calib: true
-pressure_limit: 8000.0
+device_name: "COM10"   # Nutze die direkte COM-Schreibweise wie im alten Skript
+regulator_types: [5, 0, 0, 0]
+calib_path: ""         # Wir lassen die Kalibrierung erstmal weg
+autoload_calib: false
+pressure_limit: 2000.0
 
 use_remote_measurement: false
 channel_main: 1

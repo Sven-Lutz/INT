@@ -291,6 +291,9 @@ class RightFrame(QFrame):
         term_lay.addWidget(lbl_term)
 
         self.console = QTextBrowser()
+
+        self.console.document().setMaximumBlockCount(1000)
+
         self.console.setStyleSheet("""
             QTextBrowser {
                 background-color: #090F16;

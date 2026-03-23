@@ -123,4 +123,5 @@ def apply_theme(app_or_widget: Any, theme_key: str = "dark") -> None:
         app_or_widget.setStyleSheet(qss)
         return
     app = QApplication.instance()
-    if app: app.setStyleSheet(qss)
+    if isinstance(app, QApplication):
+        app.setStyleSheet(qss)

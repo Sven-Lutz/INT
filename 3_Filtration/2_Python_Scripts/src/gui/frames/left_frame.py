@@ -383,55 +383,69 @@ class LeftFrame(QFrame):
         self._is_running = running
         for m in self.modules + [self.mod_calc, self.mod_srv]:
             m.setEnabled(not running)
+            
         if not running:
             self.countdown_timer.stop()
+            self._time_left_s = 0.0  # 🚀 FIX: Timer-State sauber zurücksetzen
             self._recalc_math() 
             self.update_active_step_highlight("IDLE")
             
     def update_active_step_highlight(self, current_step_str: str):
-        for m in self.modules: m.setHighlight(False)
+        # 🚀 FIX: Timer IMMER stoppen, bevor wir neu kalkulieren
+        self.countdown_timer.stop() 
+        self._time_left_s = 0.0
+        
+        for m in self.modules: 
+            m.setHighlight(False)
+            
         self._active_phase_key = current_step_str
         
         if "PHASE_A" in current_step_str: 
             self.mod_pa.setHighlight(True)
             if self.cmb_ramp_mode.currentIndex() == 0:
                 rate = self.sp_a_rate.value()
+                # Hinweis: Hier könnte man den aktuellen Druck abziehen, wenn er übergeben wird.
                 self._time_left_s = (self.sp_target_p.value() / rate * 60) if rate > 0 else 0
-            else:
-                self._time_left_s = 0
+                
         elif "PHASE_B" in current_step_str: 
             self.mod_pb.setHighlight(True)
+            
         elif "PHASE_C" in current_step_str: 
             self.mod_pc.setHighlight(True)
             rate = self.sp_dn_rate.value()
             self._time_left_s = (self.sp_target_p.value() / rate * 60) if rate > 0 else 0
+            
         elif "FILLING" in current_step_str or "0" in current_step_str:
             self.mod_p0.setHighlight(True)
             tot = self._current_bnnt_ml + self.sp_h2o.value()
             est_flow = self.sp_est_flow.value()
             if self.cmb_fill_mode.currentIndex() == 0 and est_flow > 0:
                 self._time_left_s = (tot / est_flow) * 60
-            else:
-                self._time_left_s = 0
 
+        # Nur starten, wenn wir wirklich im Run-Modus sind UND es Zeit gibt
         if self._time_left_s > 0 and self._is_running:
+            self._update_countdown_labels() # 🚀 FIX: Einmal sofort updaten, damit es nicht 1s laggt
             self.countdown_timer.start(1000)
-        else:
-            self.countdown_timer.stop()
 
     def _on_countdown_tick(self):
         if self._time_left_s > 0:
             self._time_left_s -= 1
-            m = int(self._time_left_s // 60)
-            s = int(self._time_left_s % 60)
-            ts = f"{m:02d}:{s:02d}"
-            
-            if "PHASE_A" in self._active_phase_key:
-                self.lbl_pa_info.setText(f"ACTION: RAMPING | REM: {ts}")
-            elif "PHASE_C" in self._active_phase_key:
-                self.lbl_pc_info.setText(f"ACTION: RAMPING | REM: {ts}")
-            elif "FILLING" in self._active_phase_key or "0" in self._active_phase_key:
-                self.lbl_total_vol.setText(f"ACTION: FILLING | REM: {ts}")
+            self._update_countdown_labels()
+        else:
+            self.countdown_timer.stop() # 🚀 FIX: Timer stoppen, wenn er 0 erreicht
+
+    def _update_countdown_labels(self):
+        """Hilfsfunktion, um die Labels zu zeichnen, getrennt vom reinen 'Tick'."""
+        m = int(self._time_left_s // 60)
+        s = int(self._time_left_s % 60)
+        ts = f"{m:02d}:{s:02d}"
+        
+        if "PHASE_A" in self._active_phase_key:
+            self.lbl_pa_info.setText(f"ACTION: RAMPING | REM: {ts}")
+        elif "PHASE_C" in self._active_phase_key:
+            self.lbl_pc_info.setText(f"ACTION: RAMPING | REM: {ts}")
+        elif "FILLING" in self._active_phase_key or "0" in self._active_phase_key:
+            self.lbl_total_vol.setText(f"ACTION: FILLING | REM: {ts}")
 
     @Slot(bool)
     def set_hold_active(self, active: bool):

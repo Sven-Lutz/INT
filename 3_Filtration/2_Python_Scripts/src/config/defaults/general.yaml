@@ -5,7 +5,7 @@ logging:
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 serial:
-  baudrate_default: 38400
+  baudrate_default: 9600
   timeout_s: 1.5
 
 full_scale_raw_default: 32000
@@ -13,7 +13,7 @@ full_scale_raw_default: 32000
 health:
   comm_timeout_s: 2.0
   idle_pressure_warn_mbar: 200.0
-  pressure_alarm_mbar: 800.0
+  pressure_alarm_mbar: 2000.0
   flow_low_warn: 0.05
   telemetry_stale_s: 2.0
 
@@ -29,7 +29,6 @@ ui:
   ok_modal_popups: false
   sim_mode: false
   suppress_ok_modal_spam: true
-  # Phase 6: UI Size and Theme Defaults
   theme: "dark"
   top_height: 92
   splitter_sizes: [600, 380]
