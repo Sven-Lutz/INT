@@ -86,20 +86,32 @@ class TopFrame(QFrame):
 
     @Slot(dict)
     def update_telemetry(self, sample: dict):
-        pressures = sample.get("pressure", {})
+        if not isinstance(sample, dict):
+            return
+        
+        print("Received telemetry sample:", sample)
+
+        pressures = sample.get("pressure")
+        if not isinstance(pressures, dict): 
+            pressures = {}
         
         p1_data = pressures.get(1, pressures.get("1", {}))
+        if not isinstance(p1_data, dict):
+            p1_data = {}
+
         p1_raw = sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas")
         self._set_metric_value(self.val_p_main, self.bar_p_main, self._to_safe_float(p1_raw), "{:.0f} mbar")
         
         p2_data = pressures.get(2, pressures.get("2", {}))
+        if not isinstance(p2_data, dict):
+            p2_data = {}
+        
         p2_raw = sample.get("p2_meas") if sample.get("p2_meas") is not None else p2_data.get("meas")
         self._set_metric_value(self.val_p_back, self.bar_p_back, self._to_safe_float(p2_raw), "{:.0f} mbar")
-        
+
         f = self._to_safe_float(sample.get("flow"))
         self._set_metric_value(self.val_flow, self.bar_flow, f, "{:.3f} mL/min", is_flow=True)
 
-        # 🚀 FIX: Den Live-Loss abfangen und verarbeiten!
         if "loss_ml" in sample:
             self.set_loss_ml(sample["loss_ml"])
 

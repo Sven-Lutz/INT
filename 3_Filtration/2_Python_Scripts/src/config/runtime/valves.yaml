@@ -1,0 +1,4 @@
+valves:
+  port: COM6
+  baudrate: 9600
+  safe_state: VENTING

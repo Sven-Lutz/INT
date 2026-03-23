@@ -364,13 +364,21 @@ class PelicanHUD(Qtw.QWidget):
         self.box.setStyleSheet("QFrame { background-color: rgba(5, 9, 20, 230); border: 2px solid rgba(236, 72, 153, 60); border-radius: 12px; }")
 
         self.scanlines = ScanlineOverlay(self.box); self.scanlines.setFixedSize(650, 520)
-        self.tel_locked = False
+        
+        # Style für die Eck-Diagnostik
         tel_style = "color: #0284C7; font-family: 'Consolas'; font-size: 10px; font-weight: bold; background: transparent; border: none;"
 
-        self.tel_tl = Qtw.QLabel(self.box); self.tel_tl.setStyleSheet(tel_style); self.tel_tl.move(25, 25)
-        self.tel_tr = Qtw.QLabel(self.box); self.tel_tr.setStyleSheet(tel_style); self.tel_tr.move(530, 25)
-        self.tel_bl = Qtw.QLabel(self.box); self.tel_bl.setStyleSheet(tel_style); self.tel_bl.move(25, 480)
-        self.tel_br = Qtw.QLabel(self.box); self.tel_br.setStyleSheet(tel_style); self.tel_br.move(530, 480)
+        self.tel_tl = Qtw.QLabel("SYS_THREADS: --", self.box)
+        self.tel_tl.setStyleSheet(tel_style); self.tel_tl.move(25, 25)
+        
+        self.tel_tr = Qtw.QLabel("FLOW_BASE: --", self.box)
+        self.tel_tr.setStyleSheet(tel_style); self.tel_tr.move(530, 25)
+        
+        self.tel_bl = Qtw.QLabel("PRESS_BASE: --", self.box)
+        self.tel_bl.setStyleSheet(tel_style); self.tel_bl.move(25, 480)
+        
+        self.tel_br = Qtw.QLabel("USB_LATENCY: --", self.box)
+        self.tel_br.setStyleSheet(tel_style); self.tel_br.move(530, 480)
 
         box_lay = Qtw.QVBoxLayout(self.box)
         box_lay.setContentsMargins(75, 60, 75, 60); box_lay.setSpacing(25)
@@ -418,38 +426,41 @@ class PelicanHUD(Qtw.QWidget):
         super().resizeEvent(event)
         self.box.move(int((self.width() - self.box.width()) / 2), int((self.height() - self.box.height()) / 2))
 
+    # 🚀 NEUE WISSENSCHAFTLICHE METHODE FÜR ECHTE DIAGNOSTIK
+    def update_real_diagnostics(self, p_base: float, flow_base: float, usb_latency: float):
+        import threading
+        threads = threading.active_count()
+        
+        self.tel_tl.setText(f"SYS_THREADS: {threads}")
+        self.tel_tr.setText(f"FLOW_BASE: {flow_base:.3f}")
+        self.tel_bl.setText(f"PRESS_BASE: {p_base:.2f} mb")
+        self.tel_br.setText(f"USB_LATENCY: {usb_latency:.1f} ms")
+
     def _master_tick(self):
         self._master_tick_counter += 1
+        
+        # Maus-Parallax Effekt
         self.current_dx += (self.target_dx - self.current_dx) * 0.1
         self.current_dy += (self.target_dy - self.current_dy) * 0.1
         w, h = self.width(), self.height()
         if w > 100 and h > 100:
             self.box.move(int((w - self.box.width()) / 2 + self.current_dx), int((h - self.box.height()) / 2 + self.current_dy))
 
+        # Animationen (Flüssigkeit & Scanlines)
         self.logo.update_physics()
-        if self._master_tick_counter % 2 == 0: self.scanlines.tick()
+        if self._master_tick_counter % 2 == 0: 
+            self.scanlines.tick()
 
-        if self._master_tick_counter % 3 == 0 and not self.tel_locked:
-            self.tel_tl.setText(f"MEM: 0x{random.randint(0x1000, 0xFFFF):04X}")
-            self.tel_tr.setText(f"FLOW: {random.uniform(0, 9.99):.3f}")
-            self.tel_bl.setText(f"INT: {random.uniform(90, 99.9):.2f}%")
-            self.tel_br.setText(f"NET: {random.randint(10, 99)}ms")
-
+        # Typewriter-Effekt für den Text in der Mitte
         if self._tw_idx < len(self._tw_target):
             self._tw_current += self._tw_target[self._tw_idx]
             self._tw_idx += 1
             self._render_text()
 
+        # Blinkender Cursor
         if self._master_tick_counter % 10 == 0:
             self._cursor_visible = not self._cursor_visible
             self._render_text()
-
-    def lock_telemetry(self):
-        self.tel_locked = True
-        self.tel_tl.setText("MEM: [LOCKED]")
-        self.tel_tr.setText("FLOW: [STABLE]")
-        self.tel_bl.setText("INT: [100%]")
-        self.tel_br.setText("NET: [SECURE]")
 
     def _render_text(self):
         cursor = " █" if self._cursor_visible else "  "
@@ -462,8 +473,8 @@ class PelicanHUD(Qtw.QWidget):
         self.anim_bar.setEndValue(100)
         self.anim_bar.setEasingCurve(QEasingCurve.Type.InOutQuad)
         self.anim_bar.start()
+        
         self.logo.target_fill(duration)
-        QTimer.singleShot(duration, self.lock_telemetry)
 
     def update_text(self, text):
         self._tw_target = text.upper()
@@ -472,7 +483,6 @@ class PelicanHUD(Qtw.QWidget):
 
     def stop(self):
         self._master_timer.stop()
-
 
 class MainWindow(Qtw.QMainWindow):
     REALTIME_POLL_MS = 200
@@ -966,17 +976,17 @@ class MainWindow(Qtw.QMainWindow):
         if self.dev is None: return
         
         with self._hw_mutex:
+            try: self._dev_set_pressure_setpoint_best_effort(channel=MAIN_CH, value_mbar=0.0, ramp=False)
+            except Exception: pass
+            try: self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=0.0, ramp=False)
+            except Exception: pass
+
+            try: self._dev_set_valve_state("VENTING")
+            except Exception: pass
+
             try:
                 fn = getattr(self.dev, "vent_all", None)
-                if callable(fn):
-                    fn()
-                    return
-            except Exception: pass
-            try: self._dev_set_pressure_setpoint_best_effort(channel=MAIN_CH, value_mbar=0.0, ramp=True)
-            except Exception: pass
-            try: self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=0.0, ramp=True)
-            except Exception: pass
-            try: self._dev_set_valve_state("VENTING")
+                if callable(fn): fn()
             except Exception: pass
 
     def _hold_is_allowed_now(self) -> bool:
@@ -1156,13 +1166,14 @@ class MainWindow(Qtw.QMainWindow):
 
     def _bg_hw_hold_stop(self):
         with self._hw_mutex:
-            self._dev_set_pressure_setpoint_best_effort(channel=2, value_mbar=0.0)
+            self._dev_set_pressure_setpoint_best_effort(channel=BACKWASH_CH, value_mbar=0.0, ramp=False)
+            
             dev = getattr(self, 'dev', None)
             if dev is not None:
                 try:
-                    if hasattr(dev, "all_shut"): dev.all_shut()
+                    if hasattr(dev, "set_valve_state"): dev.set_valve_state("ALL_SHUT")
+                    elif hasattr(dev, "all_shut"): dev.all_shut()
                     elif hasattr(dev, "all_valves_shut"): dev.all_valves_shut()
-                    elif hasattr(dev, "set_valve_state"): dev.set_valve_state("ALL_SHUT")
                 except Exception as e:
                     logger.error(f"HW VALVE ERROR: {e}")
 

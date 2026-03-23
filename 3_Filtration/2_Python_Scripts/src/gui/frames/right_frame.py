@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from random import sample
 import time
 from pathlib import Path
 from typing import Optional
 
+from numpy.random import sample
 import pyqtgraph as pg
 from PySide6.QtCore import Signal, Slot, Qt, QRectF, QPointF
 from PySide6.QtGui import (
@@ -437,13 +439,25 @@ class RightFrame(QFrame):
 
     @Slot(dict)
     def update_telemetry(self, sample: dict):
-        pressures = sample.get("pressure", {})
-        p1_data = pressures.get(1, pressures.get("1", {}))
-
-        p1 = _to_float(sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas", 0.0))
-        p1_set = _to_float(sample.get("p1_set") if sample.get("p1_set") is not None else p1_data.get("set", 0.0))
-        vol = _to_float(sample.get("volume_ml", 0.0))
+        if not isinstance(sample, dict):
+            return
         
+        pressures = sample.get("pressure")
+        if not isinstance(pressures, dict): 
+            pressures = {}
+
+        p1_data = pressures.get(1, pressures.get("1", {}))
+        if not isinstance(p1_data, dict):
+            p1_data = {}
+
+        p1_raw = sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas", 0.0)
+        p1 = _to_float(p1_raw)
+
+        p1_set_raw = sample.get("p1_set") if sample.get("p1_set") is not None else p1_data.get("set", 0.0)
+        p1_set = _to_float(p1_set_raw)
+        
+        vol = _to_float(sample.get("volume_ml", 0.0))
+
         if vol > self._max_vol:
             self._max_vol = vol
 
