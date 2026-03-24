@@ -124,36 +124,19 @@ class PressureController:
             return 0.0
         
         ch = int(channel)
-        
-        # 8 Pointer-Variablen für alle 4 Kanäle vorbereiten (p=pressure, s=sensor)
-        p1, s1 = c_double(0.0), c_double(0.0)
-        p2, s2 = c_double(0.0), c_double(0.0)
-        p3, s3 = c_double(0.0), c_double(0.0)
-        p4, s4 = c_double(0.0), c_double(0.0)
+
+        val = c_double(0.0)
         
         try:
-            # Thread-Lock, damit set_pressure und get_pressure sich nicht blockieren
             with self._lock:
-                # Wir rufen die korrekte Funktion auf, die aktiv alle Hardware-Werte liest
-                res = OB1_Get_All_Data(self._instr_id.value, p1, s1, p2, s2, p3, s3, p4, s4)
+                res = OB1_Get_Press(self._instr_id.value, ch, 1, self._calib, byref(val), 1000)
             
             if res != 0:
-                logger.error("OB1_Get_All_Data schlug fehl! Error-Code: %d", res)
+                logger.error("OB1_Get_Press schlug fehl auf Kanal %d! Error-Code: %d", ch, res)
                 return 0.0
             
-            # Wir picken uns nur den vom Nutzer gewünschten Kanal heraus
-            if ch == 1:
-                meas = float(p1.value)
-            elif ch == 2:
-                meas = float(p2.value)
-            elif ch == 3:
-                meas = float(p3.value)
-            elif ch == 4:
-                meas = float(p4.value)
-            else:
-                return 0.0
+            meas = float(val.value)
             
-            # Plausibilitätsprüfung
             if -100.0 < meas < 10000.0:
                 return meas
             else:
