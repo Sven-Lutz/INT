@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class PressureControllerConfig:
     device: str = "COM10"
     regs: Tuple[int, int, int, int] = (5, 0, 0, 0)
-    calib_path: str = ""
+    calib_path: str = "U:\\PelliKAn\\3_Filtration\\4_Config\\OB1_Calib_latest.txt"
     pressure_limit_mbar: float = 2000.0
     autoload_calib: bool = True
 
