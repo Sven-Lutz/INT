@@ -23,24 +23,25 @@ logger = logging.getLogger(__name__)
 class ElveflowPaths:
     @staticmethod
     def resolve() -> str:
-        target = r"C:\Users\Operator\PelliKAn\3_Filtration\2_Python_Scripts\vendor\elveflow\DLL64\Elveflow64.dll"
-        if os.path.isfile(target):
-            return target
+        primary_target = r"C:\Users\Operator\PelliKAn\3_Filtration\4_Config\DLL64\Elveflow64.dll"
+        if os.path.isfile(primary_target):
+            return primary_target
+            
         try:
-            base = pathlib.Path(__file__).resolve().parents[3] 
-            alt_target = base / "vendor" / "elveflow" / "DLL64" / "Elveflow64.dll"
+            base = pathlib.Path(__file__).resolve().parents[4] 
+            alt_target = base / "4_Config" / "DLL64" / "Elveflow64.dll"
             if alt_target.exists():
                 return str(alt_target)
         except Exception:
             pass
-        raise FileNotFoundError(f"Elveflow64.dll physisch nicht gefunden!\nPfad prüfen: {target}")
+            
+        raise FileNotFoundError(f"Elveflow64.dll physisch nicht gefunden!\nPfad prüfen: {primary_target}")
 
 def _as_bytes(x: Any) -> bytes:
     if x is None: return b""
     if isinstance(x, (bytes, bytearray)): return bytes(x)
     return str(x).encode("ascii", errors="ignore")
 
-# NEU: Hilfsfunktion, um Pointer (byref) sicher zu handhaben, ohne doppelte Referenzen zu erzeugen
 def _ensure_pointer(obj: Any) -> Any:
     """Stellt sicher, dass das übergebene Objekt eine C-Referenz ist."""
     if obj is None or hasattr(obj, '_obj'):
