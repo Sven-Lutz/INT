@@ -126,17 +126,17 @@ class PressureController:
         ch = int(channel)
         
         try:
-            from ctypes import c_double, POINTER, byref
-            
-            val_array = (c_double * 1)() 
-            
-            res = OB1_Get_Press(self._instr_id.value, ch, 1, self._calib, val_array, 1000)
+            from ctypes import c_double, byref
+
+            meas = c_double(0.0)
+
+            res = OB1_Get_Press(self._instr_id.value, ch, 1, None, byref(meas), 1)
             
             if res == 0:
-                meas = float(val_array[0])
-                if -100.0 < meas < 10000.0:
-                    return meas
-                
+                val = float(meas.value)
+                if -100.0 < val < 10000.0:
+                    return val
+                    
         except Exception as e:
             logger.error(f"OB1 Read Error CH{ch}: {e}")
             

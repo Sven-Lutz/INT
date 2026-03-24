@@ -129,7 +129,13 @@ def OB1_Set_Press(instr_id: int, ch: int, val: float, calib: Any, length: int = 
 def OB1_Get_Press(instr_id: int, ch: int, acq: int, calib: Any, out_ptr: Any, length: int = 1000) -> int:
     func = get_elveflow().OB1_Get_Press
     if func is None: return -1
-    return int(func(int(instr_id), int(ch), int(acq), byref(calib), out_ptr, int(length)))
+
+    if calib is None:
+        calib_arg = None
+    else:
+        calib_arg = calib if hasattr(calib, '_obj') else byref(calib)
+        
+    return int(func(int(instr_id), int(ch), int(acq), calib_arg, out_ptr, int(length)))
 
 def Elveflow_Calibration_Load(path: str, calib: Any, size: int = 1000) -> int:
     func = get_elveflow().Elveflow_Calibration_Load
