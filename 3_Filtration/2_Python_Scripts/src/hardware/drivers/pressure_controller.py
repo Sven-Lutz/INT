@@ -119,19 +119,28 @@ class PressureController:
         if res != 0 and not (res == 8008 and val == 0.0):
             logger.warning("OB1_Set_Press failed: error=%d ch=%d val=%.1f", res, ch, val)
 
-    def get_pressure_mbar(self, ch: int) -> float:
-        if not self._connected: 
+    def get_pressure_mbar(self, channel: int) -> float:
+        if not self._connected:
             return 0.0
         
-        # 🚀 LOCK: Schützt die C-Kommunikation und den Messpuffer
-        with self._lock:
-            res = OB1_Get_Press(self._instr_id.value, int(ch), 1, self._calib, byref(self._meas_buffer), 1000)
+        ch = int(channel)
+        
+        try:
+            from ctypes import c_double, POINTER, byref
+            
+            val_array = (c_double * 1)() 
+            
+            res = OB1_Get_Press(self._instr_id.value, ch, 1, self._calib, val_array, 1000)
             
             if res == 0:
-                self._last_p[ch] = float(self._meas_buffer.value)
-                return self._last_p[ch]
+                meas = float(val_array[0])
+                if -100.0 < meas < 10000.0:
+                    return meas
                 
-        return self._last_p.get(ch, 0.0)
+        except Exception as e:
+            logger.error(f"OB1 Read Error CH{ch}: {e}")
+            
+        return 0.0
 
     def close(self) -> None:
         if not self._connected: return
