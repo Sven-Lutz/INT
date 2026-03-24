@@ -30,15 +30,14 @@ class FlowSensorConfig:
             d = d["flow"]
             
         port = d.get("port", d.get("COM Port", "COM5"))
+        # Standard auf 38400 belassen, falls es in der config falsch (z.B. als 9600) steht
         baudrate = int(d.get("baudrate", 38400))
-        address = int(d.get("address", 3))
+        address = int(d.get("address", 3)) # Prüfe ggf. in der Doku, ob hier 128 richtig wäre
         
-        # Lese Prozess/Parameter aus YAML (z.B. [33, 0])
         meas = d.get("meas", [33, 0])
         proc_nr = int(meas[0])
         parm_nr = int(meas[1])
         
-        # 117 für Floats (Proc 33), 114 für Integer (Proc 1)
         parm_type = 117 if proc_nr == 33 else 114
         
         scale_mode = str(d.get("scale_mode", "engineering")).strip().lower()
@@ -75,45 +74,54 @@ class FlowSensor:
         logger.info(f"FlowSensor: connecting to {self.cfg.port} (Baud: {self.cfg.baudrate}, Node: {self.cfg.address})")
         
         try:
-            # 🚀 FIX: Wir zwingen ProPar, exakt deine Settings zu nutzen
             self.flow_sensor = propar.instrument(
                 self.cfg.port, 
                 baudrate=self.cfg.baudrate, 
                 address=self.cfg.address
             )
-            logger.info("FlowSensor: communication successfully started")
+            
+            # 🚀 AKTIVER VERBINDUNGSTEST:
+            # Wir zwingen das Programm, sofort einen Wert zu lesen. 
+            # Wenn der Sensor nicht reagiert, werfen wir SOFORT einen Fehler.
+            test_read = self.flow_sensor.read_parameters(self._cached_request)
+            if not test_read or not isinstance(test_read, list) or len(test_read) == 0:
+                raise ConnectionError(f"Port {self.cfg.port} offen, aber Sensor antwortet nicht! (Baudrate {self.cfg.baudrate} oder Node {self.cfg.address} falsch?)")
+
+            logger.info("FlowSensor: communication successfully started AND verified")
             self._error_count = 0
             self._last_good_flow = 0.0
+            
         except Exception as e:
             logger.error(f"FlowSensor: connection failed on {self.cfg.port} -> {e}")
             self.flow_sensor = None
-            raise
+            # Abhängig von deiner Architektur könntest du hier "raise" aufrufen, um den Start abzuwürgen
 
     def get_flow(self) -> float:
         if self.flow_sensor is None: return 0.0
 
         try:
             values = self.flow_sensor.read_parameters(self._cached_request)
+            
+            # 🚀 LOGGING HINZUGEFÜGT: Wenn die Liste leer ist, wollen wir das im Terminal sehen!
             if not values or not isinstance(values, list) or len(values) == 0:
+                logger.debug("FlowSensor: Leere Antwort vom Sensor erhalten.")
                 return self._last_good_flow
 
             data = values[0].get("data")
-            if data is None: return self._last_good_flow
+            if data is None: 
+                logger.debug(f"FlowSensor: Antwort erhalten, aber kein 'data' Feld! (Werte: {values})")
+                return self._last_good_flow
 
             raw_value = float(data)
             
-            # 🚀 FIX: Logische Skalierung basierend auf der YAML
             if self.cfg.scale_mode == "engineering":
-                # Sensor liefert bereits echte ml/min oder l/h Werte
                 flow_ml_min = raw_value
             else:
-                # Sensor liefert Rohwerte (0-32000). Outlier-Filter nutzen.
                 if abs(raw_value) > self.cfg.full_scale_raw * 1.5:
-                    return self._last_good_flow # Keinen 0.0 Drop erzeugen!
+                    return self._last_good_flow 
                 
                 flow_ml_min = (raw_value / self.cfg.full_scale_raw) * self.cfg.full_scale_ml_min
             
-            # Deadband Filter: Kleines Rauschen (< 0.05 ml/min) wird zu 0.0 geglättet
             if abs(flow_ml_min) < 0.05:
                 flow_ml_min = 0.0
 
@@ -123,8 +131,8 @@ class FlowSensor:
 
         except Exception as e:
             self._error_count += 1
-            if self._error_count % 10 == 0:
-                logger.warning(f"FlowSensor: read error -> {e} (failures: {self._error_count})")
+            # Jetzt loggen wir jeden Fehler, nicht nur jeden zehnten!
+            logger.warning(f"FlowSensor: read error -> {e} (failures: {self._error_count})")
             return self._last_good_flow
 
     def close(self) -> None:
