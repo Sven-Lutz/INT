@@ -1,8 +1,9 @@
 import time
+from ctypes import byref, c_double
 from src.hardware.drivers.pressure_controller import PressureController
 
 def run_test():
-    print("--- STARTING ACTIVE ELVEFLOW TEST ---")
+    print("--- STARTING ELVEFLOW DIAGNOSTICS ---")
     
     cfg_dict = {
         "backend": "elveflow",
@@ -14,28 +15,44 @@ def run_test():
     }
     
     pc = PressureController(cfg_dict)
-    print("Connecting to OB1...")
     pc.connect()
     
-    # Wir feuern 50 mbar auf Kanal 1! (ohne ramp=False)
-    print("\n>>> SENDE 50.0 mbar AUF KANAL 1 <<<")
+    # 1. DER KALIBRIERUNGS-BEWEIS
+    print("\n--- 1. KALIBRIERUNGS-CHECK ---")
     try:
-        pc.set_pressure_mbar(1, 50.0)
+        calib = pc._calib
+        print(f"Länge des Arrays: {len(calib)}")
+        print(f"Erste 5 Werte: {calib[0]:.4f}, {calib[1]:.4f}, {calib[2]:.4f}, {calib[3]:.4f}, {calib[4]:.4f}")
+        if calib[0] == 0.0 and calib[50] == 0.0 and calib[100] == 0.0:
+            print("!!! ALARM !!! Das Kalibrierungs-Array besteht nur aus Nullen!")
+            print("Das bedeutet: Die TXT-Datei ist defekt, falsch formatiert oder das Einlesen schlägt fehl.")
     except Exception as e:
-        print(f"Fehler beim Druckaufbau: {e}")
+        print(f"Konnte Kalibrierung nicht prüfen: {e}")
 
-    # Wir lesen, was passiert...
-    print("Lese Sensoren für 5 Sekunden...")
-    for i in range(10):
-        p1 = pc.get_pressure_mbar(1)
-        p2 = pc.get_pressure_mbar(2)
-        print(f"Tick {i+1}/10 | CH1: {p1:.3f} mbar | CH2: {p2:.3f} mbar")
-        time.sleep(0.5)
-        
-    print("\n>>> SCHALTE DRUCK AB (0.0 mbar) <<<")
-    pc.set_pressure_mbar(1, 0.0)
+    # 2. DER SOLLWERT-BEWEIS
+    print("\n--- 2. HARDWARE SOLLWERT-TEST ---")
+    print("Sende 50.0 mbar an den Controller...")
+    pc.set_pressure_mbar(1, 50.0)
+    time.sleep(1.0)
     
-    print("Closing connection...")
+    try:
+        # Wir greifen tief in die DLL, um zu sehen, was wirklich ankam
+        from src.hardware.drivers.elveflow import OB1_Get_Press
+        setpoint = c_double(0.0)
+        meas = c_double(0.0)
+        
+        # acq=2 liest den Setpoint (Sollwert), acq=1 den echten Messwert
+        OB1_Get_Press(pc._instr_id.value, 1, 2, pc._calib, byref(setpoint), 1000)
+        OB1_Get_Press(pc._instr_id.value, 1, 1, pc._calib, byref(meas), 1000)
+        
+        print(f"Hardware meldet Sollwert (Setpoint): {setpoint.value:.3f} mbar")
+        print(f"Hardware meldet Istwert (Measured):  {meas.value:.3f} mbar")
+        
+    except Exception as e:
+        print(f"Fehler beim DLL-Lesezugriff: {e}")
+        
+    print("\nSchalte Druck ab...")
+    pc.set_pressure_mbar(1, 0.0)
     pc.close()
     print("--- TEST COMPLETE ---")
 
