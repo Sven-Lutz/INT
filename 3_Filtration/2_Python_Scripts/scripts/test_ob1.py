@@ -1,81 +1,59 @@
-import os
 import time
 from ctypes import byref, c_double
-from src.hardware.drivers.pressure_controller import PressureController
+from src.hardware.drivers.elveflow import get_elveflow, OB1_Initialization, OB1_Get_Press, OB1_Set_Press
 
 def run_test():
-    print("--- STARTING ELVEFLOW DIAGNOSTICS ---")
-    
-    # 1. KUGELSICHERER PFAD (Wir gehen einen Ordner hoch und dann in 4_Config)
-    base_dir = os.path.abspath(os.path.join(os.getcwd(), "..", "4_Config"))
-    calib_path = os.path.join(base_dir, "OB1_Calib_latest.txt")
-    
-    print(f"Suche Kalibrierung unter: {calib_path}")
-    
-    if not os.path.exists(calib_path):
-        print("!!! ALARM !!! Datei existiert dort nicht! Bitte überprüfe den Ordner.")
+    print("--- MANUAL CALIBRATION HARDWARE TEST (FIXED TYPES) ---")
+    dll_wrapper = get_elveflow()
+    if dll_wrapper is None:
+        print("DLL nicht gefunden!")
         return
 
-    # 2. KOMMAS ZU PUNKTEN MACHEN (Der Labor-Klassiker)
-    try:
-        with open(calib_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        fixed_lines = [line.replace(",", ".") for line in lines]
-        with open(calib_path, "w", encoding="utf-8") as f:
-            f.writelines(fixed_lines)
-        print("-> Datei erfolgreich formatiert (Kommas zu Punkten).")
-    except Exception as e:
-        print(f"-> Fehler beim Formatieren: {e}")
+    # 1. MANUELLE KALIBRIERUNG BAUEN
+    # Das Array selbst MUSS ctypes bleiben, damit die DLL es versteht
+    calib = (c_double * 1000)()
+    for i in range(1000):
+        calib[i] = float(i) * 2.0 - 1000.0
+    
+    print(f"Manuelle Kalibrierung erstellt. Check: {calib[0]:.1f} ... {calib[500]:.1f}")
 
-    # 3. CONTROLLER STARTEN
-    cfg_dict = {
-        "backend": "elveflow",
-        "device_name": "COM10",
-        "regulator_types": [5, 5, 0, 0],
-        "calib_path": calib_path,  # Unser neuer, sicherer Pfad!
-        "autoload_calib": True,
-        "pressure_limit": 2000.0
-    }
+    # 2. INITIALISIERUNG
+    instr_id = c_double(0.0)
+    print("\nVerbinde mit OB1 auf COM10...")
+    # Hier geben wir die Python-Zahlen 5, 5, 0, 0 direkt an
+    err = OB1_Initialization(b"COM10", 5, 5, 0, 0, byref(instr_id))
     
-    pc = PressureController(cfg_dict)
-    pc.connect()
-    
-    # 4. DER KALIBRIERUNGS-CHECK
-    print("\n--- 1. KALIBRIERUNGS-CHECK ---")
-    calib = getattr(pc, '_calib', None)
-    if calib:
-        print(f"Erste 3 Werte: {calib[0]:.4f}, {calib[1]:.4f}, {calib[2]:.4f}")
-        if calib[0] == 0.0 and calib[50] == 0.0:
-            print("!!! FEHLER: Das Array ist trotz Ladeversuch voller Nullen!")
-        else:
-            print("-> ERFOLG! Kalibrierung enthält echte Daten!")
-    else:
-        print("!!! FEHLER: Kein Array gefunden!")
+    if err != 0:
+        print(f"Initialisierung fehlgeschlagen! Code: {err}")
+        return
+    print(f"OB1 Bereit. ID: {instr_id.value}")
 
-    # 5. HARDWARE SOLLWERT-TEST
-    print("\n--- 2. HARDWARE SOLLWERT-TEST ---")
-    print("Sende 50.0 mbar an den Controller...")
-    pc.set_pressure_mbar(1, 50.0)
-    time.sleep(1.0)
+    # 3. AKTIVER DRUCK-TEST
+    target = 50.0  # Einfach ein Python float
+    print(f"\n>>> Sende {target} mbar auf Kanal 1 <<<")
     
-    try:
-        from src.hardware.drivers.elveflow import OB1_Get_Press
-        setpoint = c_double(0.0)
+    # OB1_Set_Press erwartet laut Pylance: (int, int, float, pointer, int)
+    OB1_Set_Press(int(instr_id.value), 1, target, byref(calib), 1000)
+    
+    print("Warte 2s auf Druckaufbau...")
+    time.sleep(2.0)
+    
+    print("Lese Sensoren...")
+    for i in range(10):
         meas = c_double(0.0)
-        
-        OB1_Get_Press(pc._instr_id.value, 1, 2, pc._calib, byref(setpoint), 1000)
-        OB1_Get_Press(pc._instr_id.value, 1, 1, pc._calib, byref(meas), 1000)
-        
-        print(f"Hardware meldet Sollwert (Setpoint): {setpoint.value:.3f} mbar")
-        print(f"Hardware meldet Istwert (Measured):  {meas.value:.3f} mbar")
-        
-    except Exception as e:
-        print(f"Fehler beim Lesezugriff: {e}")
-        
-    print("\nSchalte Druck ab...")
-    pc.set_pressure_mbar(1, 0.0)
-    pc.close()
-    print("--- TEST COMPLETE ---")
+        # OB1_Get_Press braucht für meas einen Pointer
+        OB1_Get_Press(int(instr_id.value), 1, 1, byref(calib), byref(meas), 1000)
+        print(f"[{i+1}/10] Kanal 1: {meas.value:.3f} mbar")
+        time.sleep(0.5)
+
+    print("\n>>> Schalte Druck ab <<<")
+    OB1_Set_Press(int(instr_id.value), 1, 0.0, byref(calib), 1000)
+    
+    # Destructor (Sauber trennen)
+    if hasattr(dll_wrapper, 'OB1_Destructor'):
+        dll_wrapper.OB1_Destructor(instr_id.value)
+    
+    print("--- TEST BEENDET ---")
 
 if __name__ == "__main__":
     run_test()
