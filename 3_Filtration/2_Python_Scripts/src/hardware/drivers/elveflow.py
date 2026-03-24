@@ -19,10 +19,6 @@ from ctypes import (
 
 logger = logging.getLogger(__name__)
 
-# -----------------------------
-# Paths
-# -----------------------------
-
 @dataclass(frozen=True)
 class ElveflowPaths:
     @staticmethod
@@ -39,21 +35,12 @@ class ElveflowPaths:
             pass
         raise FileNotFoundError(f"Elveflow64.dll physisch nicht gefunden!\nPfad prüfen: {target}")
 
-# -----------------------------
-# Robust casting helpers
-# -----------------------------
-
 def _as_bytes(x: Any) -> bytes:
     if x is None: return b""
     if isinstance(x, (bytes, bytearray)): return bytes(x)
     return str(x).encode("ascii", errors="ignore")
 
-# -----------------------------
-# DLL wrapper (The Engine)
-# -----------------------------
-
 class ElveflowDLL:
-    # Pylance Type Hints
     OB1_Initialization: Any = None
     OB1_Set_Press: Any = None
     OB1_Get_Press: Any = None
@@ -72,7 +59,6 @@ class ElveflowDLL:
         except Exception as e:
             logger.error(f"CRITICAL: Failed to load DLL. Error: {e}")
             raise
-
         self._bind_functions()
 
     def _bind_functions(self) -> None:

@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Optional, Any, Dict, Tuple
 from ctypes import c_int32, c_double, byref
 
-# Wir importieren die stabilen API-Wrapper aus deiner gepatchten elveflow.py
 from src.hardware.drivers.elveflow import (
     OB1_Initialization, 
     OB1_Destructor, 
@@ -22,9 +21,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class PressureControllerConfig:
-    """
-    Konfiguration für den OB1 Pressure Controller.
-    """
     device: str = "COM10"
     regs: Tuple[int, int, int, int] = (5, 0, 0, 0)
     calib_path: str = ""

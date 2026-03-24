@@ -1233,12 +1233,25 @@ class MainWindow(Qtw.QMainWindow):
             v_val  = str(self._rt_valves) if self._rt_valves is not None else "UNKNOWN"
             latency = getattr(self, '_rt_hw_latency_ms', 0.0)
 
+        dev = getattr(self, 'dev', None)
+        p1_set = dev.get_pressure_setpoint_mbar(1) if dev and hasattr(dev, "get_pressure_setpoint_mbar") else 0.0
+        p2_set = dev.get_pressure_setpoint_mbar(2) if dev and hasattr(dev, "get_pressure_setpoint_mbar") else 0.0
+
         sample = {
-            "t": t_elapsed, "p1_meas": p1_val, "p2_meas": p2_val,
-            "flow": f_val, "valves": v_val, "step": self._current_step,
+            "t": t_elapsed, 
+            "time_s": t_elapsed,
+            "p1_meas": p1_val, 
+            "p2_meas": p2_val,
+            "flow": f_val, 
+            "flow_ml_min": f_val,
+            "valves": v_val, 
+            "state": v_val,
+            "step": self._current_step,
             "pressure": {
-                1: {"meas": p1_val, "set": getattr(self, "_last_p1_set", 0.0)},
-                2: {"meas": p2_val, "set": getattr(self, "_last_p2_set", 0.0)}
+                1: {"meas": p1_val, "set": p1_set},   
+                2: {"meas": p2_val, "set": p2_set},
+                "1": {"meas": p1_val, "set": p1_set},
+                "2": {"meas": p2_val, "set": p2_set}
             }
         }
 
