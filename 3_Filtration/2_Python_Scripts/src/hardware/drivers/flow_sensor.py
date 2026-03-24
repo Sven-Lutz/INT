@@ -78,25 +78,32 @@ class FlowSensor:
                 address=self.cfg.address
             )
             
-            # 🚀 AKTIVER VERBINDUNGSTEST
+            # TEST 1: Modern Float (Proc 33, Parm 0, Type 117)
             test_read = self.flow_sensor.read_parameters(self._cached_request)
             
-            # Wir prüfen nicht nur auf eine Liste, sondern ob auch 'data' existiert!
             if not test_read or not isinstance(test_read, list) or test_read[0].get("data") is None:
                 status_code = test_read[0].get('status') if test_read else 'Timeout'
-                logger.warning(f"FlowSensor: Standard-Abfrage (Proc {self.cfg.proc_nr}) abgelehnt (Status: {status_code}). Versuche Fallback...")
+                logger.warning(f"FlowSensor: Standard (Proc 33) abgelehnt (Status: {status_code}).")
                 
-                # AUTO-FALLBACK: Versuche Raw Integer Auslesung (Proc 1, Parm 0, Type 114)
-                fallback_request = [{"proc_nr": 1, "parm_nr": 0, "parm_type": 114}]
-                test_read_2 = self.flow_sensor.read_parameters(fallback_request)
+                # TEST 2: Classic Raw (Proc 1, Parm 0, Type 114)
+                fallback_req = [{"proc_nr": 1, "parm_nr": 0, "parm_type": 114}]
+                test_read_2 = self.flow_sensor.read_parameters(fallback_req)
                 
-                if not test_read_2 or not isinstance(test_read_2, list) or test_read_2[0].get("data") is None:
-                    raise ConnectionError(f"Sensor antwortet, verweigert aber alle Lese-Befehle (Status: {test_read_2[0].get('status') if test_read_2 else 'Unbekannt'})")
-                
-                logger.info("FlowSensor: Fallback erfolgreich! Sensor verwendet klassische Integer-Werte (Proc 1).")
-                self._cached_request = fallback_request
-                # Scale-Mode anpassen, da Proc 1 rohwerte von 0-32000 liefert
-                object.__setattr__(self.cfg, 'scale_mode', 'raw') 
+                if test_read_2 and isinstance(test_read_2, list) and test_read_2[0].get("data") is not None:
+                    logger.info("FlowSensor: Fallback 1 erfolgreich! (Proc 1)")
+                    self._cached_request = fallback_req
+                    object.__setattr__(self.cfg, 'scale_mode', 'raw') 
+                else:
+                    # TEST 3: Sensor Value Direct (Proc 1, Parm 1, Type 114) - Für exotische ES-Flow Modelle
+                    fallback_req_2 = [{"proc_nr": 1, "parm_nr": 1, "parm_type": 114}]
+                    test_read_3 = self.flow_sensor.read_parameters(fallback_req_2)
+                    
+                    if test_read_3 and isinstance(test_read_3, list) and test_read_3[0].get("data") is not None:
+                        logger.info("FlowSensor: Fallback 2 erfolgreich! (Proc 1, Parm 1)")
+                        self._cached_request = fallback_req_2
+                        object.__setattr__(self.cfg, 'scale_mode', 'raw')
+                    else:
+                        raise ConnectionError(f"Alle Lese-Versuche gescheitert. Letzter Status: {test_read_3[0].get('status') if test_read_3 else 'Unbekannt'}")
 
             logger.info("FlowSensor: communication successfully started AND verified")
             self._error_count = 0
@@ -104,6 +111,8 @@ class FlowSensor:
             
         except Exception as e:
             logger.error(f"FlowSensor: connection failed on {self.cfg.port} -> {e}")
+            logger.warning("Hinweis: Überprüfe, ob die Node-Adresse (aktuell 3) auf 128 stehen muss, oder ob der Sensor im Analog-Modus ist.")
+            # Wir lassen self.flow_sensor auf None, das Skript läuft aber weiter (get_flow gibt dann 0.0 zurück)
             self.flow_sensor = None
 
     def get_flow(self) -> float:
