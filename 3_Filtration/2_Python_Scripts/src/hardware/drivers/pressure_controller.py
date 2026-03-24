@@ -14,7 +14,7 @@ from src.hardware.drivers.elveflow import (
     OB1_Destructor, 
     OB1_Set_Press, 
     OB1_Get_Press, 
-    OB1_Get_All_Data,  # <--- NEU
+    OB1_Get_Data,  # <--- NEU
     Elveflow_Calibration_Load
 )
 
@@ -124,18 +124,22 @@ class PressureController:
             return 0.0
         
         ch = int(channel)
-
-        val = c_double(0.0)
+        
+        # Zwei Variablen für die Messwerte vorbereiten
+        data_reg = c_double(0.0)
+        data_sens = c_double(0.0)
         
         try:
             with self._lock:
-                res = OB1_Get_Press(self._instr_id.value, ch, 1, self._calib, byref(val), 1000)
+                # Die echte, in der DLL vorhandene Funktion aufrufen!
+                res = OB1_Get_Data(self._instr_id.value, ch, data_reg, data_sens)
             
             if res != 0:
-                logger.error("OB1_Get_Press schlug fehl auf Kanal %d! Error-Code: %d", ch, res)
+                logger.error("OB1_Get_Data schlug fehl auf Kanal %d! Error-Code: %d", ch, res)
                 return 0.0
             
-            meas = float(val.value)
+            # data_reg enthält den internen Reglerdruck (mbar)
+            meas = float(data_reg.value)
             
             if -100.0 < meas < 10000.0:
                 return meas
