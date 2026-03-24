@@ -6,16 +6,16 @@ import logging
 import time
 import threading
 from dataclasses import dataclass
-from typing import Optional, Any, Dict, Tuple
+from typing import Any, Dict, Tuple
 from ctypes import c_int32, c_double, byref
+import pathlib
 
 from src.hardware.drivers.elveflow import (
     OB1_Initialization, 
     OB1_Destructor, 
     OB1_Set_Press, 
-    OB1_Get_Press, 
-    OB1_Get_Data,  # <--- NEU
-    Elveflow_Calibration_Load
+    OB1_Get_Data, 
+    OB1_Calib_Load
 )
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class PressureControllerConfig:
     device: str = "COM10"
     regs: Tuple[int, int, int, int] = (5, 0, 0, 0)
-    calib_path: str = "U:\\PelliKAn\\3_Filtration\\4_Config\\OB1_Calib_latest.txt"
+    calib_path: str = ""  # Wird jetzt dynamisch überschrieben
     pressure_limit_mbar: float = 2000.0
     autoload_calib: bool = True
 
@@ -32,60 +32,47 @@ class PressureControllerConfig:
     def from_dict(cls, d: Dict[str, Any]) -> "PressureControllerConfig":
         device = str(d.get("device_name", d.get("device", "COM10"))).strip()
         
-        # Robuster Parser für die Regler (stellt sicher, dass es exakt 4 ints sind)
         regs_raw = d.get("regulator_types", d.get("regs", (5, 0, 0, 0)))
         if isinstance(regs_raw, (list, tuple)):
-            # Auffüllen mit Nullen, falls jemand aus Versehen nur [5] schreibt
             safe_regs = (list(regs_raw) + [0, 0, 0, 0])[:4]
             regs = tuple(int(x) for x in safe_regs)
         else:
             regs = (5, 0, 0, 0)
-        
+            
         limit = float(d.get("pressure_limit", d.get("pressure_limit_mbar", 2000.0)))
         autoload = bool(d.get("autoload_calib", True))
-        path = str(d.get("calib_path", "")).strip()
+        
+        # --- NEU: Dynamischer Pfad für die Kalibrierung ---
+        path = str(d.get("calib_path", "U:\\PelliKAn\\3_Filtration\\4_Config\\OB1_Calib_latest.txt")).strip()
+        
+        # Wenn der Pfad nicht existiert (z.B. weil wir auf C:\ arbeiten)
+        if not os.path.isfile(path):
+            base_dir = pathlib.Path(__file__).resolve().parents[3]
+            alt_path = base_dir / "4_Config" / "OB1_Calib_latest.txt"
+            if alt_path.exists():
+                path = str(alt_path)
+            else:
+                logger.warning("WARNUNG: Kalibrierungsdatei weder auf U:\\ noch lokal gefunden!")
 
-        return cls(
-            device=device,
-            regs=regs, # type: ignore
-            pressure_limit_mbar=limit,
-            autoload_calib=autoload,
-            calib_path=path
-        )
+        return cls(device=device, regs=regs, pressure_limit_mbar=limit, autoload_calib=autoload, calib_path=path) # type: ignore
 
 class PressureController:
-    """
-    Thread-sicherer und optimierter Wrapper für den Elveflow OB1 Controller.
-    """
-
     def __init__(self, config: Dict[str, Any]) -> None:
         self.cfg = PressureControllerConfig.from_dict(config)
         self._instr_id = c_int32(-1)
-        self._calib = (c_double * 1000)()
         self._connected = False
-        self._last_p = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
-        
-        # 🚀 OPTIMIERUNG 1: Thread-Lock für sichere GUI-Kommunikation
         self._lock = threading.Lock()
-        
-        # 🚀 OPTIMIERUNG 2: C-Variable wiederverwenden (Memory-Effizienz)
-        self._meas_buffer = c_double(0.0)
 
     def connect(self) -> None:
         with self._lock:
-            if self._connected: 
-                return
-                
+            if self._connected: return
             logger.info("PressureController: Connecting to %s with regs %s", self.cfg.device, self.cfg.regs)
-            
             res = OB1_Initialization(
                 self.cfg.device, 
                 self.cfg.regs[0], self.cfg.regs[1], self.cfg.regs[2], self.cfg.regs[3], 
                 byref(self._instr_id)
             )
-
             if res != 0 or self._instr_id.value < 0:
-                logger.error("OB1_Initialization failed: error=%d", res)
                 raise RuntimeError(f"OB1_Initialization failed: {res}. Check COM-Port!")
 
             self._connected = True
@@ -96,56 +83,48 @@ class PressureController:
 
     def _load_calibration(self) -> None:
         try:
-            res = Elveflow_Calibration_Load(self.cfg.calib_path, self._calib, 1000)
+            # V3 API: Das Gerät lädt die Kalibrierung intern über die ID
+            res = OB1_Calib_Load(self._instr_id.value, self.cfg.calib_path)
             if res == 0:
                 logger.info("Calibration file loaded: %s", self.cfg.calib_path)
             else:
-                logger.warning("Calibration file load failed with error: %d", res)
+                logger.warning("Calibration load failed with error: %d", res)
         except Exception as e:
             logger.error("Error during calibration load: %s", e)
 
     def set_pressure_mbar(self, ch: int, mbar: float) -> None:
-        if not self._connected: 
-            return
-        
+        if not self._connected: return
         val = float(mbar)
         if abs(val) > self.cfg.pressure_limit_mbar:
             logger.warning("Pressure %.1f exceeds limit %.1f! Clipping.", val, self.cfg.pressure_limit_mbar)
             val = self.cfg.pressure_limit_mbar if val > 0 else -self.cfg.pressure_limit_mbar
 
         with self._lock:
-            res = OB1_Set_Press(self._instr_id.value, int(ch), val, self._calib, 1000)
+            # V3 API: Nur 3 Argumente!
+            res = OB1_Set_Press(self._instr_id.value, int(ch), val)
             
-        if res != 0 and not (res == 8008 and val == 0.0):
+        if res != 0 and val != 0.0:
             logger.warning("OB1_Set_Press failed: error=%d ch=%d val=%.1f", res, ch, val)
 
     def get_pressure_mbar(self, channel: int) -> float:
-        if not self._connected:
-            return 0.0
-        
+        if not self._connected: return 0.0
         ch = int(channel)
-        
-        # Zwei Variablen für die Messwerte vorbereiten
         data_reg = c_double(0.0)
         data_sens = c_double(0.0)
         
         try:
             with self._lock:
-                # Die echte, in der DLL vorhandene Funktion aufrufen!
                 res = OB1_Get_Data(self._instr_id.value, ch, data_reg, data_sens)
             
             if res != 0:
-                logger.error("OB1_Get_Data schlug fehl auf Kanal %d! Error-Code: %d", ch, res)
+                # Optional: Error Logging reduzieren, wenn das System busy ist
+                # logger.error("OB1_Get_Data schlug fehl auf Kanal %d! Error-Code: %d", ch, res)
                 return 0.0
             
-            # data_reg enthält den internen Reglerdruck (mbar)
             meas = float(data_reg.value)
-            
             if -100.0 < meas < 10000.0:
                 return meas
-            else:
-                logger.warning("Unplausibler Wert von OB1 auf Kanal %d gelesen: %f", ch, meas)
-                return 0.0
+            return 0.0
                 
         except Exception as e:
             logger.error("OB1 Read Error CH%d: %s", ch, e)
@@ -153,14 +132,11 @@ class PressureController:
 
     def close(self) -> None:
         if not self._connected: return
-        
         with self._lock:
             try:
-                # Sicherstellen, dass kein Druck mehr anliegt
-                OB1_Set_Press(self._instr_id.value, 1, 0.0, self._calib, 1000)
-                OB1_Set_Press(self._instr_id.value, 2, 0.0, self._calib, 1000)
+                OB1_Set_Press(self._instr_id.value, 1, 0.0)
+                OB1_Set_Press(self._instr_id.value, 2, 0.0)
                 time.sleep(0.1)
-                
                 OB1_Destructor(self._instr_id.value)
                 logger.info("OB1 Connection closed safely.")
             except Exception as e:
@@ -168,7 +144,6 @@ class PressureController:
             finally:
                 self._connected = False
 
-    # --- Legacy Aliases ---
     def set_pressure(self, value: float, channel: int):
         self.set_pressure_mbar(channel, value)
 
