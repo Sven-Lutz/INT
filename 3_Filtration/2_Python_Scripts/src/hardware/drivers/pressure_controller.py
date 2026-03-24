@@ -112,7 +112,6 @@ class PressureController:
             logger.warning("Pressure %.1f exceeds limit %.1f! Clipping.", val, self.cfg.pressure_limit_mbar)
             val = self.cfg.pressure_limit_mbar if val > 0 else -self.cfg.pressure_limit_mbar
 
-        # 🚀 LOCK: Verhindert, dass Set und Get gleichzeitig an die DLL funken
         with self._lock:
             res = OB1_Set_Press(self._instr_id.value, int(ch), val, self._calib, 1000)
             
@@ -126,20 +125,18 @@ class PressureController:
         ch = int(channel)
         
         try:
-            from ctypes import c_double
+            from ctypes import c_double, byref
+            from src.hardware.drivers.elveflow import OB1_Get_Press
 
-            val_array = (c_double * 1)() 
+            val = c_double(0.0)
 
-            res = OB1_Get_Press(self._instr_id.value, ch, 1, self._calib, val_array, 1)
+            res = OB1_Get_Press(self._instr_id.value, ch, 1, self._calib, byref(val), 1000)
             
-            meas = float(val_array[0])
-
-            if res != 0:
-                print(f"[OB1 CH{ch}] DLL Code: {res} | Raw Value: {meas:.3f}")
-
-            if -100.0 < meas < 10000.0:
-                return meas
-                
+            if res == 0:
+                meas = float(val.value)
+                if -100.0 < meas < 10000.0:
+                    return meas
+                    
         except Exception as e:
             logger.error(f"OB1 Read Error CH{ch}: {e}")
             
