@@ -23,25 +23,24 @@ logger = logging.getLogger(__name__)
 class ElveflowPaths:
     @staticmethod
     def resolve() -> str:
-        primary_target = r"C:\Users\Operator\PelliKAn\3_Filtration\4_Config\DLL64\Elveflow64.dll"
-        if os.path.isfile(primary_target):
-            return primary_target
-            
+        target = r"C:\Users\Operator\PelliKAn\3_Filtration\4_Config\DLL64\Elveflow64.dll"
+        if os.path.isfile(target):
+            return target
         try:
-            base = pathlib.Path(__file__).resolve().parents[4] 
-            alt_target = base / "4_Config" / "DLL64" / "Elveflow64.dll"
+            base = pathlib.Path(__file__).resolve().parents[3] 
+            alt_target = base / "vendor" / "elveflow" / "DLL64" / "Elveflow64.dll"
             if alt_target.exists():
                 return str(alt_target)
         except Exception:
             pass
-            
-        raise FileNotFoundError(f"Elveflow64.dll physisch nicht gefunden!\nPfad prüfen: {primary_target}")
+        raise FileNotFoundError(f"Elveflow64.dll physisch nicht gefunden!\nPfad prüfen: {target}")
 
 def _as_bytes(x: Any) -> bytes:
     if x is None: return b""
     if isinstance(x, (bytes, bytearray)): return bytes(x)
     return str(x).encode("ascii", errors="ignore")
 
+# Hilfsfunktion, um Pointer (byref) sicher zu handhaben
 def _ensure_pointer(obj: Any) -> Any:
     """Stellt sicher, dass das übergebene Objekt eine C-Referenz ist."""
     if obj is None or hasattr(obj, '_obj'):
@@ -52,7 +51,7 @@ class ElveflowDLL:
     OB1_Initialization: Any = None
     OB1_Set_Press: Any = None
     OB1_Get_Press: Any = None
-    OB1_Get_All_Data: Any = None  # NEU: Deklaration der neuen Funktion
+    OB1_Get_Data: Any = None  # Die echte Lese-Funktion
     Elveflow_Calibration_Load: Any = None
     OB1_Calib: Any = None
     Elveflow_Calibration_Save: Any = None
@@ -89,17 +88,11 @@ class ElveflowDLL:
             self.OB1_Get_Press.argtypes = [c_int32, c_int32, c_int32, calib_array_type, POINTER(c_double), c_int32]
             self.OB1_Get_Press.restype = c_int32
 
-        # NEU: Binding für das synchrone Auslesen aller 4 Kanäle
-        self.OB1_Get_All_Data = getattr(d, "OB1_Get_All_Data", None)
-        if self.OB1_Get_All_Data:
-            self.OB1_Get_All_Data.argtypes = [
-                c_int32, 
-                POINTER(c_double), POINTER(c_double), # Kanal 1
-                POINTER(c_double), POINTER(c_double), # Kanal 2
-                POINTER(c_double), POINTER(c_double), # Kanal 3
-                POINTER(c_double), POINTER(c_double)  # Kanal 4
-            ]
-            self.OB1_Get_All_Data.restype = c_int32
+        # BINDING für das Auslesen eines Kanals
+        self.OB1_Get_Data = getattr(d, "OB1_Get_Data", None)
+        if self.OB1_Get_Data:
+            self.OB1_Get_Data.argtypes = [c_int32, c_int32, POINTER(c_double), POINTER(c_double)]
+            self.OB1_Get_Data.restype = c_int32
 
         self.Elveflow_Calibration_Load = getattr(d, "Elveflow_Calibration_Load", None)
         if self.Elveflow_Calibration_Load:
@@ -152,17 +145,11 @@ def OB1_Get_Press(instr_id: int, ch: int, acq: int, calib: Any, out_ptr: Any, le
     if func is None: return -1
     return int(func(int(instr_id), int(ch), int(acq), _ensure_pointer(calib), _ensure_pointer(out_ptr), int(length)))
 
-# NEU: Der öffentliche Aufruf für alle Kanäle
-def OB1_Get_All_Data(instr_id: int, p1: Any, s1: Any, p2: Any, s2: Any, p3: Any, s3: Any, p4: Any, s4: Any) -> int:
-    func = get_elveflow().OB1_Get_All_Data
+# WRAPPER für OB1_Get_Data
+def OB1_Get_Data(instr_id: int, ch: int, reg_data: Any, sens_data: Any) -> int:
+    func = get_elveflow().OB1_Get_Data
     if func is None: return -1
-    return int(func(
-        int(instr_id), 
-        _ensure_pointer(p1), _ensure_pointer(s1), 
-        _ensure_pointer(p2), _ensure_pointer(s2), 
-        _ensure_pointer(p3), _ensure_pointer(s3), 
-        _ensure_pointer(p4), _ensure_pointer(s4)
-    ))
+    return int(func(int(instr_id), int(ch), _ensure_pointer(reg_data), _ensure_pointer(sens_data)))
 
 def Elveflow_Calibration_Load(path: str, calib: Any, size: int = 1000) -> int:
     func = get_elveflow().Elveflow_Calibration_Load
@@ -189,7 +176,7 @@ __all__ = [
     "OB1_Initialization",
     "OB1_Set_Press",
     "OB1_Get_Press",
-    "OB1_Get_All_Data",  # NEU: Der Export für die Autovervollständigung
+    "OB1_Get_Data",  # HIER war vermutlich der Fehler!
     "Elveflow_Calibration_Load",
     "OB1_Calib",
     "Elveflow_Calibration_Save",
