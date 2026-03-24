@@ -124,23 +124,33 @@ class PressureController:
         
         ch = int(channel)
         
+        # Lokale Variable erzeugen (besser für Thread-Sicherheit als self._meas_buffer)
+        val = c_double(0.0)
+        
         try:
-            from ctypes import c_double, byref
-            from src.hardware.drivers.elveflow import OB1_Get_Press
-
-            val = c_double(0.0)
-
-            res = OB1_Get_Press(self._instr_id.value, ch, 1, self._calib, byref(val), 1000)
+            # 🚀 WICHTIG: Thread-Lock für das Auslesen aktivieren!
+            # Verhindert, dass das Senden (set_press) und Lesen (get_press) kollidieren.
+            with self._lock:
+                # acq=1 zwingt die Hardware, einen frischen Messwert zu holen
+                res = OB1_Get_Press(self._instr_id.value, ch, 1, self._calib, byref(val), 1000)
             
-            if res == 0:
-                meas = float(val.value)
-                if -100.0 < meas < 10000.0:
-                    return meas
-                    
+            # Fehlerprüfung: Wenn res != 0, MÜSSEN wir das wissen!
+            if res != 0:
+                logger.error("OB1_Get_Press schlug fehl auf Kanal %d! Error-Code: %d", ch, res)
+                return 0.0
+            
+            meas = float(val.value)
+            
+            # Plausibilitätsprüfung
+            if -100.0 < meas < 10000.0:
+                return meas
+            else:
+                logger.warning("Unplausibler Wert von OB1 auf Kanal %d gelesen: %f", ch, meas)
+                return 0.0
+                
         except Exception as e:
-            logger.error(f"OB1 Read Error CH{ch}: {e}")
-            
-        return 0.0
+            logger.error("OB1 Read Error CH%d: %s", ch, e)
+            return 0.0
 
     def close(self) -> None:
         if not self._connected: return
