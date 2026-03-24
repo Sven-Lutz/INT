@@ -40,10 +40,18 @@ def _as_bytes(x: Any) -> bytes:
     if isinstance(x, (bytes, bytearray)): return bytes(x)
     return str(x).encode("ascii", errors="ignore")
 
+# NEU: Hilfsfunktion, um Pointer (byref) sicher zu handhaben, ohne doppelte Referenzen zu erzeugen
+def _ensure_pointer(obj: Any) -> Any:
+    """Stellt sicher, dass das übergebene Objekt eine C-Referenz ist."""
+    if obj is None or hasattr(obj, '_obj'):
+        return obj
+    return byref(obj)
+
 class ElveflowDLL:
     OB1_Initialization: Any = None
     OB1_Set_Press: Any = None
     OB1_Get_Press: Any = None
+    OB1_Get_All_Data: Any = None  # NEU: Deklaration der neuen Funktion
     Elveflow_Calibration_Load: Any = None
     OB1_Calib: Any = None
     Elveflow_Calibration_Save: Any = None
@@ -79,6 +87,18 @@ class ElveflowDLL:
         if self.OB1_Get_Press:
             self.OB1_Get_Press.argtypes = [c_int32, c_int32, c_int32, calib_array_type, POINTER(c_double), c_int32]
             self.OB1_Get_Press.restype = c_int32
+
+        # NEU: Binding für das synchrone Auslesen aller 4 Kanäle
+        self.OB1_Get_All_Data = getattr(d, "OB1_Get_All_Data", None)
+        if self.OB1_Get_All_Data:
+            self.OB1_Get_All_Data.argtypes = [
+                c_int32, 
+                POINTER(c_double), POINTER(c_double), # Kanal 1
+                POINTER(c_double), POINTER(c_double), # Kanal 2
+                POINTER(c_double), POINTER(c_double), # Kanal 3
+                POINTER(c_double), POINTER(c_double)  # Kanal 4
+            ]
+            self.OB1_Get_All_Data.restype = c_int32
 
         self.Elveflow_Calibration_Load = getattr(d, "Elveflow_Calibration_Load", None)
         if self.Elveflow_Calibration_Load:
@@ -119,38 +139,44 @@ def get_elveflow() -> ElveflowDLL:
 def OB1_Initialization(device: Any, r1: int, r2: int, r3: int, r4: int, id_ptr: Any) -> int:
     func = get_elveflow().OB1_Initialization
     if func is None: return -1
-    return int(func(_as_bytes(device), int(r1), int(r2), int(r3), int(r4), id_ptr))
+    return int(func(_as_bytes(device), int(r1), int(r2), int(r3), int(r4), _ensure_pointer(id_ptr)))
 
 def OB1_Set_Press(instr_id: int, ch: int, val: float, calib: Any, length: int = 1000) -> int:
     func = get_elveflow().OB1_Set_Press
     if func is None: return -1
-    return int(func(int(instr_id), int(ch), c_double(float(val)), byref(calib), int(length)))
+    return int(func(int(instr_id), int(ch), c_double(float(val)), _ensure_pointer(calib), int(length)))
 
 def OB1_Get_Press(instr_id: int, ch: int, acq: int, calib: Any, out_ptr: Any, length: int = 1000) -> int:
     func = get_elveflow().OB1_Get_Press
     if func is None: return -1
+    return int(func(int(instr_id), int(ch), int(acq), _ensure_pointer(calib), _ensure_pointer(out_ptr), int(length)))
 
-    if calib is None:
-        calib_arg = None
-    else:
-        calib_arg = calib if hasattr(calib, '_obj') else byref(calib)
-        
-    return int(func(int(instr_id), int(ch), int(acq), calib_arg, out_ptr, int(length)))
+# NEU: Der öffentliche Aufruf für alle Kanäle
+def OB1_Get_All_Data(instr_id: int, p1: Any, s1: Any, p2: Any, s2: Any, p3: Any, s3: Any, p4: Any, s4: Any) -> int:
+    func = get_elveflow().OB1_Get_All_Data
+    if func is None: return -1
+    return int(func(
+        int(instr_id), 
+        _ensure_pointer(p1), _ensure_pointer(s1), 
+        _ensure_pointer(p2), _ensure_pointer(s2), 
+        _ensure_pointer(p3), _ensure_pointer(s3), 
+        _ensure_pointer(p4), _ensure_pointer(s4)
+    ))
 
 def Elveflow_Calibration_Load(path: str, calib: Any, size: int = 1000) -> int:
     func = get_elveflow().Elveflow_Calibration_Load
     if func is None: return -1
-    return int(func(_as_bytes(path), byref(calib), int(size)))
+    return int(func(_as_bytes(path), _ensure_pointer(calib), int(size)))
 
 def OB1_Calib(instr_id: int, calib: Any, timeout_ms: int = 60000) -> int:
     func = get_elveflow().OB1_Calib
     if func is None: return -1
-    return int(func(int(instr_id), byref(calib), int(timeout_ms)))
+    return int(func(int(instr_id), _ensure_pointer(calib), int(timeout_ms)))
 
 def Elveflow_Calibration_Save(path: str, calib: Any, size: int = 1000) -> int:
     func = get_elveflow().Elveflow_Calibration_Save
     if func is None: return -1
-    return int(func(_as_bytes(path), byref(calib), int(size)))
+    return int(func(_as_bytes(path), _ensure_pointer(calib), int(size)))
 
 def OB1_Destructor(instr_id: int) -> int:
     func = get_elveflow().OB1_Destructor
@@ -162,6 +188,7 @@ __all__ = [
     "OB1_Initialization",
     "OB1_Set_Press",
     "OB1_Get_Press",
+    "OB1_Get_All_Data",  # NEU: Der Export für die Autovervollständigung
     "Elveflow_Calibration_Load",
     "OB1_Calib",
     "Elveflow_Calibration_Save",
