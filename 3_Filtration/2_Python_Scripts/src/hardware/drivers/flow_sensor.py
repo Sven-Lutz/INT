@@ -15,10 +15,9 @@ class FlowSensorConfig:
     baudrate: int = 38400
     address: int = 3
     
-    # ProPar Parameter (Standard: 33/0 für Engineering Float)
     proc_nr: int = 33
     parm_nr: int = 0
-    parm_type: int = 117  # 117 = IEEE Float (Standard für proc 33). 114 = Int (für proc 1)
+    parm_type: int = 117  
     
     scale_mode: str = "engineering"
     full_scale_raw: float = 32000.0
@@ -30,9 +29,8 @@ class FlowSensorConfig:
             d = d["flow"]
             
         port = d.get("port", d.get("COM Port", "COM5"))
-        # Standard auf 38400 belassen, falls es in der config falsch (z.B. als 9600) steht
         baudrate = int(d.get("baudrate", 38400))
-        address = int(d.get("address", 3)) # Prüfe ggf. in der Doku, ob hier 128 richtig wäre
+        address = int(d.get("address", 3)) 
         
         meas = d.get("meas", [33, 0])
         proc_nr = int(meas[0])
@@ -52,7 +50,7 @@ class FlowSensorConfig:
 
 class FlowSensor:
     """
-    Treiber für Bronkhorst ES-FLOW / ProPar basierte Sensoren.
+    Treiber für Bronkhorst ES-FLOW / ProPar basierte Sensoren mit Auto-Fallback.
     """
     def __init__(self, cfg: FlowSensorConfig | Dict[str, Any]):
         if isinstance(cfg, dict): 
@@ -80,12 +78,25 @@ class FlowSensor:
                 address=self.cfg.address
             )
             
-            # 🚀 AKTIVER VERBINDUNGSTEST:
-            # Wir zwingen das Programm, sofort einen Wert zu lesen. 
-            # Wenn der Sensor nicht reagiert, werfen wir SOFORT einen Fehler.
+            # 🚀 AKTIVER VERBINDUNGSTEST
             test_read = self.flow_sensor.read_parameters(self._cached_request)
-            if not test_read or not isinstance(test_read, list) or len(test_read) == 0:
-                raise ConnectionError(f"Port {self.cfg.port} offen, aber Sensor antwortet nicht! (Baudrate {self.cfg.baudrate} oder Node {self.cfg.address} falsch?)")
+            
+            # Wir prüfen nicht nur auf eine Liste, sondern ob auch 'data' existiert!
+            if not test_read or not isinstance(test_read, list) or test_read[0].get("data") is None:
+                status_code = test_read[0].get('status') if test_read else 'Timeout'
+                logger.warning(f"FlowSensor: Standard-Abfrage (Proc {self.cfg.proc_nr}) abgelehnt (Status: {status_code}). Versuche Fallback...")
+                
+                # AUTO-FALLBACK: Versuche Raw Integer Auslesung (Proc 1, Parm 0, Type 114)
+                fallback_request = [{"proc_nr": 1, "parm_nr": 0, "parm_type": 114}]
+                test_read_2 = self.flow_sensor.read_parameters(fallback_request)
+                
+                if not test_read_2 or not isinstance(test_read_2, list) or test_read_2[0].get("data") is None:
+                    raise ConnectionError(f"Sensor antwortet, verweigert aber alle Lese-Befehle (Status: {test_read_2[0].get('status') if test_read_2 else 'Unbekannt'})")
+                
+                logger.info("FlowSensor: Fallback erfolgreich! Sensor verwendet klassische Integer-Werte (Proc 1).")
+                self._cached_request = fallback_request
+                # Scale-Mode anpassen, da Proc 1 rohwerte von 0-32000 liefert
+                object.__setattr__(self.cfg, 'scale_mode', 'raw') 
 
             logger.info("FlowSensor: communication successfully started AND verified")
             self._error_count = 0
@@ -94,7 +105,6 @@ class FlowSensor:
         except Exception as e:
             logger.error(f"FlowSensor: connection failed on {self.cfg.port} -> {e}")
             self.flow_sensor = None
-            # Abhängig von deiner Architektur könntest du hier "raise" aufrufen, um den Start abzuwürgen
 
     def get_flow(self) -> float:
         if self.flow_sensor is None: return 0.0
@@ -102,28 +112,22 @@ class FlowSensor:
         try:
             values = self.flow_sensor.read_parameters(self._cached_request)
             
-            # 🚀 LOGGING HINZUGEFÜGT: Wenn die Liste leer ist, wollen wir das im Terminal sehen!
             if not values or not isinstance(values, list) or len(values) == 0:
-                logger.debug("FlowSensor: Leere Antwort vom Sensor erhalten.")
                 return self._last_good_flow
 
             data = values[0].get("data")
             if data is None: 
-                logger.debug(f"FlowSensor: Antwort erhalten, aber kein 'data' Feld! (Werte: {values})")
                 return self._last_good_flow
 
             raw_value = float(data)
             
+            # Verarbeite Rohwerte (Proc 1) oder Engineering Floats (Proc 33)
             if self.cfg.scale_mode == "engineering":
                 flow_ml_min = raw_value
             else:
                 if abs(raw_value) > self.cfg.full_scale_raw * 1.5:
                     return self._last_good_flow 
-                
                 flow_ml_min = (raw_value / self.cfg.full_scale_raw) * self.cfg.full_scale_ml_min
-            
-            if abs(flow_ml_min) < 0.05:
-                flow_ml_min = 0.0
 
             self._error_count = 0
             self._last_good_flow = flow_ml_min
@@ -131,7 +135,6 @@ class FlowSensor:
 
         except Exception as e:
             self._error_count += 1
-            # Jetzt loggen wir jeden Fehler, nicht nur jeden zehnten!
             logger.warning(f"FlowSensor: read error -> {e} (failures: {self._error_count})")
             return self._last_good_flow
 
