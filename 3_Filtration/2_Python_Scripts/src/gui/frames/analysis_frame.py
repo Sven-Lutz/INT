@@ -42,63 +42,130 @@ class TelemetryRun:
             + (f"  ·  ⚠ {self.skipped_rows} rows skipped" if self.skipped_rows else "")
         )
 
+
+def _parse_float(raw: str | None) -> float | None:
+    """Parse a single value, handling German comma decimals. Returns None on failure."""
+    if raw is None:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    # German decimal: "12,5" -> "12.5"  (only if no dot already present)
+    if "," in s and "." not in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _pick(row: dict[str, str], keys: Sequence[str]) -> float | None:
+    """Return the first successfully parsed value from the candidate keys."""
+    for k in keys:
+        if k in row:
+            v = _parse_float(row[k])
+            if v is not None:
+                return v
+    return None
+
+
 def parse_telemetry_csv(filepath: str | Path) -> TelemetryRun:
-    """Bulletproof CSV Parser: Handles German Excel (; and ,) and standard formats."""
+    """
+    Bulletproof CSV Parser.
+
+    Handles:
+      • German Excel format  (; delimiter, comma decimals)
+      • Standard CSV          (, delimiter, dot decimals)
+      • Preamble / comment lines starting with '#'
+      • BOM markers (utf-8-sig)
+      • dt_s (delta-time) OR t_s (absolute time) columns
+      • Multiple header variants for pressure and volume
+    """
+    path = Path(filepath)
+
+    # utf-8-sig strips the invisible BOM that Excel likes to add
+    with path.open(mode="r", encoding="utf-8-sig") as fh:
+        raw_lines = fh.readlines()
+
+    # Filter preamble / comments / blank lines
+    clean_lines = [ln for ln in raw_lines if not ln.startswith("#") and ln.strip()]
+
+    if not clean_lines:
+        raise ValueError(f"File {path.name} is empty or only contains comments.")
+
+    # ── Detect delimiter ──────────────────────────────────────────────
+    # Look at the HEADER line to decide.  A header with semicolons is
+    # almost certainly German-Excel style.
+    header_line = clean_lines[0]
+    delimiter = ";" if ";" in header_line else ","
+
+    # ── Strip whitespace from headers ─────────────────────────────────
+    # DictReader uses the first row as keys.  Trailing spaces in headers
+    # silently break key look-ups → strip them.
+    reader = csv.DictReader(clean_lines, delimiter=delimiter)
+    if reader.fieldnames:
+        reader.fieldnames = [f.strip() for f in reader.fieldnames]
+
+    # ── Candidate column names (in priority order) ────────────────────
+    TIME_KEYS     = ["t_s", "dt_s", "t", "time", "Time", "time_s"]
+    PRESSURE_KEYS = ["pressure_meas_mbar", "p1_meas_mbar", "p1_meas",
+                     "pressure", "Pressure", "p_mbar"]
+    VOLUME_KEYS   = ["volume_ml_est", "volume_ml", "vol_ml",
+                     "volume", "Volume"]
+
+    # ── Detect whether time column is absolute or delta ───────────────
+    has_absolute_time = reader.fieldnames is not None and any(
+        k in reader.fieldnames for k in ("t_s", "t", "time", "Time", "time_s")
+    )
+    has_delta_time = reader.fieldnames is not None and "dt_s" in reader.fieldnames
+
     times: list[float] = []
     pressures: list[float] = []
     volumes: list[float] = []
     skipped = 0
+    accumulated_t = 0.0
 
-    path = Path(filepath)
-    # utf-8-sig entfernt unsichtbare Zeichen (BOM), die Excel gerne hinzufügt
-    with path.open(mode="r", encoding="utf-8-sig") as fh:
-        # Preamble/Kommentare filtern
-        clean_lines = [line for line in fh if not line.startswith("#") and line.strip()]
-        
-        if not clean_lines:
-            raise ValueError(f"File {path.name} is empty or only contains comments.")
-            
-        # 🚀 BUGFIX: Erkennung des deutschen Excel-Formats (; vs ,)
-        delimiter = ";" if ";" in clean_lines[0] else ","
-        reader = csv.DictReader(clean_lines, delimiter=delimiter)
-        
-        current_t = 0.0
-        
-        for row in reader:
-            try:
-                # 🚀 BUGFIX: Hilfsfunktion für Komma-Dezimalzahlen (z.B. "12,5" -> 12.5)
-                def parse_val(possible_keys):
-                    for k in possible_keys:
-                        if k in row and row[k] and str(row[k]).strip():
-                            val_str = str(row[k]).strip().replace(",", ".")
-                            return float(val_str)
-                    return 0.0
+    for row in reader:
+        # ── Time ──────────────────────────────────────────────────────
+        if has_absolute_time:
+            t = _pick(row, TIME_KEYS)
+        elif has_delta_time:
+            dt = _pick(row, ["dt_s"])
+            if dt is not None:
+                accumulated_t += dt
+            t = accumulated_t
+        else:
+            t = _pick(row, TIME_KEYS)
 
-                # 1. TIME: Akkumuliert dt_s (Alter Logger) oder nimmt t_s (Neuer Logger)
-                if "t_s" in row and str(row["t_s"]).strip():
-                    t = parse_val(["t_s"])
-                elif "dt_s" in row and str(row["dt_s"]).strip():
-                    current_t += parse_val(["dt_s"])
-                    t = current_t
-                else:
-                    t = parse_val(["t"])
+        if t is None:
+            skipped += 1
+            continue
 
-                # 2. PRESSURE: Fallback für verschiedene Logger-Versionen
-                p = parse_val(["pressure_meas_mbar", "p1_meas_mbar", "p1_meas"])
-                
-                # 3. VOLUME: Fallback für verschiedene Logger-Versionen
-                v = parse_val(["volume_ml_est", "volume_ml"])
+        # ── Pressure ──────────────────────────────────────────────────
+        p = _pick(row, PRESSURE_KEYS)
+        if p is None:
+            # Allow rows where pressure is genuinely 0 or missing
+            p = 0.0
 
-            except (ValueError, TypeError):
-                skipped += 1
-                continue
+        # ── Volume ────────────────────────────────────────────────────
+        v = _pick(row, VOLUME_KEYS)
+        if v is None:
+            v = 0.0
 
-            times.append(t)
-            pressures.append(p)
-            volumes.append(v)
+        times.append(t)
+        pressures.append(p)
+        volumes.append(v)
 
     if not times:
-        raise ValueError(f"No valid data rows found in {path.name}. Check headers.")
+        # Provide diagnostic help: show what headers were found
+        hdrs = ", ".join(reader.fieldnames or ["<none>"])
+        raise ValueError(
+            f"No valid data rows in {path.name}.\n"
+            f"Headers found: [{hdrs}]\n"
+            f"Expected time col:     one of {TIME_KEYS}\n"
+            f"Expected pressure col: one of {PRESSURE_KEYS}\n"
+            f"Expected volume col:   one of {VOLUME_KEYS}"
+        )
 
     return TelemetryRun(
         filepath=path,
@@ -149,16 +216,22 @@ class _Crosshair:
 
         pen = pg.mkPen(color=PAL.TEXT_DIM, width=1, style=Qt.PenStyle.DashLine)
         self.vline = pg.InfiniteLine(angle=90, movable=False, pen=pen)
-        
+
         self.label = pg.TextItem(anchor=(0, 1), color=PAL.TEXT_MID)
         self.label.setFont(QFont("Consolas", 9))
-        
+
         self._curves_primary: list[pg.PlotDataItem] = []
         self._curves_secondary: list[pg.PlotDataItem] = []
 
-        self._proxy = pg.SignalProxy(self._plot.scene().sigMouseMoved, rateLimit=60, slot=self._on_mouse)
+        self._proxy = pg.SignalProxy(
+            self._plot.scene().sigMouseMoved, rateLimit=60, slot=self._on_mouse
+        )
 
-    def register(self, primary: Sequence[pg.PlotDataItem], secondary: Sequence[pg.PlotDataItem]):
+    def register(
+        self,
+        primary: Sequence[pg.PlotDataItem],
+        secondary: Sequence[pg.PlotDataItem],
+    ):
         self._curves_primary = list(primary)
         self._curves_secondary = list(secondary)
 
@@ -166,30 +239,31 @@ class _Crosshair:
         pos = args[0]
         if not self._plot.sceneBoundingRect().contains(pos):
             return
-            
-        if self._plot.vb is None:
+
+        vb = self._plot.vb
+        if vb is None:
             return
 
-        mouse_point = self._plot.vb.mapSceneToView(pos)
+        mouse_point = vb.mapSceneToView(pos)
         x = mouse_point.x()
         self.vline.setPos(x)
 
         parts = [f"t = {x:.3f} s"]
-        
+
         for c in self._curves_primary:
             xd, yd = c.getData()
-            if xd is not None and yd is not None and len(xd) > 0 and len(yd) > 0:
+            if xd is not None and yd is not None and len(xd) > 0:
                 idx = int(np.clip(np.searchsorted(xd, x), 0, len(yd) - 1))
                 parts.append(f"P = {yd[idx]:.2f} mbar")
-                
+
         for c in self._curves_secondary:
             xd, yd = c.getData()
-            if xd is not None and yd is not None and len(xd) > 0 and len(yd) > 0:
+            if xd is not None and yd is not None and len(xd) > 0:
                 idx = int(np.clip(np.searchsorted(xd, x), 0, len(yd) - 1))
                 parts.append(f"V = {yd[idx]:.2f} ml")
 
         self.label.setText("  ".join(parts))
-        self.label.setPos(mouse_point.x(), self._plot.vb.viewRange()[1][1])
+        self.label.setPos(mouse_point.x(), vb.viewRange()[1][1])
 
 
 # ─── MAIN WIDGET ───────────────────────────────────────────────────────────────
@@ -206,7 +280,7 @@ class AnalysisFrame(Qtw.QFrame):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(8)
 
-        # ── TOOLBAR ────────────────────────────────────────────────────────
+        # ── TOOLBAR ────────────────────────────────────────────────────
         toolbar = Qtw.QHBoxLayout()
         toolbar.setSpacing(8)
 
@@ -231,36 +305,34 @@ class AnalysisFrame(Qtw.QFrame):
         toolbar.addWidget(self.lbl_status, stretch=1)
         root.addLayout(toolbar)
 
-        # ── PLOT AREA ──────────────────────────────────────────────────────
+        # ── PLOT AREA ──────────────────────────────────────────────────
         pg.setConfigOptions(antialias=True)
 
         self.gfx = pg.GraphicsLayoutWidget()
         self.gfx.setBackground(PAL.BG_PLOT)
         root.addWidget(self.gfx, stretch=1)
 
-        # 1. GRAPH: DRUCK (Oben)
-        self.plot_p = self.gfx.addPlot(row=0, col=0) # type: ignore[attr-defined]
+        # 1. PRESSURE plot (top)
+        self.plot_p = self.gfx.ci.addPlot(row=0, col=0)
         self.plot_p.setTitle("POST-RUN ANALYSIS: PRESSURE", color=PAL.TEXT_HI, size="11pt")
         self.plot_p.showGrid(x=True, y=True, alpha=0.08)
-        
-        # 🚀 BUGFIX: "GBAR" verhindern, indem wir 'units' weglassen und es hart in den Text schreiben!
         self.plot_p.setLabel("left", "Pressure [mbar]", color=PAL.ACCENT_1)
         self.plot_p.getAxis("left").setPen(pg.mkPen(PAL.ACCENT_1, width=1))
 
-        # 2. GRAPH: VOLUMEN (Unten)
-        self.plot_v = self.gfx.addPlot(row=1, col=0) # type: ignore[attr-defined]
+        # 2. VOLUME plot (bottom)
+        self.plot_v = self.gfx.ci.addPlot(row=1, col=0)
         self.plot_v.setTitle("VOLUME", color=PAL.TEXT_HI, size="11pt")
         self.plot_v.showGrid(x=True, y=True, alpha=0.08)
-        
-        # 🚀 BUGFIX: Auch hier Einheiten fest in den Text schreiben!
         self.plot_v.setLabel("bottom", "Time [s]", color=PAL.TEXT_MID)
         self.plot_v.setLabel("left", "Volume [ml]", color=PAL.ACCENT_2)
         self.plot_v.getAxis("left").setPen(pg.mkPen(PAL.ACCENT_2, width=1))
         self.plot_v.getAxis("bottom").setPen(pg.mkPen(PAL.TEXT_DIM, width=1))
 
-        self.plot_v.setXLink(self.plot_p)
+        # Link X axes
+        self.plot_v.getViewBox().linkView(self.plot_v.getViewBox().XAxis, self.plot_p.getViewBox())
 
-        self._crosshair = _Crosshair(self.plot_p, self.plot_v)
+        # Crosshair (deferred setup — scene not ready before first show)
+        self._crosshair: _Crosshair | None = None
 
         self.lbl_stats = Qtw.QLabel("")
         self.lbl_stats.setStyleSheet(_LABEL_MID)
@@ -274,24 +346,36 @@ class AnalysisFrame(Qtw.QFrame):
         btn.setStyleSheet(_BTN_STYLE)
         return btn
 
+    def _ensure_crosshair(self):
+        """Lazy-init the crosshair after the scene exists."""
+        if self._crosshair is None:
+            self._crosshair = _Crosshair(self.plot_p, self.plot_v)
+
     def _plot_run(self, run: TelemetryRun):
         self.plot_p.clear()
         self.plot_v.clear()
 
+        # ── Draw curves ───────────────────────────────────────────────
         pen_p = pg.mkPen(color=PAL.ACCENT_1, width=2)
-        curve_p = self.plot_p.plot(run.time_s, run.pressure_mbar, pen=pen_p, name="Pressure")
+        curve_p = self.plot_p.plot(
+            run.time_s, run.pressure_mbar, pen=pen_p, name="Pressure"
+        )
 
         pen_v = pg.mkPen(color=PAL.ACCENT_2, width=2)
-        curve_v = self.plot_v.plot(run.time_s, run.volume_ml, pen=pen_v, name="Volume")
+        curve_v = self.plot_v.plot(
+            run.time_s, run.volume_ml, pen=pen_v, name="Volume"
+        )
 
-        self.plot_p.enableAutoRange(axis=pg.ViewBox.YAxis)
-        self.plot_v.enableAutoRange(axis=pg.ViewBox.YAxis)
-        self.plot_p.autoRange()
-        self.plot_v.autoRange()
+        # ── Force auto-range so data is visible ──────────────────────
+        self.plot_p.getViewBox().autoRange()
+        self.plot_v.getViewBox().autoRange()
 
-        self._crosshair.register(primary=[curve_p], secondary=[curve_v])
-        self.plot_p.addItem(self._crosshair.vline, ignoreBounds=True)
-        self.plot_p.addItem(self._crosshair.label, ignoreBounds=True)
+        # ── Crosshair ────────────────────────────────────────────────
+        self._ensure_crosshair()
+        if self._crosshair is not None:
+            self._crosshair.register(primary=[curve_p], secondary=[curve_v])
+            self.plot_p.addItem(self._crosshair.vline, ignoreBounds=True)
+            self.plot_p.addItem(self._crosshair.label, ignoreBounds=True)
 
     @Slot()
     def _on_load(self):
@@ -312,13 +396,17 @@ class AnalysisFrame(Qtw.QFrame):
             run = parse_telemetry_csv(path)
         except Exception as exc:
             self.lbl_status.setText(f"✗  {exc}")
-            self.lbl_status.setStyleSheet(f"color: {PAL.ACCENT_WARN}; font-family: 'Consolas', monospace; font-size: 11px;")
+            self.lbl_status.setStyleSheet(
+                f"color: {PAL.ACCENT_WARN}; font-family: 'Consolas', monospace; font-size: 11px;"
+            )
             return
 
         self._run = run
         self._plot_run(run)
         self.lbl_status.setText(f"✓  {run.filepath.name}")
-        self.lbl_status.setStyleSheet(f"color: {PAL.ACCENT_2}; font-family: 'Consolas', monospace; font-size: 11px;")
+        self.lbl_status.setStyleSheet(
+            f"color: {PAL.ACCENT_2}; font-family: 'Consolas', monospace; font-size: 11px;"
+        )
         self.lbl_stats.setText(run.summary)
         self.btn_export_png.setEnabled(True)
         self.btn_export_csv.setEnabled(True)
@@ -326,9 +414,12 @@ class AnalysisFrame(Qtw.QFrame):
 
     @Slot()
     def _export_png(self):
-        if self._run is None: return
+        if self._run is None:
+            return
         default = self._run.filepath.with_suffix(".png")
-        path, _ = Qtw.QFileDialog.getSaveFileName(self, "Export Plot as PNG", str(default), "PNG Image (*.png)")
+        path, _ = Qtw.QFileDialog.getSaveFileName(
+            self, "Export Plot as PNG", str(default), "PNG Image (*.png)"
+        )
         if path:
             exporter = pyqtgraph.exporters.ImageExporter(self.gfx.scene())
             exporter.parameters()["width"] = 2400
@@ -337,10 +428,16 @@ class AnalysisFrame(Qtw.QFrame):
 
     @Slot()
     def _export_csv(self):
-        if self._run is None: return
-        default = self._run.filepath.with_name(self._run.filepath.stem + "_export.csv")
-        path, _ = Qtw.QFileDialog.getSaveFileName(self, "Export Data as CSV", str(default), "CSV Files (*.csv)")
-        if not path: return
+        if self._run is None:
+            return
+        default = self._run.filepath.with_name(
+            self._run.filepath.stem + "_export.csv"
+        )
+        path, _ = Qtw.QFileDialog.getSaveFileName(
+            self, "Export Data as CSV", str(default), "CSV Files (*.csv)"
+        )
+        if not path:
+            return
         run = self._run
         with open(path, "w", newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
