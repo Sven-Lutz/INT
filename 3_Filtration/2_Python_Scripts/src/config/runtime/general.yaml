@@ -1,0 +1,30 @@
+project_path: C:/Users/Operator/PelliKAn/3_Filtration/2_Python_Scripts
+logging:
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+serial:
+  baudrate_default: 9600
+  timeout_s: 1.5
+full_scale_raw_default: 32000
+health:
+  comm_timeout_s: 2.0
+  idle_pressure_warn_mbar: 200.0
+  pressure_alarm_mbar: 2000.0
+  flow_low_warn: 0.05
+  telemetry_stale_s: 2.0
+trends:
+  trend_window_s: 3.0
+  trend_deadband_mbar_s: 2.0
+hold:
+  hold_setpoint_rate_ms: 100
+  restore_fallback_valve_state: FILTRATION
+ui:
+  ok_modal_popups: false
+  sim_mode: false
+  suppress_ok_modal_spam: true
+  theme: dark
+  top_height: 92
+  splitter_sizes:
+  - 600
+  - 380
+  compact_mode: true

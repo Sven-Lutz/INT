@@ -6,7 +6,7 @@
 # --- Connection ---
 port: COM5
 address: 3
-baudrate: 9600
+baudrate: 38400
 channel: 1
 
 # --- Scaling ---
