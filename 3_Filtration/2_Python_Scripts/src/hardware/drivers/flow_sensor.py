@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class FlowSensorConfig:
     port: str = "COM5"
     baudrate: int = 38400
-    address: int = 3
+    address: int = 1
     
     proc_nr: int = 33
     parm_nr: int = 0
