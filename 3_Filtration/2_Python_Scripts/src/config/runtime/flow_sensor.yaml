@@ -1,5 +1,5 @@
 port: COM5
-address: 3
+address: 1
 baudrate: 38400
 channel: 1
 scale_mode: engineering

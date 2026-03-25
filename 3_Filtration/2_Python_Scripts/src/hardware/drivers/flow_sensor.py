@@ -112,8 +112,6 @@ class FlowSensor:
             
         except Exception as e:
             logger.error(f"FlowSensor: connection failed on {self.cfg.port} -> {e}")
-            logger.warning("Hinweis: Überprüfe, ob die Node-Adresse (aktuell 3) auf 128 stehen muss, oder ob der Sensor im Analog-Modus ist.")
-            # Wir lassen self.flow_sensor auf None, das Skript läuft aber weiter (get_flow gibt dann 0.0 zurück)
             self.flow_sensor = None
 
     def get_flow(self) -> float:
