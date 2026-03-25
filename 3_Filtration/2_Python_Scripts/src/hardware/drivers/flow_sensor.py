@@ -13,15 +13,15 @@ logger = logging.getLogger(__name__)
 class FlowSensorConfig:
     port: str = "COM5"
     baudrate: int = 38400
-    address: int = 1
+    address: int = 3
     
     proc_nr: int = 33
     parm_nr: int = 0
     parm_type: int = 117  
     
     scale_mode: str = "engineering"
-    full_scale_raw: float = 32000.0
-    full_scale_ml_min: float = 20.0 
+    full_scale_raw: float = 32767.0
+    full_scale_ml_min: float = 150.0
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "FlowSensorConfig":
@@ -83,7 +83,7 @@ class FlowSensor:
             # Parameter 113 ist der "User Tag" (Ein String, der oft den Sensornamen enthält)
             # Wenn hier None zurückkommt, antwortet auf dieser Adresse niemand.
             logger.info("FlowSensor DEBUG: Sende Hardware-Ping...")
-            user_tag = self.flow_sensor.readParameter(113)
+            user_tag = self.flow_sensor.readParameter(115)
             
             if user_tag is None:
                 logger.error(f"FlowSensor: Keine Antwort auf Adresse {self.cfg.address}. Ist der Sensor evtl. auf Adresse 3 oder 128?")

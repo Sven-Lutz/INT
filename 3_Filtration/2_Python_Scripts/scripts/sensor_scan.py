@@ -3,7 +3,7 @@ import propar
 
 def scan_bronkhorst_sensor(port: str = "COM5"):
     # Typische Bronkhorst Baudraten und Node-Adressen
-    baudrates = [38400, 9600]
+    baudrates = [38400, 9600, 4800, 19200, 115200, 57600, 115200, 230400, 460800]
     nodes = [1, 3, 128] 
     
     print(f"Starte Sensor-Scan auf {port}...")
