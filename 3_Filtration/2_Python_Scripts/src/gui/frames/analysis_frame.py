@@ -38,31 +38,50 @@ class AnalysisFrame(Qtw.QFrame):
         ctrl_lay.addStretch()
         lay.addWidget(ctrl_panel)
 
-        # 2. PLOT-WIDGET
+        # 2. PLOT-WIDGET SETUP (Zwei Y-Achsen)
         pg.setConfigOptions(antialias=True)
-        self.plot_widget = pg.PlotWidget(title="POST-RUN ANALYSIS")
-        self.plot_widget.setBackground('#090F16')
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.1)
-        self.plot_widget.addLegend()
         
-        # Achsen-Beschriftung
-        self.plot_widget.setLabel('bottom', "Time [s]", color='#94A3B8')
-        self.plot_widget.setLabel('left', "Pressure [mbar]", color='#8B5CF6')
+        # Anstatt PlotWidget nutzenśmy GraphicsLayoutWidget für mehr Kontrolle
+        self.graph_layout = pg.GraphicsLayoutWidget()
+        self.graph_layout.setBackground('#090F16')
+        lay.addWidget(self.graph_layout, stretch=1)
         
-        lay.addWidget(self.plot_widget, stretch=1)
+        # Den Hauptplot (Linke Achse für Druck) erstellen
+        self.plot_item = self.graph_layout.addPlot(title="POST-RUN ANALYSIS")  # type: ignore        self.plot_item.showGrid(x=True, y=True, alpha=0.1)
+        self.plot_item.addLegend(offset=(10, 10))
+        
+        self.plot_item.setLabel('bottom', "Time", units='s', color='#94A3B8')
+        self.plot_item.setLabel('left', "Main Pressure", units='mbar', color='#8B5CF6')
+        
+        # Die zweite Y-Achse (Rechts für Volumen) erstellen
+        self.axis_vol = pg.AxisItem('right')
+        self.axis_vol.setLabel("Volume", units='ml', color='#00E5FF')
+        self.plot_item.layout.addItem(self.axis_vol, 2, 2)
+        
+        # ViewBox für das Volumen (legt sich über den Hauptplot)
+        self.vb_vol = pg.ViewBox()
+        self.plot_item.scene().addItem(self.vb_vol)
+        self.axis_vol.linkToView(self.vb_vol)
+        self.vb_vol.setXLink(self.plot_item)
+        
+        # Signale verknüpfen, damit sich beide Viewboxen beim Zoomen synchronisieren
+        self.plot_item.vb.sigResized.connect(self._update_views)
+
+    @Slot()
+    def _update_views(self):
+        """Hält die Geometrie der zweiten ViewBox synchron mit dem Hauptplot."""
+        self.vb_vol.setGeometry(self.plot_item.vb.sceneBoundingRect())
+        self.vb_vol.linkedViewChanged(self.plot_item.vb, self.vb_vol.XAxis)
 
     @Slot()
     def _load_csv(self):
         """Öffnet einen Dialog zur Auswahl der Telemetrie-CSV und plottet die Daten."""
-        # Suche im lokalen logs/runs Verzeichnis
         base_dir = Path(__file__).resolve().parents[3] / "logs"
-        
         file_path, _ = Qtw.QFileDialog.getOpenFileName(
             self, "Select Telemetry CSV", str(base_dir), "CSV Files (*.csv)"
         )
-        
         if not file_path:
-            return  # Abbruch durch User
+            return
             
         self.lbl_file_info.setText(f"Loading: {Path(file_path).name}...")
         self._parse_and_plot(file_path)
@@ -74,14 +93,9 @@ class AnalysisFrame(Qtw.QFrame):
         
         try:
             with open(filepath, mode='r', encoding='utf-8') as f:
-                # Ignoriere Preamble (Zeilen mit #) falls vorhanden
-                # CSV.DictReader sucht sich automatisch die Spaltennamen
                 reader = csv.DictReader(row for row in f if not row.startswith('#'))
-                
                 for row in reader:
-                    # Wir sichern uns ab, falls Felder leer sind
                     try:
-                        # Hier nutzen wir die Spaltennamen aus deinem RunTelemetryStore
                         t = float(row.get('t_s', 0))
                         p = float(row.get('p1_meas', 0) or 0)
                         v = float(row.get('volume_ml', 0) or 0)
@@ -90,19 +104,23 @@ class AnalysisFrame(Qtw.QFrame):
                         pressures.append(p)
                         volumes.append(v)
                     except ValueError:
-                        continue # Überspringe kaputte Zeilen
+                        continue
             
-            # Plot zurücksetzen und neu zeichnen
-            self.plot_widget.clear()
+            # Plot zurücksetzen
+            self.plot_item.clear()
+            self.vb_vol.clear()
             
-            # Druckverlauf zeichnen (Lila)
+            # Druck auf der linken Achse plotten (self.plot_item)
             pen_p = pg.mkPen(color='#8B5CF6', width=2)
-            self.plot_widget.plot(times, pressures, pen=pen_p, name="Main Pressure (mbar)")
+            self.plot_item.plot(times, pressures, pen=pen_p, name="Main Pressure (mbar)")
             
-            # 💡 HINWEIS: Volumen (V) hat eigentlich eine andere Einheit (ml). 
-            # Für eine schnelle Visualisierung plotten wir es erstmal mit rein.
+            # Volumen auf der rechten Achse plotten (self.vb_vol)
             pen_v = pg.mkPen(color='#00E5FF', width=2)
-            self.plot_widget.plot(times, volumes, pen=pen_v, name="Volume (ml)")
+            curve_v = pg.PlotDataItem(times, volumes, pen=pen_v)
+            self.vb_vol.addItem(curve_v)
+            
+            # Legende manuell updaten (da PlotDataItem in ViewBox nicht automatisch in Legende landet)
+            self.plot_item.legend.addItem(curve_v, "Volume (ml)")
             
             self.lbl_file_info.setText(f"Loaded: {Path(filepath).name} | Data points: {len(times)}")
             
