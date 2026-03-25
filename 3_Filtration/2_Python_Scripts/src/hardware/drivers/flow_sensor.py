@@ -49,6 +49,8 @@ class FlowSensorConfig:
             scale_mode=scale_mode, full_scale_raw=fs_raw, full_scale_ml_min=fs_ml
         )
 
+# ... (Imports und FlowSensorConfig bleiben identisch)
+
 class FlowSensor:
     """
     Treiber für Bronkhorst ES-FLOW / ProPar basierte Sensoren mit Auto-Fallback.
@@ -60,11 +62,12 @@ class FlowSensor:
             self.cfg = cfg
             
         self.flow_sensor: Any = None
-        self._cached_request = [{
-            "proc_nr": self.cfg.proc_nr,
-            "parm_nr": self.cfg.parm_nr,
-            "parm_type": self.cfg.parm_type
-        }]
+        
+        # Wir speichern jetzt nur noch die ID des erfolgreichen Parameters
+        # ID 205 = fMeasure (Float, Engineering Units)
+        # ID 8 = Measure (Int, Raw 0-32000)
+        self._cached_parameter_id: int = 0 
+        
         self._last_good_flow: float = 0.0
         self._error_count: int = 0
 
@@ -79,46 +82,34 @@ class FlowSensor:
                 address=self.cfg.address,
             )
 
-            # --- NEU: Hardware-Ping zur Adressverifizierung ---
-            # Parameter 113 ist der "User Tag" (Ein String, der oft den Sensornamen enthält)
-            # Wenn hier None zurückkommt, antwortet auf dieser Adresse niemand.
+            # Hardware-Ping
             logger.info("FlowSensor DEBUG: Sende Hardware-Ping...")
-            user_tag = self.flow_sensor.readParameter(115)
+            user_tag = self.flow_sensor.readParameter(115) # 115 ist oft der User Tag
             
             if user_tag is None:
-                logger.error(f"FlowSensor: Keine Antwort auf Adresse {self.cfg.address}. Ist der Sensor evtl. auf Adresse 3 oder 128?")
-                # Wir setzen den Sensor auf None, damit das System weiß, dass die Verbindung fehlgeschlagen ist
+                logger.error(f"FlowSensor: Keine Antwort auf Adresse {self.cfg.address}.")
                 self.flow_sensor = None
                 return
 
             logger.info(f"FlowSensor: Hardware-Ping erfolgreich! Gerät meldet sich als: '{user_tag}'")
                     
-            # TEST 1: Modern Float (Proc 33, Parm 0, Type 117)
-            test_read = self.flow_sensor.read_parameters(self._cached_request)
-            
-            if not test_read or not isinstance(test_read, list) or test_read[0].get("data") is None:
-                status_code = test_read[0].get('status') if test_read else 'Timeout'
-                logger.warning(f"FlowSensor: Standard (Proc 33) abgelehnt (Status: {status_code}).")
+            # TEST 1: High-Level API für Float (Engineering Units) -> Parameter ID 205
+            val_float = self.flow_sensor.readParameter(205)
+            if val_float is not None:
+                logger.info("FlowSensor: fMeasure (ID 205) erfolgreich! Nutze Engineering Units.")
+                self._cached_parameter_id = 205
+                object.__setattr__(self.cfg, 'scale_mode', 'engineering')
+            else:
+                logger.warning("FlowSensor: fMeasure (ID 205) nicht verfügbar.")
                 
-                # TEST 2: Classic Raw (Proc 1, Parm 0, Type 114)
-                fallback_req = [{"proc_nr": 1, "parm_nr": 0, "parm_type": 114}]
-                test_read_2 = self.flow_sensor.read_parameters(fallback_req)
-                
-                if test_read_2 and isinstance(test_read_2, list) and test_read_2[0].get("data") is not None:
-                    logger.info("FlowSensor: Fallback 1 erfolgreich! (Proc 1)")
-                    self._cached_request = fallback_req
-                    object.__setattr__(self.cfg, 'scale_mode', 'raw') 
+                # TEST 2: High-Level API für Raw Data (0-32000/32767) -> Parameter ID 8
+                val_raw = self.flow_sensor.readParameter(8)
+                if val_raw is not None:
+                    logger.info("FlowSensor: Measure (ID 8) erfolgreich! Nutze Raw-Skalierung.")
+                    self._cached_parameter_id = 8
+                    object.__setattr__(self.cfg, 'scale_mode', 'raw')
                 else:
-                    # TEST 3: Sensor Value Direct (Proc 1, Parm 1, Type 114) - Für exotische ES-Flow Modelle
-                    fallback_req_2 = [{"proc_nr": 1, "parm_nr": 1, "parm_type": 114}]
-                    test_read_3 = self.flow_sensor.read_parameters(fallback_req_2)
-                    
-                    if test_read_3 and isinstance(test_read_3, list) and test_read_3[0].get("data") is not None:
-                        logger.info("FlowSensor: Fallback 2 erfolgreich! (Proc 1, Parm 1)")
-                        self._cached_request = fallback_req_2
-                        object.__setattr__(self.cfg, 'scale_mode', 'raw')
-                    else:
-                        raise ConnectionError(f"Alle Lese-Versuche gescheitert. Letzter Status: {test_read_3[0].get('status') if test_read_3 else 'Unbekannt'}")
+                    raise ConnectionError("Alle Lese-Versuche (ID 205 & ID 8) gescheitert.")
 
             logger.info("FlowSensor: communication successfully started AND verified")
             self._error_count = 0
@@ -129,26 +120,26 @@ class FlowSensor:
             self.flow_sensor = None
 
     def get_flow(self) -> float:
-        if self.flow_sensor is None: return 0.0
+        if self.flow_sensor is None or self._cached_parameter_id == 0: 
+            return 0.0
 
         try:
-            values = self.flow_sensor.read_parameters(self._cached_request)
+            # Wir lesen direkt den verifizierten Parameter aus
+            data = self.flow_sensor.readParameter(self._cached_parameter_id)
             
-            if not values or not isinstance(values, list) or len(values) == 0:
-                return self._last_good_flow
-
-            data = values[0].get("data")
             if data is None: 
                 return self._last_good_flow
 
             raw_value = float(data)
             
-            # Verarbeite Rohwerte (Proc 1) oder Engineering Floats (Proc 33)
+            # Verarbeite Rohwerte (ID 8) oder Engineering Floats (ID 205)
             if self.cfg.scale_mode == "engineering":
                 flow_ml_min = raw_value
             else:
+                # Absicherung gegen Daten-Müll (größer als 150% des Messbereichs)
                 if abs(raw_value) > self.cfg.full_scale_raw * 1.5:
                     return self._last_good_flow 
+                # Umrechnung von z.B. 0-32767 auf 0-150 ml/min
                 flow_ml_min = (raw_value / self.cfg.full_scale_raw) * self.cfg.full_scale_ml_min
 
             self._error_count = 0
