@@ -73,12 +73,26 @@ class FlowSensor:
         logger.info(f"FlowSensor: connecting to {self.cfg.port} (Baud: {self.cfg.baudrate}, Node: {self.cfg.address})")
         
         try:
+            # Right after creating the instrument, try the high-level API:
             self.flow_sensor = propar.instrument(
                 self.cfg.port, 
                 baudrate=self.cfg.baudrate, 
-                address=self.cfg.address, 
+                address=self.cfg.address,
             )
-            
+
+            # Debug: try the high-level readParameter method
+            try:
+                fmeasure = self.flow_sensor.readParameter(205)  # P205 = fMeasure
+                logger.info(f"FlowSensor DEBUG: P205 fMeasure = {fmeasure}")
+            except Exception as e:
+                logger.warning(f"FlowSensor DEBUG: readParameter(205) failed: {e}")
+
+            try:
+                measure = self.flow_sensor.readParameter(8)  # P008 = Measure
+                logger.info(f"FlowSensor DEBUG: P008 Measure = {measure}")
+            except Exception as e:
+                logger.warning(f"FlowSensor DEBUG: readParameter(8) failed: {e}")
+                    
             # TEST 1: Modern Float (Proc 33, Parm 0, Type 117)
             test_read = self.flow_sensor.read_parameters(self._cached_request)
             
