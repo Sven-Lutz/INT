@@ -25,6 +25,7 @@ class FlowSensorConfig:
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "FlowSensorConfig":
+        logger.info(f"FlowSensorConfig.from_dict received: {d}")
         if "flow" in d and isinstance(d["flow"], dict): 
             d = d["flow"]
             
@@ -75,7 +76,7 @@ class FlowSensor:
             self.flow_sensor = propar.instrument(
                 self.cfg.port, 
                 baudrate=self.cfg.baudrate, 
-                address=self.cfg.address
+                address=self.cfg.address, 
             )
             
             # TEST 1: Modern Float (Proc 33, Parm 0, Type 117)

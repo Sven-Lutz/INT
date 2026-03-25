@@ -1,44 +1,27 @@
 # flow_sensor.yaml
-# ============================================================
 # Bronkhorst ProPar Flow Sensor (ES-FLOW / ProPar)
-# ============================================================
-
-# --- Connection ---
 port: COM5
-address: 3
+address: 128
 baudrate: 38400
 channel: 1
 
-# --- Scaling ---
-# "engineering": values are already engineering floats (recommended)
-# "raw_percent": interpret raw counts relative to full_scale_raw as %
 scale_mode: engineering
 full_scale_raw: 32000
 
-# --- ProPar mapping (ES-FLOW standard) ---
-# Fmeasure  : proc=33 parm=0  (float)
-# Fsetpoint : proc=33 parm=3  (float)
 meas: [33, 0]
 setp: [33, 3]
 
-# --- I/O timing ---
 io_timeout_s: 1.5
 inter_request_sleep_s: 0.03
 
-# --- Write behaviour ---
 max_write_retries: 2
 readback_tolerance: 0.05
 
-# Optional ramping (engineering units if scale_mode=engineering, else percent)
 ramp_max_step: 0.2
 ramp_sleep_s: 0.15
 
-# --- Fault handling / Logging ---
-# fail_soft=true: return last_good / 0.0 on read failures (UI-safe)
 fail_soft: true
 
-# after N consecutive read failures -> raise RuntimeError (prevents silent death loops)
 fail_hard_after_consecutive: 10
 
-# dump one RAW-DUMP per unique (proc,parm,kind) when failures occur
 log_raw_on_fail: true
