@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from random import sample
 import time
 from pathlib import Path
 from typing import Optional
 
-from numpy.random import sample
 import pyqtgraph as pg
 from PySide6.QtCore import Signal, Slot, Qt, QRectF, QPointF
 from PySide6.QtGui import (
@@ -243,9 +241,12 @@ class RightFrame(QFrame):
         self.setProperty("surface", "panel")
         self._running = False
         
-        # 🚀 FIX: Neue States für die physikalische Logik
         self._ui_phase = "IDLE"
-        self._max_vol = 0.1 
+        
+        # 🚀 GROUND TRUTH CALIBRATION STATES
+        self._current_vol_ml = 0.0
+        self._membrane_vol_ml = 3500.0  # Fallback: Exakt die Mitte von 7 Litern
+        self.MAX_CELL_VOLUME_ML = 7000.0 
 
         root_path = project_root(__file__)
         ensure_dir(resolve_under(root_path, "logs"))
@@ -293,9 +294,7 @@ class RightFrame(QFrame):
         term_lay.addWidget(lbl_term)
 
         self.console = QTextBrowser()
-
         self.console.document().setMaximumBlockCount(1000)
-
         self.console.setStyleSheet("""
             QTextBrowser {
                 background-color: #090F16;
@@ -336,18 +335,22 @@ class RightFrame(QFrame):
         self.banner_ok.hide()
         lay.addWidget(self.banner_ok)
 
-        # 4. KONTROLL-BUTTONS
+        # 4. KONTROLL-BUTTONS (Inkl. Kalibrierung)
         ctrl_lay = QHBoxLayout()
         ctrl_lay.setSpacing(10)
 
         self.btn_start = self._action_btn("START SEQUENCE", "#10B981")
         self.btn_start.clicked.connect(self.start_clicked.emit)
 
+        self.btn_calib = self._action_btn("SET MEMBRANE", "#00E5FF")
+        self.btn_calib.clicked.connect(self._calibrate_membrane)
+
         self.btn_stop = self._action_btn("EMERGENCY ABORT", "#FF1744")
         self.btn_stop.clicked.connect(self.stop_clicked.emit)
         self.btn_stop.setEnabled(False)
 
         ctrl_lay.addWidget(self.btn_start)
+        ctrl_lay.addWidget(self.btn_calib)
         ctrl_lay.addWidget(self.btn_stop)
         lay.addLayout(ctrl_lay)
 
@@ -372,14 +375,13 @@ class RightFrame(QFrame):
         self.console.clear()
         self.banner_ok.hide()
         self._ui_phase = "IDLE"
-        self._max_vol = 0.1
+        self._current_vol_ml = 0.0
         self.sandglass.set_state(0.5, "IDLE")
         self.trapezoid.set_state(0.0, 0.0, "IDLE")
         self.realtime_plot.stop_logging()
 
     @Slot(str)
     def set_step(self, step: str):
-        # 🚀 FIX: Wir speichern die harte Phase ab!
         self._ui_phase = step.upper()
         self.append_log(f"--- STEP TRANSITION: {self._ui_phase} ---", "#8B5CF6")
 
@@ -437,6 +439,14 @@ class RightFrame(QFrame):
                 QPushButton:hover { background-color: #1E293B; color: #FFF; }
             """)
 
+    @Slot()
+    def _calibrate_membrane(self):
+        """Setzt das aktuell gemessene Volumen als exakten 50% Punkt der Zelle."""
+        self._membrane_vol_ml = self._current_vol_ml
+        self.append_log(f"SYS: Membrane visual calibration set to {self._membrane_vol_ml:.2f} mL", "#00E5FF")
+        # Direkter Trigger um das UI an den neuen Ankerpunkt anzupassen
+        self.update_telemetry({"volume_ml": self._current_vol_ml, "step": self._ui_phase})
+
     @Slot(dict)
     def update_telemetry(self, sample: dict):
         if not isinstance(sample, dict):
@@ -457,21 +467,31 @@ class RightFrame(QFrame):
         p1_set = _to_float(p1_set_raw)
         
         vol = _to_float(sample.get("volume_ml", 0.0))
-
-        if vol > self._max_vol:
-            self._max_vol = vol
-
+        self._current_vol_ml = vol  # Speichern für Kalibrierung
+        
         step = str(sample.get("step", "IDLE")).upper()
 
         self.trapezoid.set_state(p1, p1_set, self._ui_phase)
 
-        if "FILLING" in step or "BACKWASH" in step:
-            fill_pct = 0.5 + (vol / self._max_vol) * 0.4 if self._max_vol > 0 else 0.5
-            self.sandglass.set_state(fill_pct, step)
-        
-        elif step == "FILTRATION" or "PHASE" in self._ui_phase:
-            fill_pct = 0.5 + (vol / self._max_vol) * 0.4 if self._max_vol > 0 else 0.5
-            self.sandglass.set_state(fill_pct, self._ui_phase)
+        # 🚀 FIX: Visuelle Non-lineare Skalierung anhand des kalibrierten Membran-Punkts
+        if "FILLING" in step or "BACKWASH" in step or "FILTRATION" in step or "PHASE" in self._ui_phase:
+            if vol <= self._membrane_vol_ml:
+                # Volumen unterhalb der Membran (0% bis 50% im UI)
+                if self._membrane_vol_ml > 0:
+                    fill_pct = (vol / self._membrane_vol_ml) * 0.5
+                else:
+                    fill_pct = 0.0
+            else:
+                # Volumen oberhalb der Membran (50% bis 100% im UI)
+                upper_capacity = self.MAX_CELL_VOLUME_ML - self._membrane_vol_ml
+                if upper_capacity > 0:
+                    fill_pct = 0.5 + ((vol - self._membrane_vol_ml) / upper_capacity) * 0.5
+                else:
+                    fill_pct = 1.0
+            
+            # Clamp zwischen 0.0 und 1.0 um Überläufe bei der Animation zu verhindern
+            fill_pct = max(0.0, min(1.0, fill_pct))
+            self.sandglass.set_state(fill_pct, step if "PHASE" not in self._ui_phase else self._ui_phase)
             
         elif step == "VENTING":
             self.sandglass.set_state(0.5, "VENTING")
