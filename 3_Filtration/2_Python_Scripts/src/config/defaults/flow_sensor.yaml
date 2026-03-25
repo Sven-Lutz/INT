@@ -1,7 +1,7 @@
 # flow_sensor.yaml
 # Bronkhorst ProPar Flow Sensor (ES-FLOW / ProPar)
 port: COM5
-address: 128
+address: 1
 baudrate: 38400
 channel: 1
 
