@@ -255,7 +255,7 @@ class RightFrame(QFrame):
         lay.setContentsMargins(15, 15, 15, 15)
         lay.setSpacing(12)
 
-        # 1. TABS
+        # 1. TABS (in RightFrame.__init__)
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("""
             QTabWidget::pane { border: 1px solid #1E293B; border-radius: 6px; background: #050914; }
@@ -268,13 +268,50 @@ class RightFrame(QFrame):
         tab_viz = QWidget()
         tab_viz.setStyleSheet("background-color: #050914;")
         viz_lay = QHBoxLayout(tab_viz)
+
+        # --- NEU: Verschachtelter Container für die Kugel und den Kalibrierungs-Button ---
+        left_viz_widget = QWidget()
+        left_viz_lay = QVBoxLayout(left_viz_widget)
+        left_viz_lay.setContentsMargins(0, 0, 0, 0)
+        
         self.sandglass = ReactorSphereWidget()
-        self.trapezoid = TrapezoidWidget()
-        viz_lay.addWidget(self.sandglass)
+        left_viz_lay.addWidget(self.sandglass)
+
+        # Der dezent gestaltete, organische Kalibrierungs-Button
+        self.btn_calib = QPushButton("⌖ SET MEMBRANE")
+        self.btn_calib.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_calib.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #64748B;
+                font-family: 'Consolas';
+                font-size: 9px;
+                font-weight: bold;
+                border: 1px solid #1E293B;
+                border-radius: 4px;
+                padding: 4px 8px;
+            }
+            QPushButton:hover {
+                background: #0F172A;
+                color: #00E5FF;
+                border: 1px solid #00E5FF;
+            }
+        """)
+        self.btn_calib.clicked.connect(self._calibrate_membrane)
+        
+        # Den Button zentriert unter die Kugel setzen
+        left_viz_lay.addWidget(self.btn_calib, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        # Den neuen linken Block in das Haupt-Layout des Tabs einfügen
+        viz_lay.addWidget(left_viz_widget)
+        # ---------------------------------------------------------------------------------
+
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.VLine)
         separator.setStyleSheet("color: #1E293B;")
         viz_lay.addWidget(separator)
+        
+        self.trapezoid = TrapezoidWidget()
         viz_lay.addWidget(self.trapezoid)
 
         _log_dir = Path(resolve_under(project_root(__file__), "logs"))
@@ -335,22 +372,19 @@ class RightFrame(QFrame):
         self.banner_ok.hide()
         lay.addWidget(self.banner_ok)
 
-        # 4. KONTROLL-BUTTONS (Inkl. Kalibrierung)
+        # 4. KONTROLL-BUTTONS (Bereinigt)
         ctrl_lay = QHBoxLayout()
         ctrl_lay.setSpacing(10)
 
         self.btn_start = self._action_btn("START SEQUENCE", "#10B981")
         self.btn_start.clicked.connect(self.start_clicked.emit)
 
-        self.btn_calib = self._action_btn("SET MEMBRANE", "#00E5FF")
-        self.btn_calib.clicked.connect(self._calibrate_membrane)
-
         self.btn_stop = self._action_btn("EMERGENCY ABORT", "#FF1744")
         self.btn_stop.clicked.connect(self.stop_clicked.emit)
         self.btn_stop.setEnabled(False)
 
+        # Der Kalibrierungs-Button wurde hier entfernt!
         ctrl_lay.addWidget(self.btn_start)
-        ctrl_lay.addWidget(self.btn_calib)
         ctrl_lay.addWidget(self.btn_stop)
         lay.addLayout(ctrl_lay)
 
