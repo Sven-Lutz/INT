@@ -68,6 +68,8 @@ class PressureController:
         self._instr_id = c_int32(-1)
         self._connected = False
         self._lock = threading.Lock()
+        self._last_good_pressure: Dict[int, float] = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+        self._error_counts: Dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
 
     def connect(self) -> None:
         with self._lock:
@@ -123,18 +125,26 @@ class PressureController:
                 res = OB1_Get_Data(self._instr_id.value, ch, data_reg, data_sens)
             
             if res != 0:
-                # Optional: Error Logging reduzieren, wenn das System busy ist
-                # logger.error("OB1_Get_Data schlug fehl auf Kanal %d! Error-Code: %d", ch, res)
-                return 0.0
+                self._error_counts[ch] += 1
+
+                if self._error_counts[ch] == 10:
+                    logger.warning(f"OB1_Get_Data CH{ch} schlägt wiederholt fehl (Fehlercode: {res}).")
             
             meas = float(data_reg.value)
+
             if -100.0 < meas < 10000.0:
+                self._last_good_pressure[ch] = meas 
+                self._error_counts[ch] = 0           
                 return meas
-            return 0.0
+            else:
+                return self._last_good_pressure.get(ch, 0.0)
                 
         except Exception as e:
-            logger.error("OB1 Read Error CH%d: %s", ch, e)
-            return 0.0
+            self._error_counts[ch] += 1
+            if self._error_counts[ch] == 1:
+                logger.error("OB1 Read Exception CH%d: %s", ch, e)
+                
+            return self._last_good_pressure.get(ch, 0.0)
 
     def close(self) -> None:
         if not self._connected: return
