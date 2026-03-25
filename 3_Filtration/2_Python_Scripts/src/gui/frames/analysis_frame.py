@@ -263,10 +263,10 @@ class AnalysisFrame(Qtw.QFrame):
         self.plot.getAxis("bottom").setPen(pg.mkPen(PAL.TEXT_DIM, width=1))
 
         # Secondary axis (right — volume)
-        self.axis_vol = pg.AxisItem("right")
+        self.plot.showAxis("right")  # Die eingebaute rechte Achse aktivieren!
+        self.axis_vol = self.plot.getAxis("right")
         self.axis_vol.setLabel("Volume", units="ml", color=PAL.ACCENT_2)
         self.axis_vol.setPen(pg.mkPen(PAL.ACCENT_2, width=1))
-        self.plot.layout.addItem(self.axis_vol, 2, 2)
 
         self.vb_vol = pg.ViewBox()
         self.plot.scene().addItem(self.vb_vol)
