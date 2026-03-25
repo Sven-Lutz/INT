@@ -141,24 +141,22 @@ _LABEL_MID = f"color: {PAL.TEXT_MID}; font-family: 'JetBrains Mono', 'Consolas',
 class _Crosshair:
     """Vertical-line + readout that follows the mouse across the plot."""
 
-    def __init__(self, plot_item: pg.PlotItem, vb_secondary: pg.ViewBox):
-        self._plot = plot_item
-        self._vb2 = vb_secondary
+    def __init__(self, plot_item_primary: pg.PlotItem, plot_item_secondary: pg.PlotItem):
+        self._plot = plot_item_primary
+        self._plot_sec = plot_item_secondary
 
         pen = pg.mkPen(color=PAL.TEXT_DIM, width=1, style=Qt.PenStyle.DashLine)
         self.vline = pg.InfiniteLine(angle=90, movable=False, pen=pen)
-        plot_item.addItem(self.vline, ignoreBounds=True)
-
+        
         self.label = pg.TextItem(anchor=(0, 1), color=PAL.TEXT_MID)
         self.label.setFont(QFont("JetBrains Mono", 9))
-        plot_item.addItem(self.label, ignoreBounds=True)
-
+        
         self._curves_primary: list[pg.PlotDataItem] = []
         self._curves_secondary: list[pg.PlotDataItem] = []
 
         # Connect mouse-move on the scene
         self._proxy = pg.SignalProxy(
-            plot_item.scene().sigMouseMoved, rateLimit=60, slot=self._on_mouse
+            self._plot.scene().sigMouseMoved, rateLimit=60, slot=self._on_mouse
         )
 
     def register(
@@ -243,47 +241,41 @@ class AnalysisFrame(Qtw.QFrame):
         toolbar.addWidget(self.lbl_status, stretch=1)
         root.addLayout(toolbar)
 
-        # ── PLOT AREA ──────────────────────────────────────────────────────
+# ── PLOT AREA ──────────────────────────────────────────────────────
         pg.setConfigOptions(antialias=True)
 
         self.gfx = pg.GraphicsLayoutWidget()
         self.gfx.setBackground(PAL.BG_PLOT)
         root.addWidget(self.gfx, stretch=1)
 
-        # Primary plot (left axis — pressure)
-        self.plot = self.gfx.addPlot(row=0, col=0)  # type: ignore[attr-defined]
-        self.plot.setTitle(
-            "POST-RUN ANALYSIS",
-            color=PAL.TEXT_HI, size="11pt",
-        )
-        self.plot.showGrid(x=True, y=True, alpha=0.08)
-        self.plot.setLabel("bottom", "Time", units="s", color=PAL.TEXT_MID)
-        self.plot.setLabel("left", "Pressure", units="mbar", color=PAL.ACCENT_1)
-        self.plot.getAxis("left").setPen(pg.mkPen(PAL.ACCENT_1, width=1))
-        self.plot.getAxis("bottom").setPen(pg.mkPen(PAL.TEXT_DIM, width=1))
+        # 1. GRAPH: DRUCK (Oben)
+        self.plot_p = self.gfx.addPlot(row=0, col=0) # type: ignore[attr-defined]
+        self.plot_p.setTitle("POST-RUN ANALYSIS: PRESSURE", color=PAL.TEXT_HI, size="11pt")
+        self.plot_p.showGrid(x=True, y=True, alpha=0.08)
+        self.plot_p.setLabel("left", "Pressure", units="mbar", color=PAL.ACCENT_1)
+        self.plot_p.getAxis("left").setPen(pg.mkPen(PAL.ACCENT_1, width=1))
+        self.plot_p.getAxis("bottom").setPen(pg.mkPen(PAL.TEXT_DIM, width=1))
 
-        # Secondary axis (right — volume)
-        self.plot.showAxis("right")  # Die eingebaute rechte Achse aktivieren!
-        self.axis_vol = self.plot.getAxis("right")
-        self.axis_vol.setLabel("Volume", units="ml", color=PAL.ACCENT_2)
-        self.axis_vol.setPen(pg.mkPen(PAL.ACCENT_2, width=1))
+        # 2. GRAPH: VOLUMEN (Unten)
+        self.plot_v = self.gfx.addPlot(row=1, col=0) # type: ignore[attr-defined]
+        self.plot_v.setTitle("VOLUME", color=PAL.TEXT_HI, size="11pt")
+        self.plot_v.showGrid(x=True, y=True, alpha=0.08)
+        self.plot_v.setLabel("bottom", "Time", units="s", color=PAL.TEXT_MID)
+        self.plot_v.setLabel("left", "Volume", units="ml", color=PAL.ACCENT_2)
+        self.plot_v.getAxis("left").setPen(pg.mkPen(PAL.ACCENT_2, width=1))
+        self.plot_v.getAxis("bottom").setPen(pg.mkPen(PAL.TEXT_DIM, width=1))
 
-        self.vb_vol = pg.ViewBox()
-        self.plot.scene().addItem(self.vb_vol)
-        self.axis_vol.linkToView(self.vb_vol)
-        self.vb_vol.setXLink(self.plot)
+        # 🚀 DER MAGIC TRICK: Die X-Achsen (Zeit) hart miteinander verknüpfen!
+        self.plot_v.setXLink(self.plot_p)
 
-        self.plot.vb.sigResized.connect(self._sync_viewboxes)
-
-        # Crosshair
-        self._crosshair = _Crosshair(self.plot, self.vb_vol)
+        # Crosshair (Wir initialisieren es, überarbeiten es aber im nächsten Schritt leicht)
+        self._crosshair = _Crosshair(self.plot_p, self.plot_v)
 
         # ── STATS BAR ─────────────────────────────────────────────────────
         self.lbl_stats = Qtw.QLabel("")
         self.lbl_stats.setStyleSheet(_LABEL_MID)
         self.lbl_stats.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self.lbl_stats)
-
     # ── helpers ─────────────────────────────────────────────────────────────
 
     @staticmethod
@@ -293,62 +285,40 @@ class AnalysisFrame(Qtw.QFrame):
         btn.setStyleSheet(_BTN_STYLE)
         return btn
 
-    # ── view-sync ──────────────────────────────────────────────────────────
-
-    @Slot()
-    def _sync_viewboxes(self):
-        """Keep the secondary ViewBox geometry in sync with the primary."""
-        self.vb_vol.setGeometry(self.plot.vb.sceneBoundingRect())
-        self.vb_vol.linkedViewChanged(self.plot.vb, self.vb_vol.XAxis)
-
     # ── plotting ───────────────────────────────────────────────────────────
 
     def _plot_run(self, run: TelemetryRun):
-        """Render a TelemetryRun onto the dual-axis graph."""
+        """Render a TelemetryRun onto the stacked subplots."""
         # 1. Clear previous
-        self.plot.clear()
-        self.vb_vol.clear()
+        self.plot_p.clear()
+        self.plot_v.clear()
 
-        # 2. Rebuild legend (avoids duplication bug)
-        if self.plot.legend is not None:
-            self.plot.legend.scene().removeItem(self.plot.legend)
-        self.plot.addLegend(
-            offset=(10, 10),
-            brush=pg.mkBrush(PAL.BG_PANEL + "CC"),
-            pen=pg.mkPen(PAL.BORDER),
-            labelTextColor=PAL.TEXT_MID,
-        )
-
-        # 3. Pressure curve (primary axis)
+        # 2. Pressure curve (Top Plot)
         pen_p = pg.mkPen(color=PAL.ACCENT_1, width=2)
-        curve_p = self.plot.plot(
+        curve_p = self.plot_p.plot(
             run.time_s, run.pressure_mbar,
             pen=pen_p, name="Pressure (mbar)",
         )
 
-        # 4. Volume curve (secondary axis)
+        # 3. Volume curve (Bottom Plot)
         pen_v = pg.mkPen(color=PAL.ACCENT_2, width=2)
-        curve_v = pg.PlotDataItem(run.time_s, run.volume_ml, pen=pen_v)
-        self.vb_vol.addItem(curve_v)
-        self.plot.legend.addItem(curve_v, "Volume (ml)")
+        curve_v = self.plot_v.plot(
+            run.time_s, run.volume_ml,
+            pen=pen_v, name="Volume (ml)",
+        )
 
-        # 5. Auto-range both axes
-        self.plot.enableAutoRange(axis=pg.ViewBox.YAxis)
-        self.vb_vol.enableAutoRange(axis=pg.ViewBox.YAxis)
-
-        # 6. Force geometry sync now (fixes first-render blank right axis)
-        self._sync_viewboxes()
+        # 4. Auto-range Y-axes independently
+        self.plot_p.enableAutoRange(axis=pg.ViewBox.YAxis)
+        self.plot_v.enableAutoRange(axis=pg.ViewBox.YAxis)
         
-        # NEU: Das Fadenkreuz-Overlay in den Vordergrund zwingen
-        self._crosshair.vline.setZValue(10)
-        self._crosshair.label.setZValue(10)
+        # 5. Reset View completely to fit all data
+        self.plot_p.autoRange()
+        self.plot_v.autoRange()
 
-        # 7. Register crosshair curves
+        # 6. Update Crosshair reference
         self._crosshair.register(primary=[curve_p], secondary=[curve_v])
-
-        # 8. Re-add crosshair items (they were cleared)
-        self.plot.addItem(self._crosshair.vline, ignoreBounds=True)
-        self.plot.addItem(self._crosshair.label, ignoreBounds=True)
+        self.plot_p.addItem(self._crosshair.vline, ignoreBounds=True)
+        self.plot_p.addItem(self._crosshair.label, ignoreBounds=True)
 
     # ── slots ──────────────────────────────────────────────────────────────
 
@@ -392,7 +362,8 @@ class AnalysisFrame(Qtw.QFrame):
             self, "Export Plot as PNG", str(default), "PNG Image (*.png)"
         )
         if path:
-            exporter = pyqtgraph.exporters.ImageExporter(self.plot)
+            # BUGFIX: Wir exportieren  ganze Scene (beide Graphen!), nicht nur einen Plot
+            exporter = pyqtgraph.exporters.ImageExporter(self.gfx.scene())
             exporter.parameters()["width"] = 2400
             exporter.export(path)
             self.lbl_status.setText(f"Exported → {Path(path).name}")
