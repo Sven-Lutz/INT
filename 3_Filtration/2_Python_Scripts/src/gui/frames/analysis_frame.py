@@ -338,6 +338,10 @@ class AnalysisFrame(Qtw.QFrame):
 
         # 6. Force geometry sync now (fixes first-render blank right axis)
         self._sync_viewboxes()
+        
+        # NEU: Das Fadenkreuz-Overlay in den Vordergrund zwingen
+        self._crosshair.vline.setZValue(10)
+        self._crosshair.label.setZValue(10)
 
         # 7. Register crosshair curves
         self._crosshair.register(primary=[curve_p], secondary=[curve_v])
