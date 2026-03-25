@@ -73,25 +73,25 @@ class FlowSensor:
         logger.info(f"FlowSensor: connecting to {self.cfg.port} (Baud: {self.cfg.baudrate}, Node: {self.cfg.address})")
         
         try:
-            # Right after creating the instrument, try the high-level API:
             self.flow_sensor = propar.instrument(
                 self.cfg.port, 
                 baudrate=self.cfg.baudrate, 
                 address=self.cfg.address,
             )
 
-            # Debug: try the high-level readParameter method
-            try:
-                fmeasure = self.flow_sensor.readParameter(205)  # P205 = fMeasure
-                logger.info(f"FlowSensor DEBUG: P205 fMeasure = {fmeasure}")
-            except Exception as e:
-                logger.warning(f"FlowSensor DEBUG: readParameter(205) failed: {e}")
+            # --- NEU: Hardware-Ping zur Adressverifizierung ---
+            # Parameter 113 ist der "User Tag" (Ein String, der oft den Sensornamen enthält)
+            # Wenn hier None zurückkommt, antwortet auf dieser Adresse niemand.
+            logger.info("FlowSensor DEBUG: Sende Hardware-Ping...")
+            user_tag = self.flow_sensor.readParameter(113)
+            
+            if user_tag is None:
+                logger.error(f"FlowSensor: Keine Antwort auf Adresse {self.cfg.address}. Ist der Sensor evtl. auf Adresse 3 oder 128?")
+                # Wir setzen den Sensor auf None, damit das System weiß, dass die Verbindung fehlgeschlagen ist
+                self.flow_sensor = None
+                return
 
-            try:
-                measure = self.flow_sensor.readParameter(8)  # P008 = Measure
-                logger.info(f"FlowSensor DEBUG: P008 Measure = {measure}")
-            except Exception as e:
-                logger.warning(f"FlowSensor DEBUG: readParameter(8) failed: {e}")
+            logger.info(f"FlowSensor: Hardware-Ping erfolgreich! Gerät meldet sich als: '{user_tag}'")
                     
             # TEST 1: Modern Float (Proc 33, Parm 0, Type 117)
             test_read = self.flow_sensor.read_parameters(self._cached_request)

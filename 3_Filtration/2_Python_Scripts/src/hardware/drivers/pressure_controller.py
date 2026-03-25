@@ -42,20 +42,26 @@ class PressureControllerConfig:
         limit = float(d.get("pressure_limit", d.get("pressure_limit_mbar", 2000.0)))
         autoload = bool(d.get("autoload_calib", True))
         
-        # --- NEU: Dynamischer Pfad für die Kalibrierung ---
-        path = str(d.get("calib_path", "U:\\PelliKAn\\3_Filtration\\4_Config\\OB1_Calib_latest.txt")).strip()
+        # --- ÜBERARBEITET: Robuste Pfadfindung mit Path.cwd() ---
+        path_str = str(d.get("calib_path", "")).strip()
+        path = pathlib.Path(path_str)
         
-        # Wenn der Pfad nicht existiert (z.B. weil wir auf C:\ arbeiten)
-        if not os.path.isfile(path):
-            base_dir = pathlib.Path(__file__).resolve().parents[3]
+        # 1. Prüfen, ob der direkt übergebene Pfad (z.B. U:\...) existiert
+        if not path.is_file():
+            # 2. Dynamischen Pfad relativ zum Ausführungsverzeichnis (CWD) aufbauen
+            # CWD ist hier '2_Python_Scripts'. parent geht hoch zu '3_Filtration'
+            base_dir = pathlib.Path.cwd().parent 
             alt_path = base_dir / "4_Config" / "OB1_Calib_latest.txt"
-            if alt_path.exists():
-                path = str(alt_path)
+            
+            if alt_path.is_file():
+                path = alt_path
             else:
-                logger.warning("WARNUNG: Kalibrierungsdatei weder auf U:\\ noch lokal gefunden!")
+                logger.warning(f"WARNUNG: Kalibrierungsdatei weder unter '{path_str}' noch lokal ('{alt_path}') gefunden!")
+                path = pathlib.Path("") # Leerer Pfad als Fallback
 
-        return cls(device=device, regs=regs, pressure_limit_mbar=limit, autoload_calib=autoload, calib_path=path) # type: ignore
-
+        # str(path) konvertiert das Path-Objekt zurück in einen String für die C-Bibliothek
+        return cls(device=device, regs=regs, pressure_limit_mbar=limit, autoload_calib=autoload, calib_path=str(path)) # type: ignore
+    
 class PressureController:
     def __init__(self, config: Dict[str, Any]) -> None:
         self.cfg = PressureControllerConfig.from_dict(config)
