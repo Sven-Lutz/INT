@@ -23,7 +23,7 @@ from PySide6.QtWidgets import QMessageBox, QGraphicsOpacityEffect
 from src.gui.data.worker import ExperimentConfig
 from src.gui.data import ExperimentWorker, RunParams, worker
 from src.gui.monitor.server import MonitorServer
-from src.gui.health import HealthEvaluator, HealthRules
+from src.gui.health import HealthEvaluator, HealthRules, SystemHealth
 from src.gui.style.theme import apply_theme
 from src.utils.config_manager import ConfigManager
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
@@ -660,6 +660,9 @@ class MainWindow(Qtw.QMainWindow):
         except Exception:
             pass
 
+        self.left.valve_command_requested.connect(self._on_valve_command)
+        self.left.relay_toggle_requested.connect(self._on_relay_toggle)
+
         self._set_running_ui(False, reason="init")
         self._render_manual_state(reason="init")
         self._update_health_banner()
@@ -788,11 +791,19 @@ class MainWindow(Qtw.QMainWindow):
             worker.log_msg.connect(self.right.append_log)
             worker.loss_updated.connect(self.right.set_loss_ml)
             
-            worker.step_changed.connect(self.left.update_active_step_highlight)
+            worker.step_changed.connect(self._on_step_changed_with_pressure)
+            worker.step_changed.connect(self.top.update_phase)
             worker.status.connect(self.top.update_status)
             worker.telemetry.connect(self.top.update_telemetry)
             worker.telemetry.connect(self.right.update_telemetry) 
             worker.loss_updated.connect(self.top.set_loss_ml)
+
+            # Progress-Target für die TopFrame-Anzeige setzen
+            run_p = self.left.get_run_params()
+            target_vol = float(run_p.v_bnnt_ml) + float(run_p.v_h2o_ml)
+            self.top.set_progress_target(target_vol)
+            self.right.set_progress_target(target_vol)
+            self._monitor_target_ml = target_vol
 
             if self.monitor is not None:
                 worker.status.connect(self.monitor.update_status)
@@ -834,6 +845,12 @@ class MainWindow(Qtw.QMainWindow):
             valves=str(sample.get("valves", "—"))
         )
 
+        # Progress an Monitor pushen
+        if hasattr(self, '_monitor_target_ml') and self._monitor_target_ml > 0.01:
+            loss = abs(_safe_float(sample.get("loss_ml")) or 0.0)
+            pct = min(100.0, loss / self._monitor_target_ml * 100.0)
+            self.monitor.update_progress(pct, f"{loss:.1f}/{self._monitor_target_ml:.1f} mL")
+
     def _on_request_ok(self, step, reason):
         self.right.set_ok_banner(step=str(step), reason=str(reason), show=True)
         self._set_ok_enabled(True)
@@ -854,6 +871,68 @@ class MainWindow(Qtw.QMainWindow):
         self._current_step = step
         self.right.set_step(step)
         self._render_manual_state()
+
+    def _on_step_changed_with_pressure(self, step):
+        """Leitet step_changed an LeftFrame weiter, mit aktuellem Ist-Druck für ETA."""
+        current_p = 0.0
+        try:
+            if self.dev is not None and getattr(self.dev, "pressure_controller", None) is not None:
+                current_p = _safe_float(_unwrap_sensor(self.dev.get_pressure_mbar(MAIN_CH)))
+        except Exception:
+            pass
+        self.left.update_active_step_highlight(str(step), current_pressure_mbar=current_p)
+
+    @Slot(str)
+    def _on_valve_command(self, mode: str):
+        """Manuelle Ventilsteuerung aus dem LeftFrame Valve Panel."""
+        if self._experiment_running():
+            self.right.append_log("BLOCKED: Cannot switch valves during experiment.", "#FF1744")
+            return
+
+        dev = self.dev
+        if dev is None:
+            self.right.append_log("ERROR: No device connected.", "#FF1744")
+            return
+
+        try:
+            from src.gui.data.worker import robust_switch_valves
+            robust_switch_valves(dev, mode)
+            self.left.update_valve_state(mode)
+            self.right.append_log(f"MANUAL: Valves → {mode}", "#0EA5E9")
+        except Exception as e:
+            self.right.append_log(f"VALVE ERROR: {e}", "#FF1744")
+
+    @Slot(int, bool)
+    def _on_relay_toggle(self, relay_num: int, target_on: bool):
+        """Direktes Schalten eines einzelnen Relais (Debug/Experimentier-Modus)."""
+        if self._experiment_running():
+            self.right.append_log("BLOCKED: Cannot toggle relays during experiment.", "#FF1744")
+            return
+
+        dev = self.dev
+        if dev is None:
+            self.right.append_log("ERROR: No device connected.", "#FF1744")
+            return
+
+        try:
+            vc = getattr(dev, "valve_controller", None)
+            if vc is not None and hasattr(vc, "relais"):
+                if target_on:
+                    vc.relais.relay_on(relay_num)
+                else:
+                    vc.relais.relay_off(relay_num)
+                # Internen State des ValveControllers auf UNKNOWN setzen,
+                # da wir an ihm vorbei direkt aufs Relais zugreifen
+                vc._state = vc._state.__class__("UNKNOWN") if hasattr(vc._state, '__class__') else "UNKNOWN"
+                state_str = "ON" if target_on else "OFF"
+                self.right.append_log(f"DEBUG: Relay {relay_num} → {state_str}", "#F59E0B")
+            elif hasattr(dev, "set_valve_state"):
+                # Fallback: kein direkter Relais-Zugriff
+                self.right.append_log("WARN: No direct relay access, use preset modes.", "#F59E0B")
+            else:
+                self.right.append_log("ERROR: No valve controller found.", "#FF1744")
+        except Exception as e:
+            self.right.append_log(f"RELAY ERROR: {e}", "#FF1744")
 
     def _on_finished(self):
         try:
@@ -1036,7 +1115,62 @@ class MainWindow(Qtw.QMainWindow):
         pass 
 
     def _update_health_banner(self, *, new_run_started: bool = False) -> None:
-        pass 
+        dev = self.dev
+        p1 = p2 = q = None
+        p1_set = None
+        vstate = None
+
+        if dev is not None:
+            try: p1 = _safe_float(_unwrap_sensor(dev.get_pressure_mbar(MAIN_CH)))
+            except Exception: pass
+            try: p2 = _safe_float(_unwrap_sensor(dev.get_pressure_mbar(BACKWASH_CH)))
+            except Exception: pass
+            try: p1_set = _safe_float(dev.get_pressure_setpoint_mbar(MAIN_CH))
+            except Exception: pass
+            try:
+                fn = getattr(dev, "get_valve_state", getattr(dev, "get_state", None))
+                if callable(fn): vstate = str(fn())
+            except Exception: pass
+            try: q = _safe_float(_unwrap_sensor(dev.read_flow()))
+            except Exception: pass
+
+        # Vorherigen Druck für Drop-Erkennung
+        p1_prev = getattr(self, '_health_p1_prev', None)
+        self._health_p1_prev = p1
+
+        snap = self._health.evaluate(
+            device_ok=(dev is not None),
+            worker_running=self._experiment_running(),
+            last_error_short=self._last_error_short,
+            last_error_full=self._last_error_full,
+            safe_state_forced=self._safe_state_forced,
+            manual_hold=self._hold_active,
+            p1_mbar=p1,
+            p2_mbar=p2,
+            p1_set_mbar=p1_set,
+            p1_prev_mbar=p1_prev,
+            flow=q,
+            valves=vstate,
+            last_good_comm_ts=self._last_good_comm_ts,
+            new_run_started=new_run_started,
+        )
+
+        # Banner im TopFrame anzeigen wenn WARNING oder ERROR
+        if snap.health in (SystemHealth.WARNING, SystemHealth.ERROR, SystemHealth.NO_COMM):
+            try:
+                self.top.lbl_title.setText(f"{snap.title}: {snap.detail[:60]}")
+                color = "#FF1744" if snap.health == SystemHealth.ERROR else "#F59E0B"
+                self.top.lbl_title.setStyleSheet(
+                    f"color: {color}; font-weight: 900; font-size: 14px; letter-spacing: 2px;")
+            except Exception:
+                pass
+        else:
+            try:
+                self.top.lbl_title.setText("PELLIKAN OS")
+                self.top.lbl_title.setStyleSheet(
+                    "color: #F8FAFC; font-weight: 900; font-size: 14px; letter-spacing: 2px;")
+            except Exception:
+                pass
 
     def _ui_backwash_pressure_mbar(self) -> float:
         try: return float(max(0.0, self.left.sp_hold_p.value()))
@@ -1263,6 +1397,10 @@ class MainWindow(Qtw.QMainWindow):
         if not self._rt_hw_reading:
             self._rt_hw_reading = True
             threading.Thread(target=self._do_hw_poll_bg, daemon=True).start()
+
+        # Periodischer Health-Check (alle 200ms via RT-Timer)
+        if not getattr(self, '_is_booting', False):
+            self._update_health_banner()
 
     def _do_hw_poll_bg(self) -> None:
         t0 = time.perf_counter()

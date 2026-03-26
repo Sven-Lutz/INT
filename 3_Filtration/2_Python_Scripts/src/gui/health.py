@@ -64,6 +64,12 @@ class HealthRules:
     # comm staleness timeout (seconds since last_good_comm_ts)
     comm_timeout_s: float = 2.0
 
+    # Pressure drift: Ist vs. Soll > X% → WARNING (nur während Run)
+    pressure_drift_warn_pct: float = 15.0
+
+    # Pressure drop: Druck fällt plötzlich um > X mbar → WARNING (mögliches Leck)
+    pressure_drop_warn_mbar: float = 200.0
+
 
 def _short_error(err: Optional[str]) -> str:
     if not err:
@@ -146,11 +152,12 @@ class HealthEvaluator:
         manual_hold: bool,
         p1_mbar: Optional[float],
         p2_mbar: Optional[float],
+        p1_set_mbar: Optional[float] = None,
+        p1_prev_mbar: Optional[float] = None,
         flow: Optional[float],
         valves: Optional[str],
         last_good_comm_ts: Optional[float] = None,
         now_monotonic: Optional[float] = None,
-        # New: allow MainWindow to explicitly clear SAFE_STATE on a new run start
         new_run_started: bool = False,
     ) -> HealthSnapshot:
         now = float(time.monotonic() if now_monotonic is None else now_monotonic)
@@ -342,6 +349,50 @@ class HealthEvaluator:
                     )
             except Exception:
                 pass
+
+        # 4b) WARNING: Druck-Drift (Ist weicht stark vom Soll ab)
+        if run and p1 is not None and p1_set_mbar is not None:
+            p1_s = _finite_f(p1_set_mbar)
+            if p1_s is not None and p1_s > 10:
+                drift_pct = abs(p1 - p1_s) / p1_s * 100.0
+                if drift_pct > float(self.rules.pressure_drift_warn_pct):
+                    return HealthSnapshot(
+                        health=SystemHealth.WARNING,
+                        title="PRESSURE DRIFT",
+                        detail=f"P1 drift {drift_pct:.0f}% (Ist={p1:.0f}, Soll={p1_s:.0f})",
+                        action=_two_lines("OB1 regulator may be stuck.\nCheck tubing for leaks or clogs."),
+                        device_ok=True,
+                        worker_running=True,
+                        manual_hold=hold,
+                        p1_mbar=p1,
+                        p2_mbar=p2,
+                        flow=q,
+                        valves=vstate,
+                        comm_ok=True,
+                        last_good_comm_age_s=age_s,
+                    )
+
+        # 4c) WARNING: Plötzlicher Druckabfall (Leck-Erkennung)
+        if run and p1 is not None and p1_prev_mbar is not None:
+            p1_prev = _finite_f(p1_prev_mbar)
+            if p1_prev is not None and p1_prev > 50:
+                drop = p1_prev - p1
+                if drop > float(self.rules.pressure_drop_warn_mbar):
+                    return HealthSnapshot(
+                        health=SystemHealth.WARNING,
+                        title="PRESSURE DROP",
+                        detail=f"P1 dropped {drop:.0f} mbar ({p1_prev:.0f} → {p1:.0f})",
+                        action=_two_lines("Possible leak or valve fault.\nCheck connections and seals."),
+                        device_ok=True,
+                        worker_running=True,
+                        manual_hold=hold,
+                        p1_mbar=p1,
+                        p2_mbar=p2,
+                        flow=q,
+                        valves=vstate,
+                        comm_ok=True,
+                        last_good_comm_age_s=age_s,
+                    )
 
         # 5) RUNNING
         if run:

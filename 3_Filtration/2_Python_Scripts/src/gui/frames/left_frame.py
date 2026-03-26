@@ -122,6 +122,8 @@ class EliteModule(QFrame):
 class LeftFrame(QFrame):
     params_changed = Signal(RunParams)
     server_toggle_requested = Signal(bool)
+    valve_command_requested = Signal(str)  # "FILLING", "FILTRATION", "BACKWASH", "ALL_SHUT"
+    relay_toggle_requested = Signal(int, bool)  # (relay_number, target_on)
 
     def __init__(self, config=None, parent=None):
         super().__init__(parent)
@@ -158,6 +160,92 @@ class LeftFrame(QFrame):
         h_row.addWidget(lbl_p); h_row.addWidget(self.sp_hold_p)
         lay_manual.addLayout(h_row)
         root.addWidget(self.grp_manual)
+
+        # VALVE CONTROL PANEL
+        self.grp_valves = QFrame()
+        self.grp_valves.setStyleSheet(
+            "QFrame { background: #0B1120; border-radius: 4px; "
+            "border: 1px solid #1E293B; border-top: 2px solid #0EA5E9; margin-bottom: 4px; }")
+        lay_valves = QVBoxLayout(self.grp_valves)
+        lay_valves.setContentsMargins(12, 10, 12, 10)
+        lay_valves.setSpacing(6)
+
+        lbl_valve_title = QLabel("VALVE CONTROL")
+        lbl_valve_title.setStyleSheet(
+            "color: #0EA5E9; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; letter-spacing: 1px; border: none;")
+        lay_valves.addWidget(lbl_valve_title)
+
+        # Status-Anzeige: welcher Zustand gerade aktiv ist
+        self.lbl_valve_state = QLabel("STATE: ALL SHUT")
+        self.lbl_valve_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_valve_state.setStyleSheet(
+            "color: #F8FAFC; font-family: 'Consolas'; font-size: 12px; "
+            "font-weight: bold; background: #111827; border: 1px solid #1E293B; "
+            "border-radius: 3px; padding: 4px; margin-bottom: 4px;")
+        lay_valves.addWidget(self.lbl_valve_state)
+
+        # Relais-Indikator: R1 / R2 — klickbar für direktes Toggling
+        self._valve_r1_on = False
+        self._valve_r2_on = False
+        relay_row = QHBoxLayout()
+        self.btn_r1 = QPushButton("R1: OFF")
+        self.btn_r1.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_r1.setToolTip("Click to toggle Relay 1")
+        self.btn_r2 = QPushButton("R2: OFF")
+        self.btn_r2.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_r2.setToolTip("Click to toggle Relay 2")
+        relay_row.addWidget(self.btn_r1)
+        relay_row.addWidget(self.btn_r2)
+        lay_valves.addLayout(relay_row)
+        self._update_relay_indicators()
+
+        self.btn_r1.clicked.connect(lambda: self._toggle_relay(1))
+        self.btn_r2.clicked.connect(lambda: self._toggle_relay(2))
+
+        # Buttons: 6 Modi als 3×2 Grid
+        btn_row1 = QHBoxLayout()
+        self.btn_v_filling = QPushButton("FILLING")
+        self.btn_v_filtration = QPushButton("FILTRATION")
+        self.btn_v_venting = QPushButton("VENTING")
+        btn_row1.addWidget(self.btn_v_filling)
+        btn_row1.addWidget(self.btn_v_filtration)
+        btn_row1.addWidget(self.btn_v_venting)
+        lay_valves.addLayout(btn_row1)
+
+        btn_row2 = QHBoxLayout()
+        self.btn_v_backwash = QPushButton("BACKWASH")
+        self.btn_v_shut = QPushButton("ALL SHUT")
+        self.btn_v_open = QPushButton("ALL OPEN")
+        btn_row2.addWidget(self.btn_v_backwash)
+        btn_row2.addWidget(self.btn_v_shut)
+        btn_row2.addWidget(self.btn_v_open)
+        lay_valves.addLayout(btn_row2)
+
+        for btn in (self.btn_v_filling, self.btn_v_filtration, self.btn_v_venting,
+                    self.btn_v_backwash, self.btn_v_shut, self.btn_v_open):
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        self._valve_buttons = {
+            "FILLING": self.btn_v_filling,
+            "FILTRATION": self.btn_v_filtration,
+            "VENTING": self.btn_v_venting,
+            "BACKWASH": self.btn_v_backwash,
+            "ALL_SHUT": self.btn_v_shut,
+            "ALL_OPEN": self.btn_v_open,
+        }
+        self._current_valve_mode = "ALL_SHUT"
+        self._apply_valve_button_styles()
+
+        # Signale
+        self.btn_v_filling.clicked.connect(lambda: self.valve_command_requested.emit("FILLING"))
+        self.btn_v_filtration.clicked.connect(lambda: self.valve_command_requested.emit("FILTRATION"))
+        self.btn_v_venting.clicked.connect(lambda: self.valve_command_requested.emit("VENTING"))
+        self.btn_v_backwash.clicked.connect(lambda: self.valve_command_requested.emit("BACKWASH"))
+        self.btn_v_shut.clicked.connect(lambda: self.valve_command_requested.emit("ALL_SHUT"))
+        self.btn_v_open.clicked.connect(lambda: self.valve_command_requested.emit("ALL_OPEN"))
+
+        root.addWidget(self.grp_valves)
 
         # BNNT KALIBRIERUNG
         self.mod_calc = EliteModule("BNNT PARAMETERS", "#64748B", checkable=False)
@@ -221,7 +309,14 @@ class LeftFrame(QFrame):
         lbl_b1.setStyleSheet("color: #64748B; font-size: 10px; font-family: 'Arial'; border: none;")
         self.mod_pb.content_lay.addWidget(lbl_b1, 0, 0, 1, 2)
         self.sp_v_extra = NudgeSpinBox(0.0, 5000.0, 2, 10.0, " ml", 0.0)
+        self.sp_b_timeout = NudgeSpinBox(1.0, 60.0, 0, 1.0, " min", 5.0)
         self.mod_pb.addRow(1, "B2 V_Extra:", self.sp_v_extra)
+        self.mod_pb.addRow(2, "No-Flow Timeout:", self.sp_b_timeout)
+        
+        self.lbl_pb_info = QLabel("Safety: stops if no flow for 5 min")
+        self.lbl_pb_info.setProperty("is_dynamic_result", True)
+        self.lbl_pb_info.setStyleSheet("color: #F59E0B; font-weight: bold; font-family: 'Consolas'; font-size: 11px; border: none; padding-top: 4px;")
+        self.mod_pb.content_lay.addWidget(self.lbl_pb_info, 3, 0, 1, 2)
         root.addWidget(self.mod_pb)
 
         # PHASE C
@@ -234,6 +329,31 @@ class LeftFrame(QFrame):
         self.lbl_pc_info.setStyleSheet("color: #EC4899; font-weight: bold; font-family: 'Consolas'; font-size: 11px; border: none; padding-top: 4px;")
         self.mod_pc.content_lay.addWidget(self.lbl_pc_info, 1, 0, 1, 2)
         root.addWidget(self.mod_pc)
+
+        # ORCHESTRATOR: Bestätigungs-Gates
+        self.frm_orchestrator = QFrame()
+        self.frm_orchestrator.setStyleSheet(
+            "QFrame { background: #0B1120; border-radius: 4px; "
+            "border: 1px solid #1E293B; border-top: 2px solid #0EA5E9; margin-bottom: 4px; }")
+        lay_orch = QHBoxLayout(self.frm_orchestrator)
+        lay_orch.setContentsMargins(12, 8, 12, 8)
+
+        lbl_orch = QLabel("CONFIRM BETWEEN PHASES")
+        lbl_orch.setStyleSheet(
+            "color: #0EA5E9; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; letter-spacing: 1px; border: none;")
+        self.chk_confirm_gates = QPushButton("ON")
+        self.chk_confirm_gates.setCheckable(True)
+        self.chk_confirm_gates.setChecked(True)
+        self.chk_confirm_gates.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.chk_confirm_gates.setFixedWidth(50)
+        self.chk_confirm_gates.toggled.connect(self._on_confirm_toggle)
+        self._apply_confirm_style(True)
+
+        lay_orch.addWidget(lbl_orch)
+        lay_orch.addStretch()
+        lay_orch.addWidget(self.chk_confirm_gates)
+        root.addWidget(self.frm_orchestrator)
 
         # 🚀 TELEMETRY SERVER & QR CODE
         self.mod_srv = EliteModule("NETWORK MONITOR SERVER", "#10B981", checkable=False)
@@ -275,6 +395,7 @@ class LeftFrame(QFrame):
         root.addStretch()
         self._current_bnnt_ml = 0.0
         self._wire_signals()
+        self._load_last_params()  # Letzten Parametersatz wiederherstellen
         self._recalc_math()
 
     def _generate_qr(self, url: str):
@@ -322,7 +443,7 @@ class LeftFrame(QFrame):
         widgets = [
             self.sp_area, self.sp_calib, self.sp_thick, self.sp_h2o,
             self.sp_fill_p, self.sp_est_flow, self.sp_target_p, self.sp_a_rate, 
-            self.sp_a_step, self.sp_v_extra, self.sp_dn_rate,
+            self.sp_a_step, self.sp_v_extra, self.sp_b_timeout, self.sp_dn_rate,
             self.cmb_fill_mode, self.cmb_ramp_mode
         ]
         for w in widgets: 
@@ -364,7 +485,16 @@ class LeftFrame(QFrame):
             c_min = self.sp_target_p.value() / rate_c
             self.lbl_pc_info.setText(f"ETA: {c_min:.1f} min")
 
+        # Phase B Info
+        timeout_val = self.sp_b_timeout.value()
+        extra_val = self.sp_v_extra.value()
+        if extra_val > 0:
+            self.lbl_pb_info.setText(f"B2: {extra_val:.0f} ml extra | Timeout: {timeout_val:.0f} min")
+        else:
+            self.lbl_pb_info.setText(f"Safety: stops if no flow for {timeout_val:.0f} min")
+
         self.params_changed.emit(self.get_run_params())
+        self._save_last_params()
 
     def get_run_params(self) -> RunParams:
         p = RunParams(
@@ -373,16 +503,35 @@ class LeftFrame(QFrame):
             run_phase_a=self.mod_pa.isChecked(), phase_a_target_mbar=self.sp_target_p.value(),
             phase_a_rate_mbar_min=self.sp_a_rate.value(), phase_a_step_mbar=self.sp_a_step.value(),
             run_phase_b=self.mod_pb.isChecked(), v_extra_ml=self.sp_v_extra.value(),
-            run_phase_c=self.mod_pc.isChecked(), phase_c_rate_mbar_min=self.sp_dn_rate.value()
+            phase_b_no_flow_timeout_min=self.sp_b_timeout.value(),
+            run_phase_c=self.mod_pc.isChecked(), phase_c_rate_mbar_min=self.sp_dn_rate.value(),
+            confirm_between_phases=self.chk_confirm_gates.isChecked()
         )
         p.phase_0_mode = "auto" if self.cmb_fill_mode.currentIndex() == 0 else "continuous"
         p.phase_a_mode = "auto" if self.cmb_ramp_mode.currentIndex() == 0 else "manual"
         return p
 
+    def _on_confirm_toggle(self, checked: bool):
+        self._apply_confirm_style(checked)
+
+    def _apply_confirm_style(self, checked: bool):
+        if checked:
+            self.chk_confirm_gates.setText("ON")
+            self.chk_confirm_gates.setStyleSheet(
+                "background: #0EA5E9; color: #000; border: none; padding: 4px; "
+                "font-weight: bold; font-family: 'Consolas'; font-size: 10px; border-radius: 3px;")
+        else:
+            self.chk_confirm_gates.setText("OFF")
+            self.chk_confirm_gates.setStyleSheet(
+                "background: #1E293B; color: #64748B; border: 1px solid #334155; padding: 4px; "
+                "font-weight: bold; font-family: 'Consolas'; font-size: 10px; border-radius: 3px;")
+
     def set_running(self, running: bool):
         self._is_running = running
         for m in self.modules + [self.mod_calc, self.mod_srv]:
             m.setEnabled(not running)
+        self.frm_orchestrator.setEnabled(not running)
+        self.grp_valves.setEnabled(not running)
             
         if not running:
             self.countdown_timer.stop()
@@ -390,8 +539,11 @@ class LeftFrame(QFrame):
             self._recalc_math() 
             self.update_active_step_highlight("IDLE")
             
-    def update_active_step_highlight(self, current_step_str: str):
-        # 🚀 FIX: Timer IMMER stoppen, bevor wir neu kalkulieren
+    def update_active_step_highlight(self, current_step_str: str, current_pressure_mbar: float = 0.0):
+        """
+        Markiert das aktive Modul und berechnet den ETA-Countdown.
+        current_pressure_mbar: Aktueller Ist-Druck (optional, für präzisere ETA).
+        """
         self.countdown_timer.stop() 
         self._time_left_s = 0.0
         
@@ -404,8 +556,9 @@ class LeftFrame(QFrame):
             self.mod_pa.setHighlight(True)
             if self.cmb_ramp_mode.currentIndex() == 0:
                 rate = self.sp_a_rate.value()
-                # Hinweis: Hier könnte man den aktuellen Druck abziehen, wenn er übergeben wird.
-                self._time_left_s = (self.sp_target_p.value() / rate * 60) if rate > 0 else 0
+                # Delta: Wie viel Druck noch aufzubauen ist
+                remaining_mbar = max(0.0, self.sp_target_p.value() - current_pressure_mbar)
+                self._time_left_s = (remaining_mbar / rate * 60) if rate > 0 else 0
                 
         elif "PHASE_B" in current_step_str: 
             self.mod_pb.setHighlight(True)
@@ -413,7 +566,9 @@ class LeftFrame(QFrame):
         elif "PHASE_C" in current_step_str: 
             self.mod_pc.setHighlight(True)
             rate = self.sp_dn_rate.value()
-            self._time_left_s = (self.sp_target_p.value() / rate * 60) if rate > 0 else 0
+            # Delta: Wie viel Druck noch abzubauen ist
+            remaining_mbar = current_pressure_mbar if current_pressure_mbar > 0 else self.sp_target_p.value()
+            self._time_left_s = (remaining_mbar / rate * 60) if rate > 0 else 0
             
         elif "FILLING" in current_step_str or "0" in current_step_str:
             self.mod_p0.setHighlight(True)
@@ -424,7 +579,7 @@ class LeftFrame(QFrame):
 
         # Nur starten, wenn wir wirklich im Run-Modus sind UND es Zeit gibt
         if self._time_left_s > 0 and self._is_running:
-            self._update_countdown_labels() # 🚀 FIX: Einmal sofort updaten, damit es nicht 1s laggt
+            self._update_countdown_labels()
             self.countdown_timer.start(1000)
 
     def _on_countdown_tick(self):
@@ -467,3 +622,199 @@ class LeftFrame(QFrame):
         else:
             self.btn_hold.setText("HOLD SPACE TO BACKWASH")
             self.btn_hold.setStyleSheet(base + "background: transparent; color: #EC4899; border: 1px solid #EC4899;")
+
+    # -----------------------------------------------------------------
+    # VALVE PANEL
+    # -----------------------------------------------------------------
+    _VALVE_RELAY_MAP = {
+        "FILLING":     (True, False),
+        "VENTING":     (True, False),
+        "FILTRATION":  (False, True),
+        "BACKWASH":    (True, True),
+        "ALL_OPEN":    (True, True),
+        "ALL_SHUT":    (False, False),
+    }
+
+    _VALVE_COLORS = {
+        "FILLING":    ("#00E5FF", "#0C447C"),   # Cyan
+        "VENTING":    ("#10B981", "#085041"),    # Green
+        "FILTRATION": ("#8B5CF6", "#3C3489"),   # Purple
+        "BACKWASH":   ("#EC4899", "#72243E"),   # Pink
+        "ALL_OPEN":   ("#F59E0B", "#633806"),   # Amber
+        "ALL_SHUT":   ("#64748B", "#1E293B"),   # Gray
+    }
+
+    def update_valve_state(self, state: str):
+        """Wird vom MainWindow aufgerufen wenn Ventile geschaltet wurden."""
+        mode = str(state).strip().upper()
+        if mode not in self._VALVE_COLORS:
+            mode = "ALL_SHUT"
+        self._current_valve_mode = mode
+        self._apply_valve_button_styles()
+
+        # Status-Label
+        color = self._VALVE_COLORS[mode][0]
+        self.lbl_valve_state.setText(f"STATE: {mode}")
+        self.lbl_valve_state.setStyleSheet(
+            f"color: {color}; font-family: 'Consolas'; font-size: 12px; "
+            f"font-weight: bold; background: #111827; border: 1px solid #1E293B; "
+            f"border-radius: 3px; padding: 4px; margin-bottom: 4px;")
+
+        # Relais-Indikatoren
+        r1, r2 = self._VALVE_RELAY_MAP.get(mode, (False, False))
+        self._valve_r1_on = r1
+        self._valve_r2_on = r2
+        self._update_relay_indicators()
+
+    def _apply_valve_button_styles(self):
+        for name, btn in self._valve_buttons.items():
+            if name == self._current_valve_mode:
+                color = self._VALVE_COLORS[name][0]
+                btn.setStyleSheet(
+                    f"background: {color}; color: #000; border: none; "
+                    f"padding: 6px 4px; font-weight: bold; font-family: 'Consolas'; "
+                    f"font-size: 10px; border-radius: 3px;")
+            else:
+                btn.setStyleSheet(
+                    "background: #0F172A; color: #94A3B8; border: 1px solid #1E293B; "
+                    "padding: 6px 4px; font-weight: bold; font-family: 'Consolas'; "
+                    "font-size: 10px; border-radius: 3px;")
+
+    def _update_relay_indicators(self):
+        for btn, on, name in [(self.btn_r1, self._valve_r1_on, "R1"), (self.btn_r2, self._valve_r2_on, "R2")]:
+            if on:
+                btn.setText(f"{name}: ON")
+                btn.setStyleSheet(
+                    "color: #10B981; font-family: 'Consolas'; font-size: 10px; font-weight: bold; "
+                    "background: #052E16; border: 1px solid #10B981; border-radius: 3px; padding: 3px;")
+            else:
+                btn.setText(f"{name}: OFF")
+                btn.setStyleSheet(
+                    "color: #64748B; font-family: 'Consolas'; font-size: 10px; font-weight: bold; "
+                    "background: #0F172A; border: 1px solid #1E293B; border-radius: 3px; padding: 3px;")
+
+    def _toggle_relay(self, relay_num: int):
+        """Einzelnes Relais direkt umschalten (Debug/Experimentier-Modus)."""
+        if relay_num == 1:
+            self._valve_r1_on = not self._valve_r1_on
+        else:
+            self._valve_r2_on = not self._valve_r2_on
+
+        # UI sofort updaten
+        self._update_relay_indicators()
+
+        # Zustand erkennen oder als CUSTOM markieren
+        combo = (self._valve_r1_on, self._valve_r2_on)
+        matched_mode = None
+        for mode_name, relay_state in self._VALVE_RELAY_MAP.items():
+            if relay_state == combo:
+                matched_mode = mode_name
+                break
+
+        if matched_mode:
+            self._current_valve_mode = matched_mode
+        else:
+            self._current_valve_mode = "CUSTOM"
+
+        self._apply_valve_button_styles()
+
+        # Status-Label
+        if matched_mode:
+            color = self._VALVE_COLORS[matched_mode][0]
+            self.lbl_valve_state.setText(f"STATE: {matched_mode}")
+        else:
+            color = "#F59E0B"
+            r1_s = "ON" if self._valve_r1_on else "OFF"
+            r2_s = "ON" if self._valve_r2_on else "OFF"
+            self.lbl_valve_state.setText(f"STATE: CUSTOM (R1={r1_s} R2={r2_s})")
+
+        self.lbl_valve_state.setStyleSheet(
+            f"color: {color}; font-family: 'Consolas'; font-size: 12px; "
+            f"font-weight: bold; background: #111827; border: 1px solid #1E293B; "
+            f"border-radius: 3px; padding: 4px; margin-bottom: 4px;")
+
+        # Signal an MainWindow: Relais direkt schalten
+        target_on = self._valve_r1_on if relay_num == 1 else self._valve_r2_on
+        self.relay_toggle_requested.emit(relay_num, target_on)
+
+    # -----------------------------------------------------------------
+    # RUN PARAMS PERSISTENCE
+    # -----------------------------------------------------------------
+    _PARAMS_FILE = "last_run_params.yaml"
+
+    def _params_path(self) -> str:
+        from src.utils.path_utils import project_root, resolve_under
+        try:
+            root = project_root(__file__)
+            return str(resolve_under(root, self._PARAMS_FILE))
+        except Exception:
+            return self._PARAMS_FILE
+
+    def _save_last_params(self):
+        """Auto-Save: Speichert aktuelle UI-Werte als YAML."""
+        if self._is_running:
+            return  # Nicht während eines Runs speichern
+        try:
+            self.get_run_params().save_yaml(self._params_path())
+        except Exception:
+            pass  # Nicht-kritisch: stille Fehler
+
+    def _load_last_params(self):
+        """Auto-Load: Stellt die letzten UI-Werte aus der YAML wieder her."""
+        try:
+            p = RunParams.load_yaml(self._params_path())
+        except Exception:
+            return  # Datei existiert nicht oder ist korrupt → Defaults behalten
+
+        # Werte in die Spinboxen schreiben (blockSignals um Cascade zu vermeiden)
+        widgets_map = [
+            (self.sp_h2o, p.v_h2o_ml),
+            (self.sp_fill_p, p.phase_0_pressure_mbar),
+            (self.sp_est_flow, 15.0),  # Est. Flow nicht persistiert (ist eine Schätzung)
+            (self.sp_target_p, p.phase_a_target_mbar),
+            (self.sp_a_rate, p.phase_a_rate_mbar_min),
+            (self.sp_a_step, p.phase_a_step_mbar),
+            (self.sp_v_extra, p.v_extra_ml),
+            (self.sp_b_timeout, p.phase_b_no_flow_timeout_min),
+            (self.sp_dn_rate, p.phase_c_rate_mbar_min),
+        ]
+        for widget, val in widgets_map:
+            try:
+                widget.blockSignals(True)
+                widget.setValue(float(val))
+                widget.blockSignals(False)
+            except Exception:
+                pass
+
+        # Comboboxen
+        try:
+            self.cmb_fill_mode.blockSignals(True)
+            self.cmb_fill_mode.setCurrentIndex(0 if p.phase_0_mode == "auto" else 1)
+            self.cmb_fill_mode.blockSignals(False)
+        except Exception:
+            pass
+        try:
+            self.cmb_ramp_mode.blockSignals(True)
+            self.cmb_ramp_mode.setCurrentIndex(0 if p.phase_a_mode == "auto" else 1)
+            self.cmb_ramp_mode.blockSignals(False)
+        except Exception:
+            pass
+
+        # Phase-Toggles
+        for mod, active in [(self.mod_p0, p.run_phase_0), (self.mod_pa, p.run_phase_a),
+                            (self.mod_pb, p.run_phase_b), (self.mod_pc, p.run_phase_c)]:
+            try:
+                if mod.checkable and mod._is_active != active:
+                    mod._is_active = active
+                    mod._apply_state_styles()
+            except Exception:
+                pass
+
+        # Orchestrator Toggle
+        try:
+            self.chk_confirm_gates.blockSignals(True)
+            self.chk_confirm_gates.setChecked(p.confirm_between_phases)
+            self._apply_confirm_style(p.confirm_between_phases)
+            self.chk_confirm_gates.blockSignals(False)
+        except Exception:
+            pass

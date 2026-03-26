@@ -21,9 +21,12 @@ class MonitorState:
     ts_iso: str = ""
     step: str = "IDLE"
     status: str = "Idle"
+    phase_label: str = ""
     manual_active: bool = False
 
     loss_ml: float = 0.0
+    progress_pct: float = 0.0
+    progress_text: str = ""
     flow: Optional[float] = None
 
     p1_set: Optional[float] = None
@@ -146,14 +149,27 @@ body {
     <div class="auth-badge">AUTH OK</div>
   </div>
 
+  <!-- PHASE PROGRESS -->
+  <div id="phase-bar" class="status-bar" style="margin-bottom:15px; flex-direction:column; align-items:stretch; gap:8px; display:none;">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span id="phase_label" style="color:var(--cyan); font-size:14px; font-weight:bold;">—</span>
+      <span id="progress_text" style="color:var(--muted); font-size:12px;">—</span>
+    </div>
+    <div style="background:#0F172A; border-radius:4px; height:8px; overflow:hidden;">
+      <div id="progress_fill" style="height:100%; width:0%; background:var(--cyan); border-radius:4px; transition:width 0.3s;"></div>
+    </div>
+  </div>
+
   <div class="grid-top">
     <div class="kpi-box">
       <div class="kpi-title">P1 Main (mbar)</div>
       <div class="kpi-val val-cyan" id="p1_meas">—</div>
+      <div class="kpi-sub" id="p1_set" style="color:var(--muted); font-size:11px; margin-top:2px;">SET: —</div>
     </div>
     <div class="kpi-box">
       <div class="kpi-title">P2 Backwash (mbar)</div>
       <div class="kpi-val val-green" id="p2_meas">—</div>
+      <div class="kpi-sub" id="p2_set" style="color:var(--muted); font-size:11px; margin-top:2px;">SET: —</div>
     </div>
     <div class="kpi-box">
       <div class="kpi-title">Flow Rate</div>
@@ -190,7 +206,8 @@ const chart = new Chart(ctx, {
         labels: [],
         datasets: [
             { label: 'P1 Main', borderColor: '#00E5FF', backgroundColor: 'rgba(0, 229, 255, 0.1)', borderWidth: 2, pointRadius: 0, data: [], fill: true, tension: 0.3 },
-            { label: 'P2 Backwash', borderColor: '#00E676', backgroundColor: 'transparent', borderWidth: 2, borderDash: [5, 5], pointRadius: 0, data: [], tension: 0.3 }
+            { label: 'P2 Backwash', borderColor: '#00E676', backgroundColor: 'transparent', borderWidth: 2, borderDash: [5, 5], pointRadius: 0, data: [], tension: 0.3 },
+            { label: 'Flow', borderColor: '#EC4899', backgroundColor: 'rgba(236, 72, 153, 0.08)', borderWidth: 1.5, pointRadius: 0, data: [], fill: true, tension: 0.3, yAxisID: 'y1' }
         ]
     },
     options: {
@@ -199,13 +216,19 @@ const chart = new Chart(ctx, {
         interaction: { intersect: false },
         scales: {
             x: { display: false },
-            y: { grid: { color: '#1F2937' }, beginAtZero: true }
+            y: { grid: { color: '#1F2937' }, beginAtZero: true, position: 'left', title: { display: true, text: 'mbar', color: '#64748B' } },
+            y1: { grid: { drawOnChartArea: false }, beginAtZero: true, position: 'right', title: { display: true, text: 'mL/min', color: '#64748B' } }
         },
         plugins: { legend: { position: 'top', labels: { boxWidth: 15, font: {weight: 'bold'} } } }
     }
 });
 
 let timeIndex = 0;
+
+const phaseColors = {
+    'FILLING': '#00E5FF', 'PHASE_A': '#8B5CF6', 'PHASE_B': '#F59E0B',
+    'PHASE_C': '#EC4899', 'FINISHED': '#00E676', 'ABORTED': '#FF1744'
+};
 
 async function tick() {
   if(!token) return;
@@ -216,33 +239,62 @@ async function tick() {
 
     document.getElementById("p1_meas").textContent = s.p1_meas != null ? Math.round(s.p1_meas) : "—";
     document.getElementById("p2_meas").textContent = s.p2_meas != null ? Math.round(s.p2_meas) : "—";
+    document.getElementById("p1_set").textContent = s.p1_set != null ? "SET: " + Math.round(s.p1_set) + " mbar" : "SET: —";
+    document.getElementById("p2_set").textContent = s.p2_set != null ? "SET: " + Math.round(s.p2_set) + " mbar" : "SET: —";
     document.getElementById("flow").textContent = s.flow != null ? s.flow.toFixed(3) : "—";
     document.getElementById("valves").textContent = s.valves ?? "—";
 
     document.getElementById("step").textContent = s.step ?? "—";
     document.getElementById("loss").textContent = (s.loss_ml ?? 0).toFixed(3) + " mL";
 
+    // Phase Progress Bar
+    const phaseBar = document.getElementById("phase-bar");
+    if (s.phase_label && s.step !== "IDLE") {
+        phaseBar.style.display = "flex";
+        const pLabel = document.getElementById("phase_label");
+        pLabel.textContent = s.phase_label;
+        let pColor = phaseColors[s.step] || '#00E5FF';
+        for (const [k, c] of Object.entries(phaseColors)) { if (s.step.includes(k)) { pColor = c; break; } }
+        pLabel.style.color = pColor;
+        document.getElementById("progress_text").textContent = s.progress_text || "";
+        const fill = document.getElementById("progress_fill");
+        fill.style.width = Math.min(100, Math.max(0, s.progress_pct || 0)) + "%";
+        fill.style.background = pColor;
+    } else {
+        phaseBar.style.display = "none";
+    }
+
+    // Soll/Ist Drift-Indikator P1
+    if (s.p1_set != null && s.p1_meas != null && s.p1_set > 10) {
+        const drift = Math.abs(s.p1_meas - s.p1_set) / s.p1_set * 100;
+        document.getElementById("p1_set").style.color = drift > 10 ? '#FF1744' : 'var(--muted)';
+    }
+
     const stEl = document.getElementById("status");
     stEl.textContent = s.status ?? "—";
     const statusText = (s.status || "").toLowerCase();
     if(statusText.includes("fail") || statusText.includes("error") || statusText.includes("alarm")) {
         stEl.className = "error";
+    } else if(statusText.includes("wait") || statusText.includes("confirm")) {
+        stEl.className = ""; stEl.style.color = "#F59E0B";
     } else {
-        stEl.className = "active";
+        stEl.className = "active"; stEl.style.color = "";
     }
 
+    // Chart: P1, P2, und Flow
     const p1_val = s.p1_meas != null ? s.p1_meas : null;
     const p2_val = s.p2_meas != null ? s.p2_meas : null;
+    const f_val = s.flow != null ? s.flow : null;
 
-    if (p1_val !== null || p2_val !== null) {
+    if (p1_val !== null || p2_val !== null || f_val !== null) {
         chart.data.labels.push(timeIndex++);
         chart.data.datasets[0].data.push(p1_val || 0);
         chart.data.datasets[1].data.push(p2_val || 0);
+        chart.data.datasets[2].data.push(f_val || 0);
 
         if (chart.data.labels.length > maxDataPoints) {
             chart.data.labels.shift();
-            chart.data.datasets[0].data.shift();
-            chart.data.datasets[1].data.shift();
+            chart.data.datasets.forEach(ds => ds.data.shift());
         }
         chart.update();
     }
@@ -394,7 +446,21 @@ class MonitorServer:
         return self.token[:10]
 
     def update_step(self, step: str) -> None:
-        self._store.update(step=str(step))
+        s = str(step)
+        phase_labels = {
+            "FILLING": "PHASE 0: FILLING",
+            "PHASE_A": "PHASE A: RAMP UP",
+            "PHASE_B": "PHASE B: STEADY STATE",
+            "PHASE_C": "PHASE C: RAMP DOWN",
+            "FINISHED": "COMPLETE",
+            "ABORTED": "ABORTED",
+        }
+        label = s
+        for key, lbl in phase_labels.items():
+            if key in s:
+                label = lbl
+                break
+        self._store.update(step=s, phase_label=label)
 
     def update_status(self, status: str) -> None:
         self._store.update(status=str(status))
@@ -404,6 +470,9 @@ class MonitorServer:
 
     def update_loss(self, loss_ml: float) -> None:
         self._store.update(loss_ml=float(loss_ml))
+
+    def update_progress(self, pct: float, text: str = "") -> None:
+        self._store.update(progress_pct=float(pct), progress_text=str(text))
 
     def update_metrics(
             self,

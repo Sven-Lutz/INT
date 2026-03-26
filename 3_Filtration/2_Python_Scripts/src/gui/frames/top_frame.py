@@ -2,164 +2,295 @@ from typing import Optional
 from PySide6.QtCore import Slot, Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QProgressBar
 
+
+# =========================================================================
+# STYLE CONSTANTS
+# =========================================================================
+_CARD_STYLE = """
+    QFrame#MetricCard {{
+        background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #111827, stop:1 #050914);
+        border-top: 3px solid {color};
+        border-right: 1px solid #1E293B;
+        border-bottom: 1px solid #1E293B;
+        border-left: 1px solid #1E293B;
+        border-radius: 6px;
+    }}
+"""
+_TITLE_STYLE = "color: #94A3B8; font-weight: bold; font-size: 10px; letter-spacing: 1.5px; border: none; background: transparent;"
+_VAL_STYLE = "color: {color}; font-weight: bold; font-size: 18px; font-family: 'Consolas'; border: none; background: transparent;"
+_SUB_STYLE = "color: #64748B; font-weight: bold; font-size: 10px; font-family: 'Consolas'; border: none; background: transparent;"
+_BAR_STYLE = """
+    QProgressBar {{ background: #0F172A; border: none; border-radius: 2px; }}
+    QProgressBar::chunk {{ background-color: {color}; border-radius: 2px; }}
+"""
+_STATUS_BASE = "font-weight: bold; font-size: 12px; font-family: 'Consolas';"
+
+
+def _safe_float(val) -> Optional[float]:
+    if val is None:
+        return None
+    try:
+        v = float(val)
+        if v == v and v not in (float("inf"), float("-inf")):
+            return v
+    except Exception:
+        pass
+    return None
+
+
 class TopFrame(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setProperty("surface", "panel")
-        
+
+        self._current_phase = "IDLE"
+        self._progress_target_ml = 0.0
+        self._progress_current_ml = 0.0
+
         lay = QHBoxLayout(self)
         lay.setContentsMargins(15, 10, 15, 10)
-        lay.setSpacing(20)
+        lay.setSpacing(16)
 
-        # 1. Branding / Status
-        self.lbl_title = QLabel("Are you working?")
-        self.lbl_title.setStyleSheet("color: #F8FAFC; font-weight: 900; font-size: 16px; letter-spacing: 2px;")
-        
-        self.lbl_status = QLabel("● SIMULATION: IDLE")
-        self.lbl_status.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 12px; font-family: 'Consolas';")
-        
+        # 1. Branding / Status / Phase
+        self.lbl_title = QLabel("PELLIKAN OS")
+        self.lbl_title.setStyleSheet("color: #F8FAFC; font-weight: 900; font-size: 14px; letter-spacing: 2px;")
+
+        self.lbl_status = QLabel("● IDLE")
+        self.lbl_status.setStyleSheet(f"color: #00E5FF; {_STATUS_BASE}")
+
+        self.lbl_phase = QLabel("")
+        self.lbl_phase.setStyleSheet("color: #64748B; font-weight: bold; font-size: 10px; font-family: 'Consolas';")
+
         box_brand = QVBoxLayout()
-        box_brand.setSpacing(2)
+        box_brand.setSpacing(1)
         box_brand.addWidget(self.lbl_title)
         box_brand.addWidget(self.lbl_status)
+        box_brand.addWidget(self.lbl_phase)
         lay.addLayout(box_brand)
         lay.addStretch()
 
-        # 2. Metriken mit dynamischen Balken (Gauges)
-        self.val_p_main, self.bar_p_main = self._add_metric(lay, "MAIN PRESSURE", "0 mbar", "#00E5FF", max_val=3000)
-        self.val_p_back, self.bar_p_back = self._add_metric(lay, "BACKWASH", "0 mbar", "#8B5CF6", max_val=1000)
-        self.val_flow, self.bar_flow = self._add_metric(lay, "FLOW RATE", "0.000 mL/min", "#00FF66", max_val=10)
-        self.val_loss, self.bar_loss = self._add_metric(lay, "VOLUME LOSS", "0.00 mL", "#EC4899", max_val=50)
+        # 2. Pressure cards: Soll/Ist nebeneinander
+        self.val_p1, self.sub_p1, self.bar_p1 = self._add_pressure_card(lay, "P1 MAIN", "#00E5FF", 3000)
+        self.val_p2, self.sub_p2, self.bar_p2 = self._add_pressure_card(lay, "P2 BACKWASH", "#8B5CF6", 1000)
 
-    def _add_metric(self, parent_layout, title: str, initial_val: str, color: str, max_val: int):
-        card = QFrame()
-        card.setObjectName("MetricCard")
-        card.setStyleSheet(f"""
-            QFrame#MetricCard {{
-                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #111827, stop:1 #050914);
-                border-top: 3px solid {color};
-                border-right: 1px solid #1E293B;
-                border-bottom: 1px solid #1E293B;
-                border-left: 1px solid #1E293B;
-                border-radius: 6px;
-            }}
-        """)
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(15, 10, 15, 12)
-        lay.setSpacing(6)
+        # 3. Flow
+        self.val_flow, self.bar_flow = self._add_simple_card(lay, "FLOW RATE", "0.000", "#00FF66", 50)
+
+        # 4. Valve State
+        self.val_valves = self._add_text_card(lay, "VALVES", "—", "#94A3B8")
+
+        # 5. Progress (Loss / Target)
+        self.val_progress, self.bar_progress = self._add_simple_card(lay, "PROGRESS", "—", "#F59E0B", 100)
+
+    # -----------------------------------------------------------------
+    # CARD BUILDERS
+    # -----------------------------------------------------------------
+    def _add_pressure_card(self, parent_layout, title: str, color: str, max_val: int):
+        """Pressure card: großer Ist-Wert + kleiner Soll-Wert darunter + Gauge-Bar."""
+        card, card_lay = self._make_card_frame(color)
 
         lbl_t = QLabel(title)
         lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_t.setStyleSheet("color: #94A3B8; font-weight: bold; font-size: 10px; letter-spacing: 1.5px; border: none; background: transparent;")
-        lay.addWidget(lbl_t)
+        lbl_t.setStyleSheet(_TITLE_STYLE)
+        card_lay.addWidget(lbl_t)
 
-        lbl_v = QLabel(initial_val)
+        lbl_v = QLabel("0 mbar")
         lbl_v.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_v.setMinimumWidth(120)
-        lbl_v.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 18px; font-family: 'Consolas'; border: none; background: transparent;")
-        lay.addWidget(lbl_v)
+        lbl_v.setMinimumWidth(130)
+        lbl_v.setStyleSheet(_VAL_STYLE.format(color=color))
+        card_lay.addWidget(lbl_v)
 
+        lbl_sub = QLabel("SET: 0 mbar")
+        lbl_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_sub.setStyleSheet(_SUB_STYLE)
+        card_lay.addWidget(lbl_sub)
+
+        bar = self._make_bar(color, max_val)
+        card_lay.addWidget(bar)
+
+        parent_layout.addWidget(card)
+        return lbl_v, lbl_sub, bar
+
+    def _add_simple_card(self, parent_layout, title: str, initial: str, color: str, max_val: int):
+        """Simple card: Wert + Gauge-Bar."""
+        card, card_lay = self._make_card_frame(color)
+
+        lbl_t = QLabel(title)
+        lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_t.setStyleSheet(_TITLE_STYLE)
+        card_lay.addWidget(lbl_t)
+
+        lbl_v = QLabel(initial)
+        lbl_v.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_v.setMinimumWidth(110)
+        lbl_v.setStyleSheet(_VAL_STYLE.format(color=color))
+        card_lay.addWidget(lbl_v)
+
+        bar = self._make_bar(color, max_val)
+        card_lay.addWidget(bar)
+
+        parent_layout.addWidget(card)
+        return lbl_v, bar
+
+    def _add_text_card(self, parent_layout, title: str, initial: str, color: str):
+        """Text-only card: kein Gauge-Bar."""
+        card, card_lay = self._make_card_frame(color)
+
+        lbl_t = QLabel(title)
+        lbl_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_t.setStyleSheet(_TITLE_STYLE)
+        card_lay.addWidget(lbl_t)
+
+        lbl_v = QLabel(initial)
+        lbl_v.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_v.setMinimumWidth(90)
+        lbl_v.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 13px; font-family: 'Consolas'; border: none; background: transparent;")
+        card_lay.addWidget(lbl_v)
+
+        parent_layout.addWidget(card)
+        return lbl_v
+
+    def _make_card_frame(self, color: str):
+        card = QFrame()
+        card.setObjectName("MetricCard")
+        card.setStyleSheet(_CARD_STYLE.format(color=color))
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(12, 8, 12, 10)
+        card_lay.setSpacing(4)
+        return card, card_lay
+
+    def _make_bar(self, color: str, max_val: int) -> QProgressBar:
         bar = QProgressBar()
         bar.setRange(0, max_val)
         bar.setValue(0)
         bar.setTextVisible(False)
         bar.setFixedHeight(4)
-        bar.setStyleSheet(f"""
-            QProgressBar {{ background: #0F172A; border: none; border-radius: 2px; }}
-            QProgressBar::chunk {{ background-color: {color}; border-radius: 2px; }}
-        """)
-        lay.addWidget(bar)
+        bar.setStyleSheet(_BAR_STYLE.format(color=color))
+        return bar
 
-        parent_layout.addWidget(card)
-        return lbl_v, bar
-
-    def _to_safe_float(self, val) -> Optional[float]:
-        if val is None: 
-            return None
-        try:
-            v = float(val)
-            if v == v and v not in (float("inf"), float("-inf")):
-                return v
-            return None
-        except Exception:
-            return None
-
+    # -----------------------------------------------------------------
+    # TELEMETRY UPDATE
+    # -----------------------------------------------------------------
     @Slot(dict)
     def update_telemetry(self, sample: dict):
         if not isinstance(sample, dict):
             return
-        
-        print("Received telemetry sample:", sample)
 
         pressures = sample.get("pressure")
-        if not isinstance(pressures, dict): 
+        if not isinstance(pressures, dict):
             pressures = {}
-        
+
+        # --- P1 Main: Ist + Soll ---
         p1_data = pressures.get(1, pressures.get("1", {}))
         if not isinstance(p1_data, dict):
             p1_data = {}
 
-        p1_raw = sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas")
-        self._set_metric_value(self.val_p_main, self.bar_p_main, self._to_safe_float(p1_raw), "{:.0f} mbar")
-        
+        p1_meas = _safe_float(sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas"))
+        p1_set = _safe_float(sample.get("p1_set") if sample.get("p1_set") is not None else p1_data.get("set"))
+
+        if p1_meas is not None:
+            self.val_p1.setText(f"{p1_meas:.0f} mbar")
+            self.bar_p1.setValue(min(self.bar_p1.maximum(), int(abs(p1_meas))))
+        else:
+            self.val_p1.setText("---")
+            self.bar_p1.setValue(0)
+
+        if p1_set is not None:
+            self.sub_p1.setText(f"SET: {p1_set:.0f} mbar")
+            # Druck-Drift Indikator: wenn Ist > 10% vom Soll abweicht → rot
+            if p1_meas is not None and p1_set > 10:
+                drift_pct = abs(p1_meas - p1_set) / p1_set * 100
+                if drift_pct > 10:
+                    self.sub_p1.setStyleSheet("color: #FF1744; font-weight: bold; font-size: 10px; font-family: 'Consolas'; border: none; background: transparent;")
+                else:
+                    self.sub_p1.setStyleSheet(_SUB_STYLE)
+            else:
+                self.sub_p1.setStyleSheet(_SUB_STYLE)
+        else:
+            self.sub_p1.setText("SET: —")
+
+        # --- P2 Backwash: Ist + Soll ---
         p2_data = pressures.get(2, pressures.get("2", {}))
         if not isinstance(p2_data, dict):
             p2_data = {}
-        
-        p2_raw = sample.get("p2_meas") if sample.get("p2_meas") is not None else p2_data.get("meas")
-        self._set_metric_value(self.val_p_back, self.bar_p_back, self._to_safe_float(p2_raw), "{:.0f} mbar")
 
-        f = self._to_safe_float(sample.get("flow"))
-        self._set_metric_value(self.val_flow, self.bar_flow, f, "{:.3f} mL/min", is_flow=True)
+        p2_meas = _safe_float(sample.get("p2_meas") if sample.get("p2_meas") is not None else p2_data.get("meas"))
+        p2_set = _safe_float(sample.get("p2_set") if sample.get("p2_set") is not None else p2_data.get("set"))
 
-        if "loss_ml" in sample:
-            self.set_loss_ml(sample["loss_ml"])
-
-    def _set_metric_value(self, label: QLabel, bar: QProgressBar, value: Optional[float], format_str: str, is_flow: bool = False):
-        if value is None:
-            label.setText("---")
-            bar.setValue(0)
-            label.setStyleSheet(label.styleSheet().replace("color: #00FF66;", "color: #F8FAFC;").replace("color: #FF1744;", "color: #F8FAFC;"))
-            return
-
-        prefix = "+" if value > 0 else ""
-        text = f"{prefix}{format_str.format(value)}"
-        label.setText(text)
-        
-        try:
-            bar.setValue(min(bar.maximum(), int(abs(value))))
-        except Exception:
-            bar.setValue(0)
-        
-        if is_flow:
-            if value > 0:
-                label.setStyleSheet(label.styleSheet().replace("color: #FF1744;", "color: #00FF66;").replace("color: #F8FAFC;", "color: #00FF66;"))
-                bar.setStyleSheet(bar.styleSheet().replace("background-color: #FF1744;", "background-color: #00FF66;"))
-            elif value < 0:
-                label.setStyleSheet(label.styleSheet().replace("color: #00FF66;", "color: #FF1744;").replace("color: #F8FAFC;", "color: #FF1744;"))
-                bar.setStyleSheet(bar.styleSheet().replace("background-color: #00FF66;", "background-color: #FF1744;"))
-            else:
-                label.setStyleSheet(label.styleSheet().replace("color: #00FF66;", "color: #F8FAFC;").replace("color: #FF1744;", "color: #F8FAFC;"))
-
-    @Slot(str)
-    def update_status(self, status_text: str):
-        safe_status = str(status_text).upper() if status_text else "UNKNOWN"
-        
-        if "RUNNING" in safe_status:
-            self.lbl_status.setText(f"● {safe_status}")
-            self.lbl_status.setStyleSheet("color: #00FF66; font-weight: bold; font-size: 12px; font-family: 'Consolas';")
-        elif "ABORTED" in safe_status or "FAILED" in safe_status or "ERROR" in safe_status:
-            self.lbl_status.setText(f"● {safe_status}")
-            self.lbl_status.setStyleSheet("color: #FF1744; font-weight: bold; font-size: 12px; font-family: 'Consolas';")
+        if p2_meas is not None:
+            self.val_p2.setText(f"{p2_meas:.0f} mbar")
+            self.bar_p2.setValue(min(self.bar_p2.maximum(), int(abs(p2_meas))))
         else:
-            self.lbl_status.setText(f"● {safe_status}")
-            self.lbl_status.setStyleSheet("color: #00E5FF; font-weight: bold; font-size: 12px; font-family: 'Consolas';")
+            self.val_p2.setText("---")
+            self.bar_p2.setValue(0)
+
+        self.sub_p2.setText(f"SET: {p2_set:.0f} mbar" if p2_set is not None else "SET: —")
+
+        # --- Flow ---
+        flow = _safe_float(sample.get("flow"))
+        if flow is not None:
+            self.val_flow.setText(f"{flow:.3f}")
+            self.bar_flow.setValue(min(self.bar_flow.maximum(), int(abs(flow))))
+        else:
+            self.val_flow.setText("---")
+            self.bar_flow.setValue(0)
+
+        # --- Valve State ---
+        v_state = str(sample.get("valves", "—"))
+        self.val_valves.setText(v_state[:12])  # Truncate für Card-Breite
+
+        # --- Progress ---
+        if "loss_ml" in sample:
+            self._update_progress(sample["loss_ml"])
+
+    # -----------------------------------------------------------------
+    # PROGRESS & LOSS
+    # -----------------------------------------------------------------
+    def set_progress_target(self, target_ml: float):
+        """Wird vom MainWindow aufgerufen wenn der Run startet."""
+        self._progress_target_ml = max(0.01, float(target_ml))
 
     @Slot(float)
     def set_loss_ml(self, loss_ml: float):
-        safe_loss = self._to_safe_float(loss_ml) or 0.0
-        self.val_loss.setText(f"{safe_loss:.2f} mL")
-        try:
-            self.bar_loss.setValue(min(self.bar_loss.maximum(), int(abs(safe_loss))))
-        except Exception:
-            pass
+        self._update_progress(loss_ml)
+
+    def _update_progress(self, loss_ml_raw):
+        loss = _safe_float(loss_ml_raw) or 0.0
+        self._progress_current_ml = loss
+
+        if self._progress_target_ml > 0.01:
+            pct = min(100.0, abs(loss) / self._progress_target_ml * 100.0)
+            self.val_progress.setText(f"{abs(loss):.1f} / {self._progress_target_ml:.1f} mL")
+            self.bar_progress.setValue(int(pct))
+        else:
+            self.val_progress.setText(f"{abs(loss):.2f} mL")
+            self.bar_progress.setValue(0)
+
+    # -----------------------------------------------------------------
+    # STATUS & PHASE
+    # -----------------------------------------------------------------
+    @Slot(str)
+    def update_status(self, status_text: str):
+        safe = str(status_text).upper() if status_text else "UNKNOWN"
+
+        if "RUNNING" in safe or "RAMPING" in safe or "HOLD" in safe:
+            color = "#00FF66"
+        elif "ABORT" in safe or "FAIL" in safe or "ERROR" in safe or "SAFETY" in safe:
+            color = "#FF1744"
+        elif "WAIT" in safe or "CONFIRM" in safe:
+            color = "#F59E0B"
+        else:
+            color = "#00E5FF"
+
+        self.lbl_status.setText(f"● {safe}")
+        self.lbl_status.setStyleSheet(f"color: {color}; {_STATUS_BASE}")
+
+    @Slot(str)
+    def update_phase(self, phase_str: str):
+        """Zeigt die aktuelle Phase als kleines Label unter dem Status."""
+        self._current_phase = str(phase_str)
+        if phase_str and phase_str not in ("IDLE", "FINISHED", "ABORTED"):
+            self.lbl_phase.setText(f"PHASE: {phase_str}")
+            self.lbl_phase.setStyleSheet("color: #8B5CF6; font-weight: bold; font-size: 10px; font-family: 'Consolas';")
+        else:
+            self.lbl_phase.setText("")

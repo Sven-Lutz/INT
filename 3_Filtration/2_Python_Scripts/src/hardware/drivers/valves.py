@@ -63,8 +63,8 @@ class ValveControllerConfig:
             filling_r2_on=bool(cfg_src.get("filling_r2_on", False)),
             venting_r1_on=bool(cfg_src.get("venting_r1_on", True)),
             venting_r2_on=bool(cfg_src.get("venting_r2_on", False)),
-            backwash_r1_on=bool(cfg_src.get("backwash_r1_on", True)),
-            backwash_r2_on=bool(cfg_src.get("backwash_r2_on", True)),
+            backwash_r1_on=bool(cfg_src.get("backwash_r1_on", False)),
+            backwash_r2_on=bool(cfg_src.get("backwash_r2_on", False)),
             settle_delay_s=float(cfg_src.get("settle_delay_s", 0.0)),
         )
 
