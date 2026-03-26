@@ -655,7 +655,7 @@ class RightFrame(QFrame):
 
         self.trapezoid.set_state(p1, p1_set, self._ui_phase)
 
-        # 🚀 FIX: Visuelle Non-lineare Skalierung anhand des kalibrierten Membran-Punkts
+        # 🚀 Visuelle Non-lineare Skalierung anhand des kalibrierten Membran-Punkts
         if "FILLING" in step or "BACKWASH" in step or "FILTRATION" in step or "PHASE" in self._ui_phase:
             if vol <= self._membrane_vol_ml:
                 # Volumen unterhalb der Membran (0% bis 50% im UI)
@@ -680,4 +680,15 @@ class RightFrame(QFrame):
         else:
             self.sandglass.set_state(0.5, "IDLE")
 
+        # =========================================================
+        # 🚀 DER NEUE PATCH: LOSS INJIZIEREN
+        # Wir schnappen uns den aktuellen "Total Loss", den das RightFrame
+        # bereits für die Progress Bar trackt, und geben ihn mit ins Paket.
+        # =========================================================
+        # Nutze _progress_current_ml (falls es vom Worker aktualisiert wurde) 
+        # oder den im sample enthaltenen Wert als Fallback.
+        current_loss = getattr(self, "_progress_current_ml", 0.0)
+        sample["loss_ml"] = current_loss
+
+        # Jetzt das angereicherte Paket an den (neuen) Plotter senden
         self.realtime_plot.ingest_telemetry(sample)
