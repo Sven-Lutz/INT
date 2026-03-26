@@ -30,19 +30,9 @@ _PHASE_COLORS = {
     "PHASE_C": "#EC4899", "FINISHED": "#10B981", "ABORTED": "#FF1744",
 }
 
-
 class EliteMonitorTab(Qtw.QFrame):
     """
     Hochperformantes Realtime-Telemetrie-Widget.
-    
-    Oben: Druck (P1 Ist + Soll, P2) mit Phase-Regions
-    Unten: Flow mit Fill-Gradient
-    
-    Optimierungen:
-    - Batch-Update: Kurven nur alle N Samples (reduziert GPU-Last)
-    - Deque: O(1) append, festes Memory-Limit
-    - Auto-Y-Range, manuelle X-Scroll
-    - Phase-Regions als visueller Kontext
     """
 
     BATCH_SIZE = 5
@@ -77,12 +67,13 @@ class EliteMonitorTab(Qtw.QFrame):
         self.plot_p.addLegend(offset=(60, 10), labelTextSize='8pt',
                               brush=QColor(15, 23, 42, 180), pen=QColor(30, 41, 59))
 
+        # 🚀 FIX 1: connect="finite" hinzugefügt, damit NaN-Werte (Sensorausfälle) nicht als Striche gezeichnet werden
         self.curve_p1 = self.plot_p.plot(
-            pen=pg.mkPen('#8B5CF6', width=2), name="P1 Ist")
+            pen=pg.mkPen('#8B5CF6', width=2), name="P1 Ist", connect="finite")
         self.curve_p1_set = self.plot_p.plot(
-            pen=pg.mkPen('#8B5CF6', width=1, style=Qt.PenStyle.DashLine), name="P1 Soll")
+            pen=pg.mkPen('#8B5CF6', width=1, style=Qt.PenStyle.DashLine), name="P1 Soll", connect="finite")
         self.curve_p2 = self.plot_p.plot(
-            pen=pg.mkPen('#00E5FF', width=1.5, style=Qt.PenStyle.DashLine), name="P2")
+            pen=pg.mkPen('#00E5FF', width=1.5, style=Qt.PenStyle.DashLine), name="P2", connect="finite")
 
         # --- FLOW-PLOT ---
         self.plot_flow = pg.PlotWidget()
@@ -90,8 +81,9 @@ class EliteMonitorTab(Qtw.QFrame):
 
         self.curve_flow = self.plot_flow.plot(
             pen=pg.mkPen('#EC4899', width=2), name="Flow",
-            fillLevel=0, fillBrush=QColor(236, 72, 153, 15))
+            fillLevel=0, fillBrush=QColor(236, 72, 153, 15), connect="finite")
 
+        # 🚀 X-Achsen verlinken
         self.plot_flow.setXLink(self.plot_p)
 
         root.addWidget(self.plot_p, 3)
@@ -140,9 +132,6 @@ class EliteMonitorTab(Qtw.QFrame):
 
         pw.getViewBox().setLimits(minXRange=5)
 
-    # -----------------------------------------------------------------
-    # LIFECYCLE
-    # -----------------------------------------------------------------
     def start_logging(self, run_name_prefix: str = "run") -> None:
         self._clear_all()
         self.lbl_status.setText("RECORDING")
@@ -150,7 +139,6 @@ class EliteMonitorTab(Qtw.QFrame):
             "color: #FF1744; font-family: 'Consolas'; font-size: 9px; font-weight: bold;")
 
     def stop_logging(self) -> None:
-        # Letztes Update erzwingen damit der finale Stand sichtbar bleibt
         if self._t:
             self._update_curves(self._t[-1])
         self.lbl_status.setText("TELEMETRY: IDLE")
@@ -175,13 +163,11 @@ class EliteMonitorTab(Qtw.QFrame):
             try: self.plot_p.removeItem(item)
             except Exception: pass
         self._phase_regions.clear()
-        self.plot_p.setXRange(0, 60)
-        self.plot_flow.setXRange(0, 60)
+        
+        # 🚀 FIX 2: Layout Endlosschleife gebrochen (nur noch plot_p steuern, padding=0)
+        self.plot_p.setXRange(min=0, max=60, padding=0) # type: ignore
         self.lbl_samples.setText("")
 
-    # -----------------------------------------------------------------
-    # DATA INGEST
-    # -----------------------------------------------------------------
     @Slot(dict)
     def ingest_telemetry(self, payload: dict) -> None:
         raw_t = payload.get("t", time.monotonic())
@@ -205,7 +191,6 @@ class EliteMonitorTab(Qtw.QFrame):
         if p1_set is None:
             p1_set = _to_float(payload.get("p1_set"))
 
-        # Phase-Tracking
         step = str(payload.get("step", "IDLE")).upper()
         if step != self._current_phase:
             self._add_phase_region(self._current_phase, self._phase_start_t, ts)
@@ -231,9 +216,8 @@ class EliteMonitorTab(Qtw.QFrame):
 
         window = 60.0
         if current_ts > window:
-            self.plot_p.setXRange(current_ts - window, current_ts)
-            self.plot_flow.setXRange(current_ts - window, current_ts)
-
+            # 🚀 FIX 3: Endlosschleife gebrochen (nur noch plot_p steuern, explizite Keyword Args)
+            self.plot_p.setXRange(min=current_ts - window, max=current_ts, padding=0) # type: ignore
 
         mins = int(current_ts // 60)
         secs = int(current_ts % 60)
