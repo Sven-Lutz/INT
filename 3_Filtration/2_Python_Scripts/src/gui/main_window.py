@@ -1386,7 +1386,10 @@ class MainWindow(Qtw.QMainWindow):
         }
 
         if hasattr(self, "top"): self.top.update_telemetry(sample)
-        if hasattr(self, "right"): self.right.update_telemetry(sample)
+        # RightFrame nur im Idle-Modus direkt füttern — während eines Runs
+        # kommt die Telemetrie über worker.telemetry → right.update_telemetry
+        if hasattr(self, "right") and not self._experiment_running():
+            self.right.update_telemetry(sample)
         
         if self.monitor:
             self.monitor.update_metrics(flow=f_val, p1_meas=p1_val, p2_meas=p2_val, valves=v_val)
