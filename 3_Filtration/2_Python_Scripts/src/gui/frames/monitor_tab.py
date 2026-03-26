@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 # =====================================================================
 # KUGELSICHERER DATENFILTER
-# Vernichtet NaN, None und Infinity, bevor pyqtgraph abstürzen kann.
 # =====================================================================
 def safe_float(x: Any, fallback: float = 0.0) -> float:
     try:
@@ -34,10 +33,6 @@ _PHASE_COLORS = {
 }
 
 class EliteMonitorTab(Qtw.QFrame):
-    """
-    Neu aufgebautes, absturzsicheres Realtime-Telemetrie-Widget.
-    3 getrennte Plots: Pressure, Flow, Loss.
-    """
     BATCH_SIZE = 5
 
     def __init__(self, log_dir: Path, *, max_points: int = 3000) -> None:
@@ -46,14 +41,12 @@ class EliteMonitorTab(Qtw.QFrame):
         self._log_dir = Path(log_dir)
         self._log_dir.mkdir(parents=True, exist_ok=True)
 
-        # State
         self._t0: float | None = None
         self._sample_count: int = 0
         self._current_phase: str = "IDLE"
         self._phase_start_t: float = 0.0
         self._phase_regions: list = []
 
-        # High-Performance Deques
         self._t = deque(maxlen=max_points)
         self._p1 = deque(maxlen=max_points)
         self._p1_set = deque(maxlen=max_points)
@@ -68,9 +61,7 @@ class EliteMonitorTab(Qtw.QFrame):
 
         pg.setConfigOptions(antialias=True, useOpenGL=False)
 
-        # ---------------------------------------------------------
-        # PLOT 1: PRESSURE (P1 & P2)
-        # ---------------------------------------------------------
+        # --- PLOT 1: PRESSURE ---
         self.plot_p = pg.PlotWidget()
         self._style_plot(self.plot_p, "P [mbar]")
         self.plot_p.getViewBox().setLimits(yMin=-50, yMax=10000)
@@ -81,30 +72,23 @@ class EliteMonitorTab(Qtw.QFrame):
         self.curve_p2 = self.plot_p.plot(pen=pg.mkPen('#00E5FF', width=2), name="P2 Ist")
         self.curve_p2_set = self.plot_p.plot(pen=pg.mkPen('#00E5FF', width=1, style=Qt.PenStyle.DashLine), name="P2 Soll")
 
-        # ---------------------------------------------------------
-        # PLOT 2: FLOW
-        # ---------------------------------------------------------
+        # --- PLOT 2: FLOW ---
         self.plot_flow = pg.PlotWidget()
         self._style_plot(self.plot_flow, "Flow [mL/min]")
         self.plot_flow.getViewBox().setLimits(yMin=-10, yMax=500)
         self.curve_flow = self.plot_flow.plot(pen=pg.mkPen('#EC4899', width=2), name="Flow", fillLevel=0, fillBrush=QColor(236, 72, 153, 20))
 
-        # ---------------------------------------------------------
-        # PLOT 3: TOTAL LOSS
-        # ---------------------------------------------------------
+        # --- PLOT 3: TOTAL LOSS ---
         self.plot_loss = pg.PlotWidget()
         self._style_plot(self.plot_loss, "Loss [mL]", show_bottom_label=True)
         self.plot_loss.getViewBox().setLimits(yMin=-10, yMax=5000)
         self.curve_loss = self.plot_loss.plot(pen=pg.mkPen('#10B981', width=2), name="Total Loss", fillLevel=0, fillBrush=QColor(16, 185, 129, 20))
 
-        # Hinzufügen zum Layout mit Stretch-Faktoren (Druck bekommt etwas mehr Platz)
         root.addWidget(self.plot_p, stretch=3)
         root.addWidget(self.plot_flow, stretch=2)
         root.addWidget(self.plot_loss, stretch=2)
 
-        # ---------------------------------------------------------
-        # FOOTER STATUS BAR
-        # ---------------------------------------------------------
+        # --- FOOTER ---
         self.footer = Qtw.QFrame()
         self.footer.setFixedHeight(22)
         self.footer.setStyleSheet("background-color: #050914; border-top: 1px solid #1E293B;")
@@ -124,14 +108,17 @@ class EliteMonitorTab(Qtw.QFrame):
     def _style_plot(self, pw: pg.PlotWidget, y_label: str, show_bottom_label: bool = False):
         pw.setBackground('#090B10')
         pw.showGrid(x=True, y=True, alpha=0.06)
+        
+        # 🚀 DER BUGFIX FÜR DAS "HERANZOOMEN":
+        # Wir schalten das X-Auto-Ranging hart auf C++-Ebene ab.
+        pw.getViewBox().disableAutoRange(axis=pg.ViewBox.XAxis)
         pw.enableAutoRange(axis='y')
-        pw.setMouseEnabled(x=True, y=False) # X-Zoom erlaubt, Y-Zoom gesperrt
+        pw.setMouseEnabled(x=True, y=False)
 
         ax_left = pw.getAxis('left')
         ax_left.setLabel(y_label, color='#94A3B8')
         ax_left.setTickFont(QFont("Consolas", 7))
         ax_left.setTextPen('#64748B')
-        # 🚀 MAGIC TRICK: Feste Achsenbreite sorgt dafür, dass alle 3 Graphen exakt übereinander liegen!
         ax_left.setWidth(60)
 
         ax_bottom = pw.getAxis('bottom')
@@ -143,9 +130,6 @@ class EliteMonitorTab(Qtw.QFrame):
             ax_bottom.setStyle(showValues=False)
             ax_bottom.setHeight(0)
 
-    # -----------------------------------------------------------------
-    # LIFECYCLE
-    # -----------------------------------------------------------------
     def start_logging(self, run_name_prefix: str = "run") -> None:
         self._clear_all()
         self.lbl_status.setText("RECORDING LIVE DATA")
@@ -174,40 +158,35 @@ class EliteMonitorTab(Qtw.QFrame):
             except Exception: pass
         self._phase_regions.clear()
         
-        # Alle Achsen auf Startwert setzen
-        self.plot_p.setXRange(min=0, max=60, padding=0)       # type: ignore
-        self.plot_flow.setXRange(min=0, max=60, padding=0)    # type: ignore
-        self.plot_loss.setXRange(min=0, max=60, padding=0)    # type: ignore
+        # Start-Limits in Stein meißeln
+        self.plot_p.setXRange(0, 60, padding=0)       # type: ignore
+        self.plot_flow.setXRange(0, 60, padding=0)    # type: ignore
+        self.plot_loss.setXRange(0, 60, padding=0)    # type: ignore
         self.lbl_samples.setText("")
 
-    # -----------------------------------------------------------------
-    # DATA INGEST
-    # -----------------------------------------------------------------
     @Slot(dict)
     def ingest_telemetry(self, payload: dict) -> None:
-        now = time.monotonic()
-        if self._t0 is None:
-            self._t0 = now
+        # 🚀 Zeitsynchronisation: Wir nutzen die Zeit, die vom MainWindow (oder Experimentator) 
+        # vorgegeben wird. Ist keine vorhanden, nutzen wir die interne Stoppuhr.
+        raw_t = payload.get("t")
+        if raw_t is not None:
+            ts = float(raw_t)
+        else:
+            now = time.monotonic()
+            if self._t0 is None:
+                self._t0 = now
+            ts = now - self._t0
 
-        ts = now - self._t0
-        if self._t and ts <= self._t[-1]:
-            ts = self._t[-1] + 0.005
-
-        # Daten sicher extrahieren (verhindert Abstürze)
         flow = safe_float(payload.get("flow"))
         p1 = safe_float(payload.get("p1_meas"))
         p2 = safe_float(payload.get("p2_meas"))
-        
-        # Loss extrahieren (wird vom RightFrame injiziert)
         loss = safe_float(payload.get("loss_ml", 0.0))
 
         pressures = payload.get("pressure", {})
         p1_set, p2_set = 0.0, 0.0
         if isinstance(pressures, dict):
-            # P1 Setpoint
             p1_data = pressures.get(1, pressures.get("1", {}))
             if isinstance(p1_data, dict): p1_set = safe_float(p1_data.get("set"))
-            # P2 Setpoint
             p2_data = pressures.get(2, pressures.get("2", {}))
             if isinstance(p2_data, dict): p2_set = safe_float(p2_data.get("set"))
 
@@ -217,7 +196,6 @@ class EliteMonitorTab(Qtw.QFrame):
             self._current_phase = step
             self._phase_start_t = ts
 
-        # In die Deques feuern
         self._t.append(ts)
         self._p1.append(p1); self._p1_set.append(p1_set)
         self._p2.append(p2); self._p2_set.append(p2_set)
@@ -226,7 +204,6 @@ class EliteMonitorTab(Qtw.QFrame):
         
         self._sample_count += 1
 
-        # Render-Update drosseln (für mehr Performance)
         if self._sample_count % self.BATCH_SIZE == 0:
             self._update_curves(ts)
 
@@ -239,14 +216,16 @@ class EliteMonitorTab(Qtw.QFrame):
         self.curve_flow.setData(t_list, list(self._flow))
         self.curve_loss.setData(t_list, list(self._loss))
 
-        # 🚀 KUGELSICHERES SCROLLING
-        # Jeder Graph wird strikt einzeln bewegt. Keine Links, keine Loops.
+        # 🚀 DER SCHRAUBSTOCK:
+        # Bei JEDEM Update wird die X-Achse manuell auf 0->60 oder T-60->T gesetzt.
+        # Kein Auto-Range mehr möglich!
         window = 60.0
-        if current_ts > window:
-            t_min, t_max = current_ts - window, current_ts
-            self.plot_p.setXRange(min=t_min, max=t_max, padding=0)     # type: ignore
-            self.plot_flow.setXRange(min=t_min, max=t_max, padding=0)  # type: ignore
-            self.plot_loss.setXRange(min=t_min, max=t_max, padding=0)  # type: ignore
+        t_max = max(window, current_ts)
+        t_min = t_max - window
+
+        self.plot_p.setXRange(t_min, t_max, padding=0)     # type: ignore
+        self.plot_flow.setXRange(t_min, t_max, padding=0)  # type: ignore
+        self.plot_loss.setXRange(t_min, t_max, padding=0)  # type: ignore
 
         mins = int(current_ts // 60)
         secs = int(current_ts % 60)
@@ -263,7 +242,6 @@ class EliteMonitorTab(Qtw.QFrame):
         color = QColor(color_hex)
         color.setAlpha(20)
 
-        # Region nur in den oberen Druck-Graphen zeichnen (verhindert optisches Chaos)
         region = pg.LinearRegionItem(values=[t_start, t_end], movable=False, brush=color, pen=pg.mkPen(color_hex, width=0.5, style=Qt.PenStyle.DotLine))
         region.setZValue(-10)
 
