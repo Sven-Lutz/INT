@@ -23,7 +23,10 @@ def _to_float(x: Any) -> Optional[float]:
         return None
 
 def _nan(x: Optional[float]) -> float:
-    return float("nan") if x is None else x
+    # 🚀 ULTIMATIVER CRASH-SCHUTZ: 
+    # Wir geben 0.0 statt NaN an die UI-Engine. 
+    # NaN-Werte bringen das Auto-Ranging zum explodieren (Infinity-Bug).
+    return 0.0 if x is None else x
 
 _PHASE_COLORS = {
     "FILLING": "#00E5FF", "PHASE_A": "#8B5CF6", "PHASE_B": "#F59E0B",
@@ -31,10 +34,6 @@ _PHASE_COLORS = {
 }
 
 class EliteMonitorTab(Qtw.QFrame):
-    """
-    Hochperformantes Realtime-Telemetrie-Widget.
-    """
-
     BATCH_SIZE = 5
 
     def __init__(self, log_dir: Path, *, max_points: int = 3000) -> None:
@@ -67,24 +66,26 @@ class EliteMonitorTab(Qtw.QFrame):
         self.plot_p.addLegend(offset=(60, 10), labelTextSize='8pt',
                               brush=QColor(15, 23, 42, 180), pen=QColor(30, 41, 59))
 
-        # connect="finite" verhindert wilde Zick-Zack Linien bei Sensor-Ausfällen (NaN)
-        self.curve_p1 = self.plot_p.plot(
-            pen=pg.mkPen('#8B5CF6', width=2), name="P1 Ist", connect="finite")
-        self.curve_p1_set = self.plot_p.plot(
-            pen=pg.mkPen('#8B5CF6', width=1, style=Qt.PenStyle.DashLine), name="P1 Soll", connect="finite")
-        self.curve_p2 = self.plot_p.plot(
-            pen=pg.mkPen('#00E5FF', width=1.5, style=Qt.PenStyle.DashLine), name="P2", connect="finite")
+        # 🚀 CRASH-SCHUTZ: Eiserne Y-Limits. Verhindert Unendlichkeits-Sprünge!
+        self.plot_p.getViewBox().setLimits(yMin=-100, yMax=10000)
+
+        self.curve_p1 = self.plot_p.plot(pen=pg.mkPen('#8B5CF6', width=2), name="P1 Ist")
+        self.curve_p1_set = self.plot_p.plot(pen=pg.mkPen('#8B5CF6', width=1, style=Qt.PenStyle.DashLine), name="P1 Soll")
+        self.curve_p2 = self.plot_p.plot(pen=pg.mkPen('#00E5FF', width=1.5, style=Qt.PenStyle.DashLine), name="P2")
 
         # --- FLOW-PLOT ---
         self.plot_flow = pg.PlotWidget()
         self._style_plot(self.plot_flow, "Flow [mL/min]", show_bottom_label=True)
+        
+        # 🚀 CRASH-SCHUTZ: Eiserne Y-Limits für Flow.
+        self.plot_flow.getViewBox().setLimits(yMin=-10, yMax=500)
 
         self.curve_flow = self.plot_flow.plot(
             pen=pg.mkPen('#EC4899', width=2), name="Flow",
-            fillLevel=0, fillBrush=QColor(236, 72, 153, 15), connect="finite")
+            fillLevel=0, fillBrush=QColor(236, 72, 153, 15))
 
-        # X-Achsen hart verlinken
-        self.plot_flow.setXLink(self.plot_p)
+        # 🚀 CRASH-SCHUTZ: setXLink komplett verbannt! (Verursacht Loop-Crashes)
+        # Jeder Graph wird nun einzeln von Hand gesteuert.
 
         root.addWidget(self.plot_p, 3)
         root.addWidget(self.plot_flow, 2)
@@ -97,11 +98,9 @@ class EliteMonitorTab(Qtw.QFrame):
         foot_lay.setContentsMargins(12, 0, 12, 0)
 
         self.lbl_status = Qtw.QLabel("TELEMETRY: IDLE")
-        self.lbl_status.setStyleSheet(
-            "color: #64748B; font-family: 'Consolas'; font-size: 9px; font-weight: bold;")
+        self.lbl_status.setStyleSheet("color: #64748B; font-family: 'Consolas'; font-size: 9px; font-weight: bold;")
         self.lbl_samples = Qtw.QLabel("")
-        self.lbl_samples.setStyleSheet(
-            "color: #334155; font-family: 'Consolas'; font-size: 9px;")
+        self.lbl_samples.setStyleSheet("color: #334155; font-family: 'Consolas'; font-size: 9px;")
         self.lbl_samples.setAlignment(Qt.AlignmentFlag.AlignRight)
 
         foot_lay.addWidget(self.lbl_status)
@@ -135,15 +134,13 @@ class EliteMonitorTab(Qtw.QFrame):
     def start_logging(self, run_name_prefix: str = "run") -> None:
         self._clear_all()
         self.lbl_status.setText("RECORDING")
-        self.lbl_status.setStyleSheet(
-            "color: #FF1744; font-family: 'Consolas'; font-size: 9px; font-weight: bold;")
+        self.lbl_status.setStyleSheet("color: #FF1744; font-family: 'Consolas'; font-size: 9px; font-weight: bold;")
 
     def stop_logging(self) -> None:
         if self._t:
             self._update_curves(self._t[-1])
         self.lbl_status.setText("TELEMETRY: IDLE")
-        self.lbl_status.setStyleSheet(
-            "color: #64748B; font-family: 'Consolas'; font-size: 9px; font-weight: bold;")
+        self.lbl_status.setStyleSheet("color: #64748B; font-family: 'Consolas'; font-size: 9px; font-weight: bold;")
 
     def _clear_all(self):
         self._t0 = None
@@ -164,26 +161,20 @@ class EliteMonitorTab(Qtw.QFrame):
             except Exception: pass
         self._phase_regions.clear()
         
-        # Pylance type: ignore verwenden, um Keyword-Arg-Ärger zu vermeiden
-        self.plot_p.setXRange(0, 60)  # type: ignore
+        # Beide Achsen manuell auf null setzen
+        self.plot_p.setXRange(0, 60, padding=0)  # type: ignore
+        self.plot_flow.setXRange(0, 60, padding=0)  # type: ignore
         self.lbl_samples.setText("")
 
     @Slot(dict)
     def ingest_telemetry(self, payload: dict) -> None:
-        # =========================================================================
-        # 🚀 DER WICHTIGSTE FIX: DIE AUTARKE UHR
-        # Wir vertrauen keinem Zeitstempel von außen mehr, um die Kollision zu stoppen!
-        # =========================================================================
         now = time.monotonic()
         if self._t0 is None:
             self._t0 = now
 
         ts = now - self._t0
-        
-        # Falls die Ausführung zu schnell ist, minimales Inkrement erzwingen
         if self._t and ts <= self._t[-1]:
             ts = self._t[-1] + 0.005
-        # =========================================================================
 
         flow = _to_float(payload.get("flow"))
         p1 = _to_float(payload.get("p1_meas"))
@@ -223,7 +214,12 @@ class EliteMonitorTab(Qtw.QFrame):
 
         window = 60.0
         if current_ts > window:
-            self.plot_p.setXRange(current_ts - window, current_ts)  # type: ignore
+            # Beide Graphen GANZ EXAKT synchronisieren, ohne gefährlichen Link!
+            self.plot_p.setXRange(current_ts - window, current_ts, padding=0)  # type: ignore
+            self.plot_flow.setXRange(current_ts - window, current_ts, padding=0)  # type: ignore
+        else:
+            self.plot_p.setXRange(0, window, padding=0)  # type: ignore
+            self.plot_flow.setXRange(0, window, padding=0)  # type: ignore
 
         mins = int(current_ts // 60)
         secs = int(current_ts % 60)
