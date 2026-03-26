@@ -405,7 +405,7 @@ class LeftFrame(QFrame):
             import io
             from PySide6.QtGui import QImage, QPixmap
             
-            qr = qrcode.QRCode(version=1, box_size=4, border=1)
+            qr = qrcode.QRCode(version=1, box_size=3, border=1)
             qr.add_data(url)
             qr.make(fit=True)
             img = qr.make_image(fill_color="black", back_color="white")
