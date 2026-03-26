@@ -67,7 +67,7 @@ class EliteMonitorTab(Qtw.QFrame):
         self.plot_p.addLegend(offset=(60, 10), labelTextSize='8pt',
                               brush=QColor(15, 23, 42, 180), pen=QColor(30, 41, 59))
 
-        # 🚀 FIX 1: connect="finite" hinzugefügt, damit NaN-Werte (Sensorausfälle) nicht als Striche gezeichnet werden
+        # connect="finite" verhindert wilde Zick-Zack Linien bei Sensor-Ausfällen (NaN)
         self.curve_p1 = self.plot_p.plot(
             pen=pg.mkPen('#8B5CF6', width=2), name="P1 Ist", connect="finite")
         self.curve_p1_set = self.plot_p.plot(
@@ -83,7 +83,7 @@ class EliteMonitorTab(Qtw.QFrame):
             pen=pg.mkPen('#EC4899', width=2), name="Flow",
             fillLevel=0, fillBrush=QColor(236, 72, 153, 15), connect="finite")
 
-        # 🚀 X-Achsen verlinken
+        # X-Achsen hart verlinken
         self.plot_flow.setXLink(self.plot_p)
 
         root.addWidget(self.plot_p, 3)
@@ -164,19 +164,26 @@ class EliteMonitorTab(Qtw.QFrame):
             except Exception: pass
         self._phase_regions.clear()
         
-        # 🚀 FIX 2: Layout Endlosschleife gebrochen (nur noch plot_p steuern, padding=0)
-        self.plot_p.setXRange(min=0, max=60, padding=0) # type: ignore
+        # Pylance type: ignore verwenden, um Keyword-Arg-Ärger zu vermeiden
+        self.plot_p.setXRange(0, 60)  # type: ignore
         self.lbl_samples.setText("")
 
     @Slot(dict)
     def ingest_telemetry(self, payload: dict) -> None:
-        raw_t = payload.get("t", time.monotonic())
+        # =========================================================================
+        # 🚀 DER WICHTIGSTE FIX: DIE AUTARKE UHR
+        # Wir vertrauen keinem Zeitstempel von außen mehr, um die Kollision zu stoppen!
+        # =========================================================================
+        now = time.monotonic()
         if self._t0 is None:
-            self._t0 = raw_t
+            self._t0 = now
 
-        ts = raw_t - self._t0
+        ts = now - self._t0
+        
+        # Falls die Ausführung zu schnell ist, minimales Inkrement erzwingen
         if self._t and ts <= self._t[-1]:
             ts = self._t[-1] + 0.005
+        # =========================================================================
 
         flow = _to_float(payload.get("flow"))
         p1 = _to_float(payload.get("p1_meas"))
@@ -216,8 +223,7 @@ class EliteMonitorTab(Qtw.QFrame):
 
         window = 60.0
         if current_ts > window:
-            # 🚀 FIX 3: Endlosschleife gebrochen (nur noch plot_p steuern, explizite Keyword Args)
-            self.plot_p.setXRange(min=current_ts - window, max=current_ts, padding=0) # type: ignore
+            self.plot_p.setXRange(current_ts - window, current_ts)  # type: ignore
 
         mins = int(current_ts // 60)
         secs = int(current_ts % 60)
