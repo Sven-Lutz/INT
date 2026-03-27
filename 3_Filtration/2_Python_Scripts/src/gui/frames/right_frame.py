@@ -163,13 +163,7 @@ class TrapezoidWidget(QFrame):
         self._current_p = max(0.0, current_p)
         self._setpoint_p = max(0.0, setpoint)
         self._phase = phase.upper()
-
-        if setpoint > self._peak_p:
-            self._peak_p = setpoint
-
-        if self._phase == "IDLE" and current_p < 10:
-            self._peak_p = 2000.0
-
+        # _peak_p is owned exclusively by update_profile(); never grow it here
         self.update()
 
     def paintEvent(self, event):

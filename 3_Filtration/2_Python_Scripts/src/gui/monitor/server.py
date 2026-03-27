@@ -7,9 +7,10 @@ import secrets
 import socket
 import threading
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,8 @@ class MonitorState:
     manual_active: bool = False
 
     loss_ml: float = 0.0
+    volume_ml: float = 0.0
+    run_elapsed_s: float = 0.0
     progress_pct: float = 0.0
     progress_text: str = ""
     flow: Optional[float] = None
@@ -35,6 +38,9 @@ class MonitorState:
     p2_meas: Optional[float] = None
 
     valves: str = "—"
+
+    b1_current_ml: float = 0.0
+    b1_target_ml: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -62,9 +68,12 @@ def _guess_lan_ip() -> str:
 # ---------------- State store ----------------
 
 class _StateStore:
+    _HISTORY_MAXLEN = 3600  # ~10 min at 200ms sample rate
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._state = MonitorState(ts_iso=_now_iso())
+        self._history: deque = deque(maxlen=self._HISTORY_MAXLEN)
 
     def update(self, **kwargs: Any) -> None:
         with self._lock:
@@ -77,7 +86,25 @@ class _StateStore:
         with self._lock:
             return MonitorState(**asdict(self._state))
 
-# ---------------- HTML (High-Tech Chroma) ----------------
+    def write_sample(self, d: dict) -> None:
+        """Appends a compact telemetry point to the history ring buffer."""
+        with self._lock:
+            self._history.append({
+                "t": d.get("t", d.get("run_elapsed_s", 0.0)),
+                "p1": d.get("p1_meas", None),
+                "p1s": d.get("p1_set", None),
+                "p2": d.get("p2_meas", None),
+                "fl": d.get("flow", None),
+                "vol": d.get("volume_ml", None),
+                "loss": d.get("loss_ml", None),
+                "step": d.get("step", "IDLE"),
+            })
+
+    def get_history(self) -> List[dict]:
+        with self._lock:
+            return list(self._history)
+
+# ---------------- HTML Dashboard ----------------
 
 _HTML = """<!doctype html>
 <html lang="en">
@@ -85,225 +112,418 @@ _HTML = """<!doctype html>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
 <title>Chonker Telemetry</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 :root {
   --bg: #090B10;
   --card: #111520;
   --text: #F8FAFC;
-  --muted: #94A3B8;
+  --muted: #64748B;
   --border: #1F2937;
   --cyan: #00E5FF;
-  --green: #00E676;
+  --green: #10B981;
+  --pink: #EC4899;
+  --amber: #F59E0B;
+  --violet: #8B5CF6;
   --red: #FF1744;
 }
-* { box-sizing: border-box; }
-body {
-  margin: 15px;
-  background-color: var(--bg);
-  color: var(--text);
-  font-family: 'Consolas', 'Courier New', monospace;
-}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'Consolas', 'Courier New', monospace; }
+body { padding: 12px; overflow-x: hidden; }
+
+/* HEADER */
 .hdr {
   display: flex; justify-content: space-between; align-items: center;
-  border-bottom: 2px solid var(--border);
-  padding-bottom: 12px; margin-bottom: 20px;
+  border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 14px;
 }
-.h1 { font-size: 20px; font-weight: 900; color: var(--text); letter-spacing: 2px; margin: 0; }
-.auth-badge { font-size: 11px; color: #000; background: var(--green); padding: 4px 10px; border-radius: 4px; font-weight: bold;}
-.grid-top {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-bottom: 20px;
-}
-.kpi-box {
-  background: var(--card); border: 1px solid var(--border); border-top: 3px solid var(--cyan);
-  padding: 15px; border-radius: 6px;
-}
-.kpi-box:nth-child(2) { border-top-color: var(--green); }
-.kpi-box:nth-child(3) { border-top-color: #A0AEC0; }
-.kpi-box:nth-child(4) { border-top-color: var(--text); }
+.hdr-title { font-size: 16px; font-weight: 900; letter-spacing: 2px; color: var(--text); }
+.hdr-title span { color: var(--cyan); }
+.hdr-right { display: flex; align-items: center; gap: 10px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); transition: background 0.3s; flex-shrink: 0; }
+.dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.dot.dead { background: var(--red); }
+.ts-label { font-size: 10px; color: var(--muted); }
 
-.kpi-title { font-size: 11px; color: var(--muted); font-weight: bold; margin-bottom: 8px; }
-.kpi-val { font-size: 24px; font-weight: bold; color: var(--text); }
-.val-cyan { color: var(--cyan); }
-.val-green { color: var(--green); }
-
-.chart-container {
-  background: var(--card); border: 1px solid var(--border); padding: 15px; border-radius: 6px;
-  position: relative; height: 35vh; width: 100%; margin-bottom: 20px;
+/* FILLING BANNER */
+.filling-banner {
+  display: none; border: 2px solid var(--cyan); background: #0a2030;
+  border-radius: 6px; padding: 12px 16px; margin-bottom: 14px;
+  animation: pulse-border 1.4s ease-in-out infinite;
 }
-
-.status-bar {
-  display: flex; justify-content: space-between; align-items: center;
-  background: var(--card); border: 1px solid var(--border); padding: 15px; border-radius: 6px;
-  font-size: 12px; font-weight: bold; color: var(--muted);
+@keyframes pulse-border {
+  0%, 100% { border-color: var(--cyan); }
+  50% { border-color: rgba(0, 229, 255, 0.3); }
 }
-.status-bar span { color: var(--text); font-size: 14px; margin-left: 5px; }
-.status-bar span.active { color: var(--cyan); }
-.status-bar span.error { color: var(--red); }
+.filling-banner.show { display: block; }
+.filling-banner-title { color: var(--cyan); font-size: 14px; font-weight: bold; margin-bottom: 4px; }
+.filling-banner-sub { color: var(--muted); font-size: 12px; }
+
+/* PHASE TIMELINE */
+.phase-timeline {
+  display: flex; gap: 4px; margin-bottom: 14px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 12px; overflow-x: auto;
+}
+.phase-step {
+  flex: 1; min-width: 44px; text-align: center; padding: 5px 4px;
+  font-size: 10px; font-weight: bold; border-radius: 4px; color: var(--muted);
+  border: 1px solid transparent; transition: all 0.3s; letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+.phase-step.active { color: var(--text); border-color: currentColor; }
+
+/* KPI GRID */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px; margin-bottom: 14px;
+}
+@media (min-width: 480px) { .kpi-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 800px) { .kpi-grid { grid-template-columns: repeat(6, 1fr); } }
+
+.kpi {
+  background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px 10px; position: relative; overflow: hidden;
+}
+.kpi::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: var(--accent, var(--cyan));
+}
+.kpi-title { font-size: 9px; color: var(--muted); font-weight: bold; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; }
+.kpi-val { font-size: 22px; font-weight: bold; color: var(--accent, var(--cyan)); line-height: 1; }
+.kpi-sub { font-size: 10px; color: var(--muted); margin-top: 4px; }
+
+/* CHART */
+.chart-wrap {
+  background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px; margin-bottom: 14px;
+}
+.chart-title { font-size: 10px; color: var(--muted); font-weight: bold; letter-spacing: 1px; margin-bottom: 8px; }
+.chart-container { position: relative; height: 38vh; }
+
+/* PROGRESS BAR */
+.prog-wrap {
+  background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px; margin-bottom: 14px; display: none;
+}
+.prog-wrap.show { display: block; }
+.prog-header { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11px; font-weight: bold; }
+.prog-bar-bg { background: #0F172A; border-radius: 4px; height: 8px; overflow: hidden; }
+.prog-bar-fill { height: 100%; width: 0%; border-radius: 4px; transition: width 0.4s; background: var(--cyan); }
+
+/* FOOTER STATUS */
+.status-row {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px 12px;
+}
+.status-item { font-size: 11px; color: var(--muted); }
+.status-item b { color: var(--text); }
+.status-item b.err { color: var(--red); }
+.status-item b.warn { color: var(--amber); }
+.status-item b.ok { color: var(--green); }
 </style>
 </head>
 <body>
 
-  <div class="hdr">
-    <div class="h1">SYS_TELEMETRY // CHONKER</div>
-    <div class="auth-badge">AUTH OK</div>
+<!-- HEADER -->
+<div class="hdr">
+  <div class="hdr-title">CHONKER <span>//</span> TELEMETRY</div>
+  <div class="hdr-right">
+    <div class="ts-label" id="ts_label">—</div>
+    <div class="dot" id="conn_dot" title="Connection status"></div>
   </div>
+</div>
 
-  <!-- PHASE PROGRESS -->
-  <div id="phase-bar" class="status-bar" style="margin-bottom:15px; flex-direction:column; align-items:stretch; gap:8px; display:none;">
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-      <span id="phase_label" style="color:var(--cyan); font-size:14px; font-weight:bold;">—</span>
-      <span id="progress_text" style="color:var(--muted); font-size:12px;">—</span>
-    </div>
-    <div style="background:#0F172A; border-radius:4px; height:8px; overflow:hidden;">
-      <div id="progress_fill" style="height:100%; width:0%; background:var(--cyan); border-radius:4px; transition:width 0.3s;"></div>
-    </div>
+<!-- FILLING BANNER -->
+<div class="filling-banner" id="filling_banner">
+  <div class="filling-banner-title">⚠ MANUAL FILLING REQUIRED</div>
+  <div class="filling-banner-sub">Waiting for operator confirmation at control station…</div>
+</div>
+
+<!-- PHASE TIMELINE -->
+<div class="phase-timeline" id="phase_timeline" style="display:none;">
+  <div class="phase-step" id="ps_bw"   data-step="BACKWASH">BACKWASH</div>
+  <div class="phase-step" id="ps_fill" data-step="FILLING">FILL</div>
+  <div class="phase-step" id="ps_a"    data-step="PHASE_A">RAMP A</div>
+  <div class="phase-step" id="ps_b1"   data-step="PHASE_B1">HOLD B1</div>
+  <div class="phase-step" id="ps_b2"   data-step="PHASE_B2">HOLD B2</div>
+  <div class="phase-step" id="ps_c"    data-step="PHASE_C">RAMP C</div>
+  <div class="phase-step" id="ps_done" data-step="FINISHED">DONE</div>
+</div>
+
+<!-- KPI GRID -->
+<div class="kpi-grid">
+  <div class="kpi" style="--accent: var(--cyan);">
+    <div class="kpi-title">P1 Main</div>
+    <div class="kpi-val" id="kpi_p1">—</div>
+    <div class="kpi-sub" id="kpi_p1s">SET: —</div>
   </div>
-
-  <div class="grid-top">
-    <div class="kpi-box">
-      <div class="kpi-title">P1 Main (mbar)</div>
-      <div class="kpi-val val-cyan" id="p1_meas">—</div>
-      <div class="kpi-sub" id="p1_set" style="color:var(--muted); font-size:11px; margin-top:2px;">SET: —</div>
-    </div>
-    <div class="kpi-box">
-      <div class="kpi-title">P2 Backwash (mbar)</div>
-      <div class="kpi-val val-green" id="p2_meas">—</div>
-      <div class="kpi-sub" id="p2_set" style="color:var(--muted); font-size:11px; margin-top:2px;">SET: —</div>
-    </div>
-    <div class="kpi-box">
-      <div class="kpi-title">Flow Rate</div>
-      <div class="kpi-val" id="flow">—</div>
-    </div>
-    <div class="kpi-box">
-      <div class="kpi-title">Valve State</div>
-      <div class="kpi-val" id="valves" style="font-size: 16px;">—</div>
-    </div>
+  <div class="kpi" style="--accent: var(--green);">
+    <div class="kpi-title">P2 Backwash</div>
+    <div class="kpi-val" id="kpi_p2">—</div>
+    <div class="kpi-sub" id="kpi_p2s">SET: —</div>
   </div>
+  <div class="kpi" style="--accent: var(--pink);">
+    <div class="kpi-title">Flow Rate</div>
+    <div class="kpi-val" id="kpi_flow">—</div>
+    <div class="kpi-sub">mL/min</div>
+  </div>
+  <div class="kpi" style="--accent: var(--amber);">
+    <div class="kpi-title">Volume</div>
+    <div class="kpi-val" id="kpi_vol">—</div>
+    <div class="kpi-sub">mL</div>
+  </div>
+  <div class="kpi" style="--accent: var(--violet);">
+    <div class="kpi-title">Loss / Target</div>
+    <div class="kpi-val" id="kpi_loss">—</div>
+    <div class="kpi-sub" id="kpi_prog_text">—</div>
+  </div>
+  <div class="kpi" style="--accent: var(--muted);">
+    <div class="kpi-title">Runtime</div>
+    <div class="kpi-val" id="kpi_rt" style="font-size:18px;">—</div>
+    <div class="kpi-sub" id="kpi_step">IDLE</div>
+  </div>
+</div>
 
+<!-- PROGRESS BAR -->
+<div class="prog-wrap" id="prog_wrap">
+  <div class="prog-header">
+    <span id="prog_phase" style="color: var(--cyan);">—</span>
+    <span id="prog_text" style="color: var(--muted);">—</span>
+  </div>
+  <div class="prog-bar-bg">
+    <div class="prog-bar-fill" id="prog_fill"></div>
+  </div>
+</div>
+
+<!-- CHART -->
+<div class="chart-wrap">
+  <div class="chart-title">LIVE TELEMETRY — FULL RUN HISTORY</div>
   <div class="chart-container">
     <canvas id="liveChart"></canvas>
   </div>
+</div>
 
-  <div class="status-bar">
-    <div>STEP:<span id="step" class="active">—</span></div>
-    <div>SYS:<span id="status">—</span></div>
-    <div>LOSS:<span id="loss">—</span></div>
-  </div>
+<!-- STATUS FOOTER -->
+<div class="status-row">
+  <div class="status-item">STEP: <b id="s_step">—</b></div>
+  <div class="status-item">SYS: <b id="s_status">—</b></div>
+  <div class="status-item">VALVES: <b id="s_valves">—</b></div>
+  <div class="status-item">LOSS: <b id="s_loss">—</b></div>
+</div>
 
 <script>
 const qs = new URLSearchParams(location.search);
-const token = qs.get("token") || "";
+const TOKEN = qs.get("token") || "";
 
-const ctx = document.getElementById('liveChart').getContext('2d');
+// ── Chart.js setup ──────────────────────────────────────────────
 Chart.defaults.color = '#64748B';
 Chart.defaults.font.family = "'Consolas', monospace";
 
-const maxDataPoints = 60;
+const ctx = document.getElementById('liveChart').getContext('2d');
 const chart = new Chart(ctx, {
-    type: 'line',
-    data: {
-        labels: [],
-        datasets: [
-            { label: 'P1 Main', borderColor: '#00E5FF', backgroundColor: 'rgba(0, 229, 255, 0.1)', borderWidth: 2, pointRadius: 0, data: [], fill: true, tension: 0.3 },
-            { label: 'P2 Backwash', borderColor: '#00E676', backgroundColor: 'transparent', borderWidth: 2, borderDash: [5, 5], pointRadius: 0, data: [], tension: 0.3 },
-            { label: 'Flow', borderColor: '#EC4899', backgroundColor: 'rgba(236, 72, 153, 0.08)', borderWidth: 1.5, pointRadius: 0, data: [], fill: true, tension: 0.3, yAxisID: 'y1' }
-        ]
+  type: 'line',
+  data: {
+    datasets: [
+      { label: 'P1 Meas',   borderColor: '#00E5FF', backgroundColor: 'rgba(0,229,255,0.06)', borderWidth: 2, pointRadius: 0, data: [], fill: true, tension: 0.2, yAxisID: 'yP' },
+      { label: 'P1 Set',    borderColor: '#00E5FF', backgroundColor: 'transparent', borderWidth: 1, borderDash: [4,4], pointRadius: 0, data: [], tension: 0.2, yAxisID: 'yP' },
+      { label: 'P2 Meas',   borderColor: '#10B981', backgroundColor: 'transparent', borderWidth: 1.5, pointRadius: 0, data: [], tension: 0.2, yAxisID: 'yP' },
+      { label: 'Flow',      borderColor: '#EC4899', backgroundColor: 'rgba(236,72,153,0.07)', borderWidth: 1.5, pointRadius: 0, data: [], fill: true, tension: 0.3, yAxisID: 'yF' },
+      { label: 'Volume',    borderColor: '#F59E0B', backgroundColor: 'transparent', borderWidth: 1.5, pointRadius: 0, data: [], tension: 0.2, yAxisID: 'yV', borderDash: [2,2] },
+      { label: 'Loss',      borderColor: '#8B5CF6', backgroundColor: 'rgba(139,92,246,0.07)', borderWidth: 1.5, pointRadius: 0, data: [], fill: true, tension: 0.2, yAxisID: 'yV' },
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    interaction: { intersect: false, mode: 'index' },
+    parsing: { xAxisKey: 't', yAxisKey: 'v' },
+    scales: {
+      x: { type: 'linear', display: true, grid: { color: '#1F2937' }, ticks: { callback: v => fmtTime(v), maxTicksLimit: 8, color: '#64748B' }, title: { display: true, text: 'Elapsed [s]', color: '#64748B' } },
+      yP: { type: 'linear', position: 'left',  grid: { color: '#1F2937' }, title: { display: true, text: 'Pressure [mbar]', color: '#64748B' }, beginAtZero: true },
+      yF: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Flow [mL/min]', color: '#64748B' }, beginAtZero: true },
+      yV: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Volume / Loss [mL]', color: '#64748B' }, beginAtZero: true, display: false },
     },
-    options: {
-        responsive: true, maintainAspectRatio: false,
-        animation: false,
-        interaction: { intersect: false },
-        scales: {
-            x: { display: false },
-            y: { grid: { color: '#1F2937' }, beginAtZero: true, position: 'left', title: { display: true, text: 'mbar', color: '#64748B' } },
-            y1: { grid: { drawOnChartArea: false }, beginAtZero: true, position: 'right', title: { display: true, text: 'mL/min', color: '#64748B' } }
-        },
-        plugins: { legend: { position: 'top', labels: { boxWidth: 15, font: {weight: 'bold'} } } }
-    }
+    plugins: { legend: { position: 'top', labels: { boxWidth: 14, font: { size: 10, weight: 'bold' } } } }
+  }
 });
 
-let timeIndex = 0;
+function fmtTime(s) {
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return m > 0 ? m + 'm' + String(sec).padStart(2,'0') + 's' : sec + 's';
+}
+function fmtRuntime(s) {
+  if (s == null || s <= 0) return '—';
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
+  if (h > 0) return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+  return String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+}
 
-const phaseColors = {
-    'FILLING': '#00E5FF', 'PHASE_A': '#8B5CF6', 'PHASE_B': '#F59E0B',
-    'PHASE_C': '#EC4899', 'FINISHED': '#00E676', 'ABORTED': '#FF1744'
-};
+function pushPoint(ds, t, v) {
+  if (v == null) return;
+  ds.data.push({ t: t, v: v });
+}
 
-async function tick() {
-  if(!token) return;
+// Load full run history on page load
+async function loadHistory() {
+  if (!TOKEN) return;
   try {
-    const r = await fetch("/status?token=" + encodeURIComponent(token), {cache:"no-store"});
-    if(!r.ok) return;
-    const s = await r.json();
-
-    document.getElementById("p1_meas").textContent = s.p1_meas != null ? Math.round(s.p1_meas) : "—";
-    document.getElementById("p2_meas").textContent = s.p2_meas != null ? Math.round(s.p2_meas) : "—";
-    document.getElementById("p1_set").textContent = s.p1_set != null ? "SET: " + Math.round(s.p1_set) + " mbar" : "SET: —";
-    document.getElementById("p2_set").textContent = s.p2_set != null ? "SET: " + Math.round(s.p2_set) + " mbar" : "SET: —";
-    document.getElementById("flow").textContent = s.flow != null ? s.flow.toFixed(3) : "—";
-    document.getElementById("valves").textContent = s.valves ?? "—";
-
-    document.getElementById("step").textContent = s.step ?? "—";
-    document.getElementById("loss").textContent = (s.loss_ml ?? 0).toFixed(3) + " mL";
-
-    // Phase Progress Bar
-    const phaseBar = document.getElementById("phase-bar");
-    if (s.phase_label && s.step !== "IDLE") {
-        phaseBar.style.display = "flex";
-        const pLabel = document.getElementById("phase_label");
-        pLabel.textContent = s.phase_label;
-        let pColor = phaseColors[s.step] || '#00E5FF';
-        for (const [k, c] of Object.entries(phaseColors)) { if (s.step.includes(k)) { pColor = c; break; } }
-        pLabel.style.color = pColor;
-        document.getElementById("progress_text").textContent = s.progress_text || "";
-        const fill = document.getElementById("progress_fill");
-        fill.style.width = Math.min(100, Math.max(0, s.progress_pct || 0)) + "%";
-        fill.style.background = pColor;
-    } else {
-        phaseBar.style.display = "none";
+    const r = await fetch('/history?token=' + encodeURIComponent(TOKEN), { cache: 'no-store' });
+    if (!r.ok) return;
+    const hist = await r.json();
+    for (const p of hist) {
+      const t = p.t || 0;
+      pushPoint(chart.data.datasets[0], t, p.p1);
+      pushPoint(chart.data.datasets[1], t, p.p1s);
+      pushPoint(chart.data.datasets[2], t, p.p2);
+      pushPoint(chart.data.datasets[3], t, p.fl);
+      pushPoint(chart.data.datasets[4], t, p.vol);
+      pushPoint(chart.data.datasets[5], t, p.loss);
     }
-
-    // Soll/Ist Drift-Indikator P1
-    if (s.p1_set != null && s.p1_meas != null && s.p1_set > 10) {
-        const drift = Math.abs(s.p1_meas - s.p1_set) / s.p1_set * 100;
-        document.getElementById("p1_set").style.color = drift > 10 ? '#FF1744' : 'var(--muted)';
-    }
-
-    const stEl = document.getElementById("status");
-    stEl.textContent = s.status ?? "—";
-    const statusText = (s.status || "").toLowerCase();
-    if(statusText.includes("fail") || statusText.includes("error") || statusText.includes("alarm")) {
-        stEl.className = "error";
-    } else if(statusText.includes("wait") || statusText.includes("confirm")) {
-        stEl.className = ""; stEl.style.color = "#F59E0B";
-    } else {
-        stEl.className = "active"; stEl.style.color = "";
-    }
-
-    // Chart: P1, P2, und Flow
-    const p1_val = s.p1_meas != null ? s.p1_meas : null;
-    const p2_val = s.p2_meas != null ? s.p2_meas : null;
-    const f_val = s.flow != null ? s.flow : null;
-
-    if (p1_val !== null || p2_val !== null || f_val !== null) {
-        chart.data.labels.push(timeIndex++);
-        chart.data.datasets[0].data.push(p1_val || 0);
-        chart.data.datasets[1].data.push(p2_val || 0);
-        chart.data.datasets[2].data.push(f_val || 0);
-
-        if (chart.data.labels.length > maxDataPoints) {
-            chart.data.labels.shift();
-            chart.data.datasets.forEach(ds => ds.data.shift());
-        }
-        chart.update();
-    }
-
+    chart.update('none');
   } catch(e) {}
 }
 
-setInterval(tick, 500);
-tick();
+// ── Phase colors & timeline ──────────────────────────────────────
+const PHASE_COLORS = {
+  BACKWASH: '#EC4899', FILLING: '#00E5FF',
+  PHASE_A: '#8B5CF6', PHASE_B: '#F59E0B', PHASE_B1: '#F59E0B', PHASE_B2: '#10B981',
+  PHASE_C: '#EC4899', FINISHED: '#10B981', ABORTED: '#FF1744'
+};
+
+function phaseColor(step) {
+  for (const [k, c] of Object.entries(PHASE_COLORS)) {
+    if ((step || '').includes(k)) return c;
+  }
+  return '#64748B';
+}
+
+function updateTimeline(step) {
+  const s = (step || '').toUpperCase();
+  const mapping = [
+    ['ps_bw',   ['BACKWASH']],
+    ['ps_fill', ['FILLING']],
+    ['ps_a',    ['PHASE_A']],
+    ['ps_b1',   ['PHASE_B1', 'PHASE_B']],
+    ['ps_b2',   ['PHASE_B2']],
+    ['ps_c',    ['PHASE_C']],
+    ['ps_done', ['FINISHED']],
+  ];
+  const tl = document.getElementById('phase_timeline');
+  if (s && s !== 'IDLE') tl.style.display = 'flex'; else tl.style.display = 'none';
+  for (const [id, keys] of mapping) {
+    const el = document.getElementById(id);
+    const matched = keys.some(k => s.includes(k));
+    if (matched) {
+      el.classList.add('active');
+      const c = phaseColor(s);
+      el.style.color = c;
+      el.style.borderColor = c;
+      el.style.background = c + '20';
+    } else {
+      el.classList.remove('active');
+      el.style.color = '';
+      el.style.borderColor = '';
+      el.style.background = '';
+    }
+  }
+}
+
+// ── UI Update ────────────────────────────────────────────────────
+let lastStep = '';
+function setDot(state) {
+  const d = document.getElementById('conn_dot');
+  d.className = 'dot ' + (state === 'live' ? 'live' : state === 'dead' ? 'dead' : '');
+}
+
+function updateUI(s) {
+  document.getElementById('ts_label').textContent = (s.ts_iso || '').slice(11,19);
+
+  // KPI cards
+  document.getElementById('kpi_p1').textContent    = s.p1_meas != null ? Math.round(s.p1_meas) + ' mbar' : '—';
+  document.getElementById('kpi_p1s').textContent   = s.p1_set  != null ? 'SET: ' + Math.round(s.p1_set) + ' mbar' : 'SET: —';
+  document.getElementById('kpi_p2').textContent    = s.p2_meas != null ? Math.round(s.p2_meas) + ' mbar' : '—';
+  document.getElementById('kpi_p2s').textContent   = s.p2_set  != null ? 'SET: ' + Math.round(s.p2_set) + ' mbar' : 'SET: —';
+  document.getElementById('kpi_flow').textContent  = s.flow    != null ? s.flow.toFixed(2)   : '—';
+  document.getElementById('kpi_vol').textContent   = s.volume_ml != null ? Math.round(s.volume_ml) : '—';
+  document.getElementById('kpi_loss').textContent  = (s.loss_ml || 0).toFixed(1) + ' mL';
+  document.getElementById('kpi_prog_text').textContent = s.progress_text || '—';
+  document.getElementById('kpi_rt').textContent    = fmtRuntime(s.run_elapsed_s);
+  document.getElementById('kpi_step').textContent  = s.step || 'IDLE';
+
+  // P1 drift warning
+  if (s.p1_set != null && s.p1_meas != null && s.p1_set > 50) {
+    const drift = Math.abs(s.p1_meas - s.p1_set) / s.p1_set * 100;
+    document.getElementById('kpi_p1s').style.color = drift > 10 ? '#FF1744' : '';
+  }
+
+  // Filling banner
+  const fb = document.getElementById('filling_banner');
+  if ((s.step || '').includes('FILLING')) fb.classList.add('show');
+  else fb.classList.remove('show');
+
+  // Phase timeline
+  updateTimeline(s.step || '');
+
+  // Progress bar
+  const pw = document.getElementById('prog_wrap');
+  if (s.phase_label && s.step !== 'IDLE' && s.progress_pct > 0) {
+    pw.classList.add('show');
+    const c = phaseColor(s.step);
+    document.getElementById('prog_phase').textContent = s.phase_label;
+    document.getElementById('prog_phase').style.color = c;
+    document.getElementById('prog_text').textContent  = s.progress_text || '';
+    document.getElementById('prog_fill').style.width  = Math.min(100, Math.max(0, s.progress_pct)) + '%';
+    document.getElementById('prog_fill').style.background = c;
+  } else {
+    pw.classList.remove('show');
+  }
+
+  // Status footer
+  document.getElementById('s_step').textContent   = s.step   || '—';
+  document.getElementById('s_status').textContent = s.status || '—';
+  document.getElementById('s_valves').textContent = s.valves || '—';
+  document.getElementById('s_loss').textContent   = (s.loss_ml || 0).toFixed(2) + ' mL';
+}
+
+// ── SSE live stream ───────────────────────────────────────────────
+let sseRetries = 0;
+let lastT = -1;
+
+function connectSSE() {
+  if (!TOKEN) return;
+  const es = new EventSource('/stream?token=' + encodeURIComponent(TOKEN));
+  es.onopen = () => { setDot('live'); sseRetries = 0; };
+  es.onmessage = (e) => {
+    try {
+      const s = JSON.parse(e.data);
+      updateUI(s);
+      // Append new chart point
+      const t = s.run_elapsed_s || 0;
+      if (t > lastT) {
+        lastT = t;
+        pushPoint(chart.data.datasets[0], t, s.p1_meas);
+        pushPoint(chart.data.datasets[1], t, s.p1_set);
+        pushPoint(chart.data.datasets[2], t, s.p2_meas);
+        pushPoint(chart.data.datasets[3], t, s.flow);
+        pushPoint(chart.data.datasets[4], t, s.volume_ml);
+        pushPoint(chart.data.datasets[5], t, s.loss_ml);
+        chart.update('none');
+      }
+    } catch(ex) {}
+  };
+  es.onerror = () => {
+    setDot('dead');
+    es.close();
+    sseRetries++;
+    // Exponential backoff: 2s, 4s, 8s, then cap at 10s
+    const delay = Math.min(10000, 2000 * Math.pow(2, Math.min(sseRetries - 1, 3)));
+    setTimeout(connectSSE, delay);
+  };
+}
+
+// Start
+loadHistory().then(connectSSE);
 </script>
 </body>
 </html>
@@ -327,7 +547,7 @@ class MonitorServer:
         token = self.token
 
         class Handler(BaseHTTPRequestHandler):
-            server_version = "LittleChonkerMonitor/2.0"
+            server_version = "LittleChonkerMonitor/3.0"
 
             def _auth_ok(self) -> bool:
                 q = parse_qs(urlparse(self.path).query)
@@ -373,19 +593,23 @@ class MonitorServer:
 
             def do_GET(self) -> None:
                 u = urlparse(self.path)
+
                 if u.path == "/health":
                     return self._send(200, b"ok", "text/plain; charset=utf-8")
+
                 if u.path == "/info":
                     payload = {
                         "server": "LittleChonkerMonitor",
-                        "version": "2.0",
+                        "version": "3.0",
                         "token_present": bool(token),
-                        "note": "Use /status?token=... for JSON status.",
+                        "note": "Use /status?token=... for JSON status, /stream?token=... for SSE.",
                     }
                     b = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                     return self._send(200, b, "application/json; charset=utf-8")
+
                 if u.path in ("/", "/index.html"):
                     return self._send(200, _HTML.encode("utf-8"), "text/html; charset=utf-8")
+
                 if u.path == "/status":
                     if not self._auth_ok():
                         return self._send(403, b"Forbidden", "text/plain; charset=utf-8")
@@ -397,6 +621,41 @@ class MonitorServer:
                         "application/json; charset=utf-8",
                         extra_headers={"Access-Control-Allow-Origin": "*"},
                     )
+
+                if u.path == "/history":
+                    if not self._auth_ok():
+                        return self._send(403, b"Forbidden", "text/plain; charset=utf-8")
+                    hist = store.get_history()
+                    b = json.dumps(hist, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                    return self._send(
+                        200,
+                        b,
+                        "application/json; charset=utf-8",
+                        extra_headers={"Access-Control-Allow-Origin": "*"},
+                    )
+
+                if u.path == "/stream":
+                    if not self._auth_ok():
+                        return self._send(403, b"Forbidden", "text/plain; charset=utf-8")
+                    # Server-Sent Events — keep connection alive
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("Connection", "keep-alive")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("X-Accel-Buffering", "no")
+                    self.end_headers()
+                    try:
+                        while True:
+                            snap = store.snapshot()
+                            data = ("data: " + snap.to_json() + "\n\n").encode("utf-8")
+                            self.wfile.write(data)
+                            self.wfile.flush()
+                            time.sleep(0.3)
+                    except (BrokenPipeError, ConnectionResetError, OSError):
+                        pass
+                    return
+
                 return self._send(404, b"Not Found", "text/plain; charset=utf-8")
 
             def log_message(self, _format: str, *args: Any) -> None:
@@ -414,7 +673,7 @@ class MonitorServer:
         t = threading.Thread(target=httpd.serve_forever, daemon=True, name="MonitorServer")
         self._thread = t
         t.start()
-        logger.info("MonitorServer started (bind=%s:%s, lan=%s, url=%s)", self.host, self.port, self.lan_ip, self.url())
+        logger.info("MonitorServer v3 started (bind=%s:%s, lan=%s, url=%s)", self.host, self.port, self.lan_ip, self.url())
 
     def stop(self) -> None:
         httpd = self._httpd
@@ -445,15 +704,20 @@ class MonitorServer:
     def token_short(self) -> str:
         return self.token[:10]
 
+    # ── State update methods ──────────────────────────────────────
+
     def update_step(self, step: str) -> None:
         s = str(step)
         phase_labels = {
-            "FILLING": "PHASE 0: FILLING",
-            "PHASE_A": "PHASE A: RAMP UP",
-            "PHASE_B": "PHASE B: STEADY STATE",
-            "PHASE_C": "PHASE C: RAMP DOWN",
-            "FINISHED": "COMPLETE",
-            "ABORTED": "ABORTED",
+            "BACKWASH":  "PHASE 0: BACKWASH",
+            "FILLING":   "PHASE 0: FILLING",
+            "PHASE_A":   "PHASE A: RAMP UP",
+            "PHASE_B1":  "PHASE B1: STEADY STATE",
+            "PHASE_B2":  "PHASE B2: EXTRA DRY",
+            "PHASE_B":   "PHASE B: STEADY STATE",
+            "PHASE_C":   "PHASE C: RAMP DOWN",
+            "FINISHED":  "COMPLETE",
+            "ABORTED":   "ABORTED",
         }
         label = s
         for key, lbl in phase_labels.items():
@@ -483,13 +747,23 @@ class MonitorServer:
             p2_set: Optional[float] = None,
             p2_meas: Optional[float] = None,
             valves: Optional[str] = None,
+            volume_ml: Optional[float] = None,
+            loss_ml: Optional[float] = None,
+            run_elapsed_s: Optional[float] = None,
     ) -> None:
         payload: Dict[str, Any] = {}
-        if flow is not None: payload["flow"] = float(flow)
-        if p1_set is not None: payload["p1_set"] = float(p1_set)
-        if p1_meas is not None: payload["p1_meas"] = float(p1_meas)
-        if p2_set is not None: payload["p2_set"] = float(p2_set)
-        if p2_meas is not None: payload["p2_meas"] = float(p2_meas)
-        if valves is not None: payload["valves"] = str(valves)
+        if flow        is not None: payload["flow"]          = float(flow)
+        if p1_set      is not None: payload["p1_set"]        = float(p1_set)
+        if p1_meas     is not None: payload["p1_meas"]       = float(p1_meas)
+        if p2_set      is not None: payload["p2_set"]        = float(p2_set)
+        if p2_meas     is not None: payload["p2_meas"]       = float(p2_meas)
+        if valves      is not None: payload["valves"]        = str(valves)
+        if volume_ml   is not None: payload["volume_ml"]     = float(volume_ml)
+        if loss_ml     is not None: payload["loss_ml"]       = float(loss_ml)
+        if run_elapsed_s is not None: payload["run_elapsed_s"] = float(run_elapsed_s)
         if payload:
             self._store.update(**payload)
+
+    def write_sample(self, d: dict) -> None:
+        """Forward a telemetry sample dict to the history ring buffer."""
+        self._store.write_sample(d)
