@@ -104,7 +104,7 @@ class RunParams:
     run_phase_c: bool
 
     phase_0_pressure_mbar: float = 300.0
-    phase_0_stagnation_s: float = 8.0   # Backwash-Ende: Kein Flow für N Sekunden → Membran erreicht
+    phase_0_target_ml: float = 1400.0   # Backwash target volume (ml); stop when this volume is filled
 
     phase_a_target_mbar: float = 2000.0
     phase_a_rate_mbar_min: float = 125.0
@@ -146,7 +146,7 @@ class RunParams:
         if "run_phase_b" not in data: data["run_phase_b"] = True
         if "run_phase_c" not in data: data["run_phase_c"] = True
         # Alte Felder entfernen die nicht mehr existieren
-        for _old in ("v_h2o_ml", "phase_0_mode", "phase_a_mode", "phase_a_step_mbar"):
+        for _old in ("v_h2o_ml", "phase_0_mode", "phase_a_mode", "phase_a_step_mbar", "phase_0_stagnation_s"):
             data.pop(_old, None)
         # Nur bekannte Felder übergeben (ignoriert alte/unbekannte Keys)
         import dataclasses
@@ -406,78 +406,112 @@ class ExperimentWorker(QObject):
                 self._store.write_event("RUN_START", {"step": self._current_step.value})
             except Exception: self._store = None
 
-            target_vol = float(p.v_bnnt_ml) + float(p.phase_b1_target_ml)
+            # Per-phase loss tracking (for end-of-run summary)
+            _loss_a: float = 0.0
+            _loss_b1: float = 0.0
+            _loss_b2: float = 0.0
+            _loss_c: float = 0.0
+
             total_loss = 0.0
 
             # -------------------------------------------------------------
-            # PHASE 0: BACKWASH (automatisch bis Membran)
+            # PHASE 0: BACKWASH (volume target — stop when bw_target_ml filled)
             # -------------------------------------------------------------
             if p.run_phase_0:
                 self._current_step = Step.FILLING
                 self.step_changed.emit("FILLING")
-                self._phase_vol_start = float(self._exp.volume_ml)
                 bw_ch = int(self.cfg.backwash_pressure_channel)
                 flow_dead = float(self.cfg.flow_deadband_ml_per_s)
-                stagnation_threshold_s = max(3.0, float(p.phase_0_stagnation_s))
-                max_bw_duration_s = 1800.0  # Safety: max 30 min
+                bw_target_ml = max(1.0, float(p.phase_0_target_ml))
+                max_bw_duration_s = 3600.0  # Safety: max 60 min (silent)
 
                 self.log_msg.emit("═" * 52, "#EC4899")
-                self.log_msg.emit("BACKWASH STARTED — filling system to membrane level", "#EC4899")
+                self.log_msg.emit(
+                    f"PHASE 0: BACKWASH  target: {bw_target_ml:.0f} ml  @ {p.phase_0_pressure_mbar:.0f} mbar",
+                    "#EC4899")
                 self.log_msg.emit("═" * 52, "#EC4899")
-                self.status.emit("BACKWASH: filling to membrane...")
+                self.status.emit(f"BACKWASH: filling {bw_target_ml:.0f} ml to membrane...")
 
                 robust_switch_valves(dev, "BACKWASH", self.log_msg)
                 if getattr(dev, "pressure_controller", None) is not None:
                     self._safe_set_pressure_mbar(channel=bw_ch, mbar=float(p.phase_0_pressure_mbar))
 
                 mode_bw = "PHASE_0_BACKWASH"
-                self._exp._step_start_volume = float(self._exp.volume_ml)
+                bw_vol_start = float(self._exp.volume_ml)
+                self._phase_vol_start = bw_vol_start
+                self._exp._step_start_volume = bw_vol_start
                 self._exp._log_row(mode_bw, 0.0, float("nan"), float("nan"),
                                    pressure_channel=bw_ch, event="START_BACKWASH")
 
                 t_deadline = time.monotonic() + max_bw_duration_s
-                last_flow_time_bw = time.monotonic()
+                _eta_logged = False
 
                 while not self._should_abort():
-                    if time.monotonic() > t_deadline:
-                        self.log_msg.emit("SAFETY: Backwash-Timeout (30 min)!", "#FF1744")
-                        break
-
                     dt_s, flow_raw = self._exp._sample_flow()
                     flow_ml_s = self._exp._flow_to_ml_per_s(flow_raw)
                     self._exp._update_volume(dt_s, flow_raw, net_sign=+1.0)
                     self._exp._log_row(mode_bw, dt_s, flow_raw, flow_ml_s, pressure_channel=bw_ch)
                     self._emit_sample(event="BACKWASH")
 
-                    if abs(flow_ml_s) > flow_dead:
-                        last_flow_time_bw = time.monotonic()
-                    elif (time.monotonic() - last_flow_time_bw) > stagnation_threshold_s:
+                    bw_vol_filled = max(0.0, float(self._exp.volume_ml) - bw_vol_start)
+
+                    # Log ETA once we have measurable flow
+                    if not _eta_logged and abs(flow_ml_s) > flow_dead and bw_vol_filled < bw_target_ml:
+                        remaining = bw_target_ml - bw_vol_filled
+                        eta_min = (remaining / abs(flow_ml_s)) / 60.0 if abs(flow_ml_s) > 0 else float("inf")
+                        if eta_min < float("inf"):
+                            self.log_msg.emit(
+                                f"BW flow: {abs(flow_ml_s)*1000:.1f} ml/min → ETA: {eta_min:.1f} min", "#EC4899")
+                        _eta_logged = True
+
+                    if bw_vol_filled >= bw_target_ml:
                         self.log_msg.emit(
-                            f"Backwash complete: no flow for {stagnation_threshold_s:.0f}s — membrane reached.", "#10B981")
+                            f"Backwash complete: {bw_vol_filled:.1f} ml filled (target: {bw_target_ml:.0f} ml).",
+                            "#10B981")
                         self._exp._log_row(mode_bw, 0.0, float("nan"), 0.0,
-                                           pressure_channel=bw_ch, event="END_BACKWASH_STAGNATION")
+                                           pressure_channel=bw_ch, event="END_BACKWASH_TARGET")
+                        break
+
+                    if time.monotonic() > t_deadline:
+                        self.log_msg.emit(
+                            f"BW safety timeout (60 min) — {bw_vol_filled:.1f}/{bw_target_ml:.0f} ml filled. "
+                            "Continuing to filling step.", "#F59E0B")
+                        self._exp._log_row(mode_bw, 0.0, float("nan"), 0.0,
+                                           pressure_channel=bw_ch, event="END_BACKWASH_TIMEOUT")
                         break
 
                     time.sleep(float(self.cfg.sample_period_s))
 
-                # Druck und Ventile schließen
+                # Drop pressure and close valves
                 if getattr(dev, "pressure_controller", None) is not None:
                     self._safe_set_pressure_mbar(channel=bw_ch, mbar=0.0)
                 robust_switch_valves(dev, "SHUT", self.log_msg)
                 self._phase_vol_start = None
 
-                # --- Manuelles Filling anfordern ---
+                # Gate 1: Manual filling
                 self._raise_if_abort()
-                recommended_fill = max(0.0, self._last_ramp_loss_ml) if self._last_ramp_loss_ml > 0 else target_vol
+                recommended_fill = max(0.0, self._last_ramp_loss_ml) if self._last_ramp_loss_ml > 0 else float(p.v_bnnt_ml) + float(p.phase_b1_target_ml)
                 self.log_msg.emit("─" * 52, "#00E5FF")
                 self.log_msg.emit("MANUAL FILLING REQUIRED", "#00E5FF")
                 self.log_msg.emit(f"Recommended amount: {recommended_fill:.1f} ml", "#00E5FF")
-                self.log_msg.emit(f"Next phase after confirmation: RAMP ({p.phase_a_target_mbar:.0f} mbar)", "#64748B")
                 self.log_msg.emit("─" * 52, "#00E5FF")
                 self.filling_requested.emit(recommended_fill)
                 self._wait_ok(Step.FILLING, "Fill liquid and confirm")
                 self.log_msg.emit(
                     f"Filling confirmed: {self._filling_amount_ml:.1f} ml added.", "#10B981")
+
+                # Gate 2: Initialize ramp (amber OK banner before Phase A)
+                self._raise_if_abort()
+                self.log_msg.emit("─" * 52, "#8B5CF6")
+                self.log_msg.emit(
+                    f"Ready to start RAMP. Target: {p.phase_a_target_mbar:.0f} mbar", "#8B5CF6")
+                self.log_msg.emit("─" * 52, "#8B5CF6")
+                self._wait_ok(Step.FILTRATION, "Initialize Ramp — confirm to start Phase A")
+
+            # Determine B1 target from confirmed filling amount (fallback to config)
+            target_vol = (self._filling_amount_ml
+                          if self._filling_amount_ml > 0
+                          else float(p.v_bnnt_ml) + float(p.phase_b1_target_ml))
 
             # --- PHASE A: RAMP UP (automatisch, kontinuierlich) ---
             if p.run_phase_a:
@@ -512,6 +546,7 @@ class ExperimentWorker(QObject):
 
                 self._emit_sample(event=f"PHASE_A_END loss={loss_a:.4f}")
                 self.log_msg.emit(f"Phase A complete. Loss: {loss_a:.3f} ml", "#8B5CF6")
+                _loss_a = loss_a
                 total_loss += loss_a
                 self._total_loss_so_far += loss_a
                 self._phase_vol_start = None
@@ -532,13 +567,15 @@ class ExperimentWorker(QObject):
                 flow_dead = float(self.cfg.flow_deadband_ml_per_s)
 
                 # ============================================================
-                # PHASE B1: Steady State bis Zielvolumen
+                # PHASE B1: Steady State until filling target (minus Phase A losses)
                 # ============================================================
-                self.status.emit(f"Phase B1 active (target: {target_vol:.2f} ml)")
+                remaining_b1 = max(0.0, target_vol - _loss_a)
+                self.status.emit(f"Phase B1 active (remaining: {remaining_b1:.2f} ml)")
                 self.log_msg.emit("═" * 52, "#F59E0B")
                 self.log_msg.emit(
                     f"PHASE B1: STEADY STATE  {p.phase_a_target_mbar:.0f} mbar  "
-                    f"→ target: {target_vol:.2f} ml  (timeout: {p.phase_b_no_flow_timeout_min:.0f} min)", "#F59E0B")
+                    f"→ remaining: {remaining_b1:.2f} ml  (filling: {target_vol:.2f} ml, Phase A: {_loss_a:.2f} ml)  "
+                    f"(timeout: {p.phase_b_no_flow_timeout_min:.0f} min)", "#F59E0B")
                 if p.v_extra_ml > 0:
                     self.log_msg.emit(f"Next phase: B2 — Drying ({p.v_extra_ml:.1f} ml)", "#64748B")
                 else:
@@ -576,13 +613,13 @@ class ExperimentWorker(QObject):
                     elif (time.monotonic() - last_flow_time_b1) > stagnation_timeout_s:
                         self.log_msg.emit(
                             f"B1 SAFETY: No flow for {p.phase_b_no_flow_timeout_min:.0f} min! "
-                            f"Filter may be clogged. ({loss_b1:.2f}/{target_vol:.2f} mL)", "#FF1744")
+                            f"Filter may be clogged. ({loss_b1:.2f}/{remaining_b1:.2f} mL)", "#FF1744")
                         self._exp._log_row(mode_b1, 0.0, float("nan"), 0.0,
                                            pressure_channel=ch, event="B1_STAGNATION_TIMEOUT")
                         break
 
                     # Zielvolumen erreicht?
-                    if loss_b1 >= target_vol:
+                    if loss_b1 >= remaining_b1:
                         self.log_msg.emit(f"Phase B1 complete: {loss_b1:.2f} mL removed.", "#10B981")
                         self._exp._log_row(mode_b1, 0.0, float("nan"), 0.0,
                                            pressure_channel=ch,
@@ -590,7 +627,7 @@ class ExperimentWorker(QObject):
                         break
 
                     self.loss_updated.emit(self._total_loss_so_far + loss_b1)
-                    self.phase_detail_updated.emit("B1", loss_b1, target_vol)
+                    self.phase_detail_updated.emit("B1", loss_b1, remaining_b1)
                     self._emit_sample(event="PHASE_B1_HOLD")
                     time.sleep(float(self.cfg.sample_period_s))
 
@@ -652,6 +689,8 @@ class ExperimentWorker(QObject):
 
                     total_loss += loss_b2
 
+                _loss_b1 = loss_b1
+                _loss_b2 = loss_b2
                 self._total_loss_so_far += loss_b1 + loss_b2
                 self._emit_sample(event=f"PHASE_B_END total_b={loss_b1 + loss_b2:.4f}")
                 self._phase_vol_start = None
@@ -700,20 +739,27 @@ class ExperimentWorker(QObject):
                 # Ventile nach Druckabbau schließen
                 robust_switch_valves(dev, "SHUT", self.log_msg)
 
+                _loss_c = loss_c
                 self._emit_sample(event=f"PHASE_C_END loss={loss_c:.4f}")
                 self.log_msg.emit(f"Phase C complete. Loss: {loss_c:.4f} ml", "#EC4899")
                 total_loss += loss_c
                 self._total_loss_so_far += loss_c
                 self._phase_vol_start = None
 
-            # --- ABSCHLUSS ---
+            # --- END OF SEQUENCE ---
             self._exp.last_filtration_venting_loss_ml = float(total_loss)
-            self._last_ramp_loss_ml = float(total_loss)  # Für nächsten Zyklus: Filling-Empfehlung
+            self._last_ramp_loss_ml = float(total_loss)  # Next cycle backwash recommendation
             self.loss_updated.emit(total_loss)
             self._emit_sample(event=f"END_SEQUENCE total_loss={total_loss:.4f}")
             self.log_msg.emit("═" * 52, "#00E5FF")
-            self.log_msg.emit(f"SEQUENCE COMPLETE — Total loss: {total_loss:.3f} ml", "#10B981")
-            self.log_msg.emit(f"Recommendation for next filling: {total_loss:.1f} ml", "#00E5FF")
+            self.log_msg.emit("SEQUENCE COMPLETE", "#10B981")
+            self.log_msg.emit(f"  Phase A  (ramp up):    {_loss_a:.2f} ml", "#8B5CF6")
+            self.log_msg.emit(f"  Phase B1 (steady):     {_loss_b1:.2f} ml", "#F59E0B")
+            self.log_msg.emit(f"  Phase B2 (drying):     {_loss_b2:.2f} ml", "#F59E0B")
+            self.log_msg.emit(f"  Phase C  (ramp down):  {_loss_c:.2f} ml", "#EC4899")
+            self.log_msg.emit(f"  Total ramp loss:       {total_loss:.2f} ml", "#10B981")
+            self.log_msg.emit(f"  Filling amount used:   {self._filling_amount_ml:.1f} ml", "#00E5FF")
+            self.log_msg.emit(f"  Next cycle BW target:  {total_loss:.1f} ml", "#00E5FF")
             self.log_msg.emit("═" * 52, "#00E5FF")
             
             if self._should_abort():

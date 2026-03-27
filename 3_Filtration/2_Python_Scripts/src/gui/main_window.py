@@ -32,7 +32,6 @@ from .frames.left_frame import LeftFrame
 from .frames.right_frame import RightFrame
 from .frames.top_frame import TopFrame
 from .frames.analysis_frame import AnalysisFrame
-from .frames.monitor_tab import EliteMonitorTab
 
 logger = logging.getLogger(__name__)
 
@@ -611,10 +610,6 @@ class MainWindow(Qtw.QMainWindow):
         self.tab_analysis = AnalysisFrame()
         self.tabs.addTab(self.tab_analysis, "RUN ANALYSIS")
 
-        _monitor_log_dir = resolve_under(project_root(__file__), "logs")
-        self.tab_monitor = EliteMonitorTab(log_dir=_monitor_log_dir)
-        self.tabs.addTab(self.tab_monitor, "LIVE MONITOR")
-
         apply_theme(self, "dark")
 
         self.master_grid.addWidget(self.main_container, 0, 0)
@@ -846,10 +841,6 @@ class MainWindow(Qtw.QMainWindow):
                 worker.loss_updated.connect(self.monitor.update_loss)
                 worker.telemetry.connect(self._push_worker_telemetry_to_monitor)
 
-            # Live monitor tab — switch to it automatically when run starts
-            worker.telemetry.connect(self.tab_monitor.ingest_telemetry)
-            self.tabs.setCurrentWidget(self.tab_monitor)
-
             try:
                 pw = getattr(self.tab_analysis, "plot_widget", None)
                 if pw is not None and hasattr(pw, "plot"):
@@ -996,10 +987,6 @@ class MainWindow(Qtw.QMainWindow):
             self.right.append_log("=== SEQUENCE COMPLETE ===", "#0EA5E9")
         except Exception:
             pass
-        try:
-            self.tab_monitor.stop_logging()
-        except Exception:
-            pass
         self._set_running_ui(False)
         if self._thread:
             self._thread.quit()
@@ -1008,10 +995,6 @@ class MainWindow(Qtw.QMainWindow):
         self._thread = None
 
     def _on_failed(self, err):
-        try:
-            self.tab_monitor.stop_logging()
-        except Exception:
-            pass
         self._stop_deterministic(reason=str(err))
         QMessageBox.critical(self, "Error", str(err))
 
