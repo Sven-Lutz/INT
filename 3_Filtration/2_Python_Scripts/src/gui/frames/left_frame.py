@@ -360,7 +360,7 @@ class LeftFrame(QFrame):
 
         self.mod_srv = EliteModule("NETWORK MONITOR SERVER", "#10B981", checkable=False)
         
-        self.lbl_url = QLabel("Startet im Hintergrund...")
+        self.lbl_url = QLabel("Starting in background...")
         self.lbl_url.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_url.setStyleSheet("color: #00E5FF; font-weight: bold; font-family: 'Consolas'; font-size: 11px;")
 

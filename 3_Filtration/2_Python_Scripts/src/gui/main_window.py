@@ -821,7 +821,11 @@ class MainWindow(Qtw.QMainWindow):
                 lambda ml: (
                     worker.set_filling_amount(ml),
                     worker.confirm_ok(),
-                    self.right.hide_filling_banner()
+                    self.right.hide_filling_banner(),
+                    # Update progress targets to match actual filling amount
+                    self.top.set_progress_target(ml),
+                    self.right.set_progress_target(ml),
+                    setattr(self, '_monitor_target_ml', ml),
                 )
             )
 
@@ -850,6 +854,9 @@ class MainWindow(Qtw.QMainWindow):
 
             worker.finished.connect(self._on_finished)
             worker.failed.connect(self._on_failed)
+
+            # Safety net: if worker.run() exits without signaling, clean up via thread.finished
+            thread.finished.connect(self._on_thread_finished)
 
             self._worker = worker
             self._thread = thread
@@ -988,15 +995,27 @@ class MainWindow(Qtw.QMainWindow):
         except Exception:
             pass
         self._set_running_ui(False)
+        self.right.set_ok_banner(step="", reason="", show=False)
+        self.right.hide_filling_banner()
         if self._thread:
             self._thread.quit()
-            self._thread.wait(2000)
+            self._thread.wait(3000)
         self._worker = None
         self._thread = None
 
     def _on_failed(self, err):
         self._stop_deterministic(reason=str(err))
         QMessageBox.critical(self, "Error", str(err))
+
+    @Slot()
+    def _on_thread_finished(self):
+        """Safety net: called when QThread exits, even if worker didn't signal finished/failed."""
+        if self._worker is not None or self._thread is not None:
+            self._set_running_ui(False)
+            self.right.set_ok_banner(step="", reason="", show=False)
+            self.right.hide_filling_banner()
+            self._worker = None
+            self._thread = None
 
     def _abort_run(self) -> None:
         try:

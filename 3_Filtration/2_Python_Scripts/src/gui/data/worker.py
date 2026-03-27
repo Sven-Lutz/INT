@@ -349,6 +349,9 @@ class ExperimentWorker(QObject):
         }
 
         self.telemetry.emit(sample)
+        # Emit live loss for progress bars (works during ALL phases including ramps)
+        if loss > 0:
+            self.loss_updated.emit(loss)
         try:
             if self._store is not None: self._store.write_sample(sample)
         except Exception: pass
@@ -455,14 +458,16 @@ class ExperimentWorker(QObject):
 
                     bw_vol_filled = max(0.0, float(self._exp.volume_ml) - bw_vol_start)
 
-                    # Log ETA once we have measurable flow
-                    if not _eta_logged and abs(flow_ml_s) > flow_dead and bw_vol_filled < bw_target_ml:
-                        remaining = bw_target_ml - bw_vol_filled
-                        eta_min = (remaining / abs(flow_ml_s)) / 60.0 if abs(flow_ml_s) > 0 else float("inf")
-                        if eta_min < float("inf"):
-                            self.log_msg.emit(
-                                f"BW flow: {abs(flow_ml_s)*1000:.1f} ml/min → ETA: {eta_min:.1f} min", "#EC4899")
-                        _eta_logged = True
+                    # Live status with flow and ETA
+                    if abs(flow_ml_s) > flow_dead:
+                        _bw_remaining = max(0.0, bw_target_ml - bw_vol_filled)
+                        _bw_eta_s = _bw_remaining / abs(flow_ml_s) if abs(flow_ml_s) > 0 else 0
+                        self.status.emit(
+                            f"BW: {bw_vol_filled:.1f}/{bw_target_ml:.0f} ml | "
+                            f"Flow: {abs(flow_ml_s)*60:.1f} ml/min | ETA: {_bw_eta_s/60:.1f} min")
+                    else:
+                        self.status.emit(
+                            f"BW: {bw_vol_filled:.1f}/{bw_target_ml:.0f} ml | Flow: waiting...")
 
                     if bw_vol_filled >= bw_target_ml:
                         self.log_msg.emit(
@@ -500,13 +505,14 @@ class ExperimentWorker(QObject):
                 self.log_msg.emit(
                     f"Filling confirmed: {self._filling_amount_ml:.1f} ml added.", "#10B981")
 
-                # Gate 2: Initialize ramp (amber OK banner before Phase A)
-                self._raise_if_abort()
-                self.log_msg.emit("─" * 52, "#8B5CF6")
-                self.log_msg.emit(
-                    f"Ready to start RAMP. Target: {p.phase_a_target_mbar:.0f} mbar", "#8B5CF6")
-                self.log_msg.emit("─" * 52, "#8B5CF6")
-                self._wait_ok(Step.FILTRATION, "Initialize Ramp — confirm to start Phase A")
+                # Gate 2: Initialize ramp (only when ramp phases are enabled)
+                if p.run_phase_a or p.run_phase_b or p.run_phase_c:
+                    self._raise_if_abort()
+                    self.log_msg.emit("─" * 52, "#8B5CF6")
+                    self.log_msg.emit(
+                        f"Ready to start RAMP. Target: {p.phase_a_target_mbar:.0f} mbar", "#8B5CF6")
+                    self.log_msg.emit("─" * 52, "#8B5CF6")
+                    self._wait_ok(Step.FILTRATION, "Initialize Ramp — confirm to start Phase A")
 
             # Determine B1 target from confirmed filling amount (fallback to config)
             target_vol = (self._filling_amount_ml
@@ -626,9 +632,21 @@ class ExperimentWorker(QObject):
                                            event=f"END_B1 removed={loss_b1:.4f}")
                         break
 
-                    self.loss_updated.emit(self._total_loss_so_far + loss_b1)
                     self.phase_detail_updated.emit("B1", loss_b1, remaining_b1)
                     self._emit_sample(event="PHASE_B1_HOLD")
+
+                    # Flow-based ETA in status bar
+                    _remaining_ml = max(0.0, remaining_b1 - loss_b1)
+                    if abs(flow_ml_s) > flow_dead:
+                        _eta_s = _remaining_ml / abs(flow_ml_s)
+                        _eta_min = _eta_s / 60.0
+                        self.status.emit(
+                            f"B1: {loss_b1:.1f}/{remaining_b1:.1f} ml | "
+                            f"Flow: {abs(flow_ml_s)*60:.1f} ml/min | ETA: {_eta_min:.1f} min")
+                    else:
+                        self.status.emit(
+                            f"B1: {loss_b1:.1f}/{remaining_b1:.1f} ml | Flow: waiting...")
+
                     time.sleep(float(self.cfg.sample_period_s))
 
                 total_loss += loss_b1
@@ -682,9 +700,20 @@ class ExperimentWorker(QObject):
                                                event=f"END_B2 removed={loss_b2:.4f}")
                             break
 
-                        self.loss_updated.emit(self._total_loss_so_far + loss_b1 + loss_b2)
                         self.phase_detail_updated.emit("B2", loss_b2, p.v_extra_ml)
                         self._emit_sample(event="PHASE_B2_DRYING")
+
+                        # Flow-based ETA
+                        _rem_b2 = max(0.0, p.v_extra_ml - loss_b2)
+                        if abs(flow_ml_s) > flow_dead:
+                            _eta_s = _rem_b2 / abs(flow_ml_s)
+                            self.status.emit(
+                                f"B2: {loss_b2:.1f}/{p.v_extra_ml:.1f} ml | "
+                                f"Flow: {abs(flow_ml_s)*60:.1f} ml/min | ETA: {_eta_s/60:.1f} min")
+                        else:
+                            self.status.emit(
+                                f"B2: {loss_b2:.1f}/{p.v_extra_ml:.1f} ml | Flow: waiting...")
+
                         time.sleep(float(self.cfg.sample_period_s))
 
                     total_loss += loss_b2
