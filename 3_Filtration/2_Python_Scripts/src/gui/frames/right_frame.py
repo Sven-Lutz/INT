@@ -461,7 +461,7 @@ class RightFrame(QFrame):
         fill_banner_lay.setSpacing(6)
 
         fill_title_row = QHBoxLayout()
-        lbl_fill_title = QLabel("MANUELLES FILLING ERFORDERLICH")
+        lbl_fill_title = QLabel("MANUAL FILLING REQUIRED")
         lbl_fill_title.setStyleSheet(
             "color: #00E5FF; font-weight: bold; font-family: 'Consolas'; font-size: 12px; border: none;")
         fill_title_row.addWidget(lbl_fill_title)
@@ -469,11 +469,11 @@ class RightFrame(QFrame):
         fill_banner_lay.addLayout(fill_title_row)
 
         fill_input_row = QHBoxLayout()
-        self.lbl_fill_recommend = QLabel("Empfohlen: — ml")
+        self.lbl_fill_recommend = QLabel("Recommended: — ml")
         self.lbl_fill_recommend.setStyleSheet(
             "color: #64748B; font-family: 'Consolas'; font-size: 11px; border: none;")
         self.sp_fill_amount = NudgeSpinBox(0.0, 10000.0, 1, 100.0, " ml", 0.0)
-        lbl_fill_ml = QLabel("Eingefüllt:")
+        lbl_fill_ml = QLabel("Amount added:")
         lbl_fill_ml.setStyleSheet("color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
 
         self.btn_filling_done = QPushButton("FILLING COMPLETE → CONTINUE")
@@ -751,7 +751,7 @@ class RightFrame(QFrame):
     def show_filling_banner(self, recommended_ml: float):
         """Zeigt das Filling-Banner mit empfohlenem Füllvolumen."""
         rec = max(0.0, float(recommended_ml))
-        self.lbl_fill_recommend.setText(f"Empfohlen: {rec:.1f} ml (letzte Zyklus-Verluste)")
+        self.lbl_fill_recommend.setText(f"Recommended: {rec:.1f} ml (last cycle losses)")
         self.sp_fill_amount.setValue(rec)
         self.banner_filling.show()
         self.append_log(
@@ -767,7 +767,7 @@ class RightFrame(QFrame):
     def _on_filling_done(self):
         """Bediener hat Filling bestätigt — emittiert Signal mit eingegebener Menge."""
         ml = float(self.sp_fill_amount.value())
-        self.append_log(f"FILLING CONFIRMED: {ml:.1f} ml eingefüllt", "#10B981")
+        self.append_log(f"FILLING CONFIRMED: {ml:.1f} ml added", "#10B981")
         self.filling_confirmed.emit(ml)
 
     def set_ok_banner(self, step: str, reason: str, show: bool):

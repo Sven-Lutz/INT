@@ -422,9 +422,9 @@ class ExperimentWorker(QObject):
                 max_bw_duration_s = 1800.0  # Safety: max 30 min
 
                 self.log_msg.emit("═" * 52, "#EC4899")
-                self.log_msg.emit("BACKWASH GESTARTET – System wird zur Membran gefüllt", "#EC4899")
+                self.log_msg.emit("BACKWASH STARTED — filling system to membrane level", "#EC4899")
                 self.log_msg.emit("═" * 52, "#EC4899")
-                self.status.emit("BACKWASH: Füllen bis Membran...")
+                self.status.emit("BACKWASH: filling to membrane...")
 
                 robust_switch_valves(dev, "BACKWASH", self.log_msg)
                 if getattr(dev, "pressure_controller", None) is not None:
@@ -453,7 +453,7 @@ class ExperimentWorker(QObject):
                         last_flow_time_bw = time.monotonic()
                     elif (time.monotonic() - last_flow_time_bw) > stagnation_threshold_s:
                         self.log_msg.emit(
-                            f"Backwash abgeschlossen: Kein Flow für {stagnation_threshold_s:.0f}s → Membran erreicht.", "#10B981")
+                            f"Backwash complete: no flow for {stagnation_threshold_s:.0f}s — membrane reached.", "#10B981")
                         self._exp._log_row(mode_bw, 0.0, float("nan"), 0.0,
                                            pressure_channel=bw_ch, event="END_BACKWASH_STAGNATION")
                         break
@@ -470,14 +470,14 @@ class ExperimentWorker(QObject):
                 self._raise_if_abort()
                 recommended_fill = max(0.0, self._last_ramp_loss_ml) if self._last_ramp_loss_ml > 0 else target_vol
                 self.log_msg.emit("─" * 52, "#00E5FF")
-                self.log_msg.emit(f"MANUELLES FILLING ERFORDERLICH", "#00E5FF")
-                self.log_msg.emit(f"Empfohlene Menge: {recommended_fill:.1f} ml", "#00E5FF")
-                self.log_msg.emit(f"Nächste Phase nach Bestätigung: RAMP ({p.phase_a_target_mbar:.0f} mbar)", "#64748B")
+                self.log_msg.emit("MANUAL FILLING REQUIRED", "#00E5FF")
+                self.log_msg.emit(f"Recommended amount: {recommended_fill:.1f} ml", "#00E5FF")
+                self.log_msg.emit(f"Next phase after confirmation: RAMP ({p.phase_a_target_mbar:.0f} mbar)", "#64748B")
                 self.log_msg.emit("─" * 52, "#00E5FF")
                 self.filling_requested.emit(recommended_fill)
-                self._wait_ok(Step.FILLING, "Flüssigkeit einfüllen und bestätigen")
+                self._wait_ok(Step.FILLING, "Fill liquid and confirm")
                 self.log_msg.emit(
-                    f"Filling bestätigt: {self._filling_amount_ml:.1f} ml eingefüllt.", "#10B981")
+                    f"Filling confirmed: {self._filling_amount_ml:.1f} ml added.", "#10B981")
 
             # --- PHASE A: RAMP UP (automatisch, kontinuierlich) ---
             if p.run_phase_a:
@@ -497,9 +497,9 @@ class ExperimentWorker(QObject):
                 self.log_msg.emit(
                     f"PHASE A: RAMP  {current_mbar:.0f} → {p.phase_a_target_mbar:.0f} mbar  "
                     f"({p.phase_a_rate_mbar_min:.0f} mbar/min, ETA {total_duration_s/60:.1f} min)", "#8B5CF6")
-                self.log_msg.emit(f"Nächste Phase: B1 – Steady State (Ziel: {target_vol:.1f} ml)", "#64748B")
+                self.log_msg.emit(f"Next phase: B1 — Steady State (target: {target_vol:.1f} ml)", "#64748B")
                 self.log_msg.emit("═" * 52, "#8B5CF6")
-                self.status.emit(f"Phase A: Rampe {current_mbar:.0f} → {p.phase_a_target_mbar:.0f} mbar")
+                self.status.emit(f"Phase A: ramp {current_mbar:.0f} → {p.phase_a_target_mbar:.0f} mbar")
 
                 self._emit_sample(event=f"PHASE_A_START current={current_mbar:.0f} target={p.phase_a_target_mbar:.0f}")
 
@@ -511,7 +511,7 @@ class ExperimentWorker(QObject):
                 )
 
                 self._emit_sample(event=f"PHASE_A_END loss={loss_a:.4f}")
-                self.log_msg.emit(f"Phase A abgeschlossen. Verlust: {loss_a:.3f} ml", "#8B5CF6")
+                self.log_msg.emit(f"Phase A complete. Loss: {loss_a:.3f} ml", "#8B5CF6")
                 total_loss += loss_a
                 self._total_loss_so_far += loss_a
                 self._phase_vol_start = None
@@ -519,8 +519,8 @@ class ExperimentWorker(QObject):
             # --- GATE: Phase A → Phase B (nur wenn confirm_between_phases) ---
             if p.run_phase_a and p.run_phase_b and p.confirm_between_phases:
                 self._raise_if_abort()
-                self.log_msg.emit("Phase A abgeschlossen. Weiter zu Phase B (Steady State).", "#F59E0B")
-                self._wait_ok(Step.FILTRATION, "Phase A → B: Druck halten bestätigen")
+                self.log_msg.emit("Phase A complete. Continuing to Phase B (Steady State).", "#F59E0B")
+                self._wait_ok(Step.FILTRATION, "Phase A → B: confirm pressure hold")
 
             # --- PHASE B: STEADY STATE & TROCKNUNG ---
             if p.run_phase_b:
@@ -534,15 +534,15 @@ class ExperimentWorker(QObject):
                 # ============================================================
                 # PHASE B1: Steady State bis Zielvolumen
                 # ============================================================
-                self.status.emit(f"Phase B1 aktiv (Ziel: {target_vol:.2f} ml)")
+                self.status.emit(f"Phase B1 active (target: {target_vol:.2f} ml)")
                 self.log_msg.emit("═" * 52, "#F59E0B")
                 self.log_msg.emit(
                     f"PHASE B1: STEADY STATE  {p.phase_a_target_mbar:.0f} mbar  "
-                    f"→ Ziel: {target_vol:.2f} ml  (Timeout: {p.phase_b_no_flow_timeout_min:.0f} min)", "#F59E0B")
+                    f"→ target: {target_vol:.2f} ml  (timeout: {p.phase_b_no_flow_timeout_min:.0f} min)", "#F59E0B")
                 if p.v_extra_ml > 0:
-                    self.log_msg.emit(f"Nächste Phase: B2 – Trocknung ({p.v_extra_ml:.1f} ml)", "#64748B")
+                    self.log_msg.emit(f"Next phase: B2 — Drying ({p.v_extra_ml:.1f} ml)", "#64748B")
                 else:
-                    self.log_msg.emit("Nächste Phase: C – Ramp Down", "#64748B")
+                    self.log_msg.emit("Next phase: C — Ramp Down", "#64748B")
                 self.log_msg.emit("═" * 52, "#F59E0B")
                 self._emit_sample(event="STEP_START_PHASE_B1")
 
@@ -601,12 +601,12 @@ class ExperimentWorker(QObject):
                 # ============================================================
                 loss_b2 = 0.0
                 if p.v_extra_ml > 0 and not self._should_abort():
-                    self.status.emit(f"Phase B2 aktiv (Trocknung: {p.v_extra_ml:.2f} ml)")
+                    self.status.emit(f"Phase B2 active (drying: {p.v_extra_ml:.2f} ml)")
                     self.log_msg.emit("─" * 52, "#F59E0B")
                     self.log_msg.emit(
-                        f"PHASE B2: TROCKNUNG  → Ziel: {p.v_extra_ml:.2f} ml  "
-                        f"(Timeout: {p.phase_b_no_flow_timeout_min:.0f} min)", "#F59E0B")
-                    self.log_msg.emit("Nächste Phase: C – Ramp Down", "#64748B")
+                        f"PHASE B2: DRYING  → target: {p.v_extra_ml:.2f} ml  "
+                        f"(timeout: {p.phase_b_no_flow_timeout_min:.0f} min)", "#F59E0B")
+                    self.log_msg.emit("Next phase: C — Ramp Down", "#64748B")
                     self.log_msg.emit("─" * 52, "#F59E0B")
 
                     v_start_b2 = float(self._exp.volume_ml)
@@ -659,8 +659,8 @@ class ExperimentWorker(QObject):
             # --- GATE: Phase B → Phase C ---
             if p.run_phase_b and p.run_phase_c and p.confirm_between_phases:
                 self._raise_if_abort()
-                self.log_msg.emit("Phase B abgeschlossen. Weiter zu Phase C (Ramp Down).", "#F59E0B")
-                self._wait_ok(Step.FILTRATION, "Phase B → C: Druckabbau bestätigen")
+                self.log_msg.emit("Phase B complete. Continuing to Phase C (Ramp Down).", "#F59E0B")
+                self._wait_ok(Step.FILTRATION, "Phase B → C: confirm pressure release")
 
             # --- PHASE C: RAMP DOWN ---
             if p.run_phase_c:
@@ -684,7 +684,7 @@ class ExperimentWorker(QObject):
                     f"PHASE C: RAMP DOWN  {start_mbar:.0f} → 0 mbar  "
                     f"({rate_mbar_min:.0f} mbar/min, ETA {duration_s/60:.1f} min)", "#EC4899")
                 self.log_msg.emit("═" * 52, "#EC4899")
-                self.status.emit(f"Phase C: Druckabbau {start_mbar:.0f} → 0 mbar")
+                self.status.emit(f"Phase C: pressure release {start_mbar:.0f} → 0 mbar")
                 self._emit_sample(event=f"PHASE_C_START from={start_mbar:.0f}")
 
                 loss_c = self._exp.step_continuous_ramp(
@@ -712,8 +712,8 @@ class ExperimentWorker(QObject):
             self.loss_updated.emit(total_loss)
             self._emit_sample(event=f"END_SEQUENCE total_loss={total_loss:.4f}")
             self.log_msg.emit("═" * 52, "#00E5FF")
-            self.log_msg.emit(f"SEQUENZ ABGESCHLOSSEN – Gesamt-Verlust: {total_loss:.3f} ml", "#10B981")
-            self.log_msg.emit(f"Empfehlung für nächstes Filling: {total_loss:.1f} ml", "#00E5FF")
+            self.log_msg.emit(f"SEQUENCE COMPLETE — Total loss: {total_loss:.3f} ml", "#10B981")
+            self.log_msg.emit(f"Recommendation for next filling: {total_loss:.1f} ml", "#00E5FF")
             self.log_msg.emit("═" * 52, "#00E5FF")
             
             if self._should_abort():
