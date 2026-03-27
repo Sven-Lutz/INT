@@ -46,6 +46,7 @@ class TopFrame(QFrame):
         self._current_phase = "IDLE"
         self._progress_target_ml = 0.0
         self._progress_current_ml = 0.0
+        self._last_valve_state: str = ""
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(15, 10, 15, 10)
@@ -235,9 +236,11 @@ class TopFrame(QFrame):
             self.val_flow.setText("---")
             self.bar_flow.setValue(0)
 
-        # --- Valve State ---
+        # --- Valve State (nur updaten wenn geändert → verhindert Flackern) ---
         v_state = str(sample.get("valves", "—"))
-        self.val_valves.setText(v_state[:12])  # Truncate für Card-Breite
+        if v_state != self._last_valve_state:
+            self._last_valve_state = v_state
+            self.val_valves.setText(v_state[:12])
 
         # --- Progress ---
         if "loss_ml" in sample:

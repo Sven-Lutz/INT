@@ -663,6 +663,18 @@ class MainWindow(Qtw.QMainWindow):
         self.left.valve_command_requested.connect(self._on_valve_command)
         self.left.relay_toggle_requested.connect(self._on_relay_toggle)
 
+        # Trapezoid-Widget mit Live-Parametern verknüpfen
+        def _update_trapezoid(rp):
+            try:
+                self.right.trapezoid.update_profile(
+                    target_mbar=float(rp.phase_a_target_mbar),
+                    rate_a_mbar_min=float(rp.phase_a_rate_mbar_min),
+                    rate_c_mbar_min=float(rp.phase_c_rate_mbar_min),
+                )
+            except Exception:
+                pass
+        self.left.params_changed.connect(_update_trapezoid)
+
         self._set_running_ui(False, reason="init")
         self._render_manual_state(reason="init")
         self._update_health_banner()
@@ -790,17 +802,30 @@ class MainWindow(Qtw.QMainWindow):
             worker.step_changed.connect(self._on_step_changed)
             worker.log_msg.connect(self.right.append_log)
             worker.loss_updated.connect(self.right.set_loss_ml)
-            
+
             worker.step_changed.connect(self._on_step_changed_with_pressure)
             worker.step_changed.connect(self.top.update_phase)
             worker.status.connect(self.top.update_status)
             worker.telemetry.connect(self.top.update_telemetry)
-            worker.telemetry.connect(self.right.update_telemetry) 
+            worker.telemetry.connect(self.right.update_telemetry)
             worker.loss_updated.connect(self.top.set_loss_ml)
+
+            # Filling-Banner Verbindungen
+            worker.filling_requested.connect(self.right.show_filling_banner)
+            self.right.filling_confirmed.connect(
+                lambda ml: (
+                    worker.set_filling_amount(ml),
+                    worker.confirm_ok(),
+                    self.right.hide_filling_banner()
+                )
+            )
+
+            # B1/B2 Phasen-Detail
+            worker.phase_detail_updated.connect(self.right.update_phase_detail)
 
             # Progress-Target für die TopFrame-Anzeige setzen
             run_p = self.left.get_run_params()
-            target_vol = float(run_p.v_bnnt_ml) + float(run_p.v_h2o_ml)
+            target_vol = float(run_p.v_bnnt_ml) + float(run_p.phase_b1_target_ml)
             self.top.set_progress_target(target_vol)
             self.right.set_progress_target(target_vol)
             self._monitor_target_ml = target_vol
@@ -852,10 +877,13 @@ class MainWindow(Qtw.QMainWindow):
             self.monitor.update_progress(pct, f"{loss:.1f}/{self._monitor_target_ml:.1f} mL")
 
     def _on_request_ok(self, step, reason):
-        self.right.set_ok_banner(step=str(step), reason=str(reason), show=True)
-        self._set_ok_enabled(True)
+        # FILLING step is handled by the dedicated filling banner; skip generic banner
+        if str(step).upper() != "FILLING":
+            self.right.set_ok_banner(step=str(step), reason=str(reason), show=True)
+            self._set_ok_enabled(True)
         try:
-            self.right.append_log(f"ACTION REQUIRED: {reason}", "#F59E0B")
+            color = "#00E5FF" if str(step).upper() == "FILLING" else "#F59E0B"
+            self.right.append_log(f"ACTION REQUIRED: {reason}", color)
         except Exception:
             pass
 
@@ -884,11 +912,7 @@ class MainWindow(Qtw.QMainWindow):
 
     @Slot(str)
     def _on_valve_command(self, mode: str):
-        """Manuelle Ventilsteuerung aus dem LeftFrame Valve Panel."""
-        if self._experiment_running():
-            self.right.append_log("BLOCKED: Cannot switch valves during experiment.", "#FF1744")
-            return
-
+        """Manuelle Ventilsteuerung aus dem LeftFrame Valve Panel (auch während Experiment möglich)."""
         dev = self.dev
         if dev is None:
             self.right.append_log("ERROR: No device connected.", "#FF1744")
@@ -898,17 +922,16 @@ class MainWindow(Qtw.QMainWindow):
             from src.gui.data.worker import robust_switch_valves
             robust_switch_valves(dev, mode)
             self.left.update_valve_state(mode)
-            self.right.append_log(f"MANUAL: Valves → {mode}", "#0EA5E9")
+            if self._experiment_running():
+                self.right.append_log(f"⚠ MANUELLER VENTIL-OVERRIDE: {mode}", "#F59E0B")
+            else:
+                self.right.append_log(f"MANUAL: Valves → {mode}", "#0EA5E9")
         except Exception as e:
             self.right.append_log(f"VALVE ERROR: {e}", "#FF1744")
 
     @Slot(int, bool)
     def _on_relay_toggle(self, relay_num: int, target_on: bool):
-        """Direktes Schalten eines einzelnen Relais (Debug/Experimentier-Modus)."""
-        if self._experiment_running():
-            self.right.append_log("BLOCKED: Cannot toggle relays during experiment.", "#FF1744")
-            return
-
+        """Direktes Schalten eines einzelnen Relais (auch während Experiment möglich)."""
         dev = self.dev
         if dev is None:
             self.right.append_log("ERROR: No device connected.", "#FF1744")

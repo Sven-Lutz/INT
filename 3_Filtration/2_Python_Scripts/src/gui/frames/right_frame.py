@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTextBrowser, QWidget, QTabWidget, QProgressBar
 )
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
-from src.gui.frames.monitor_tab import EliteMonitorTab
+from src.gui.widgets.nudge_spinbox import NudgeSpinBox
 
 
 # =========================================================================
@@ -138,12 +138,32 @@ class TrapezoidWidget(QFrame):
         self._setpoint_p = 0.0
         self._peak_p = 2000.0
         self._phase = "IDLE"
+        # Dynamische Profil-Fraktionen (Anteil A / B / C an Gesamtbreite)
+        self._frac_a = 0.28
+        self._frac_b = 0.44
+        self._frac_c = 0.28
+
+    def update_profile(self, target_mbar: float, rate_a_mbar_min: float, rate_c_mbar_min: float):
+        """Aktualisiert die Rampensteilheit anhand echter Parameter."""
+        if target_mbar > 0:
+            self._peak_p = float(target_mbar)
+        rate_a = max(1.0, float(rate_a_mbar_min))
+        rate_c = max(1.0, float(rate_c_mbar_min))
+        time_a = self._peak_p / rate_a        # Minuten für Ramp Up
+        time_c = self._peak_p / rate_c        # Minuten für Ramp Down
+        time_b = max(time_a * 1.5, 10.0)     # Haltephase (geschätzt)
+        total = time_a + time_b + time_c
+        if total > 0:
+            self._frac_a = time_a / total
+            self._frac_b = time_b / total
+            self._frac_c = time_c / total
+        self.update()
 
     def set_state(self, current_p: float, setpoint: float, phase: str):
         self._current_p = max(0.0, current_p)
         self._setpoint_p = max(0.0, setpoint)
         self._phase = phase.upper()
-        
+
         if setpoint > self._peak_p:
             self._peak_p = setpoint
 
@@ -165,11 +185,13 @@ class TrapezoidWidget(QFrame):
         p.setPen(QPen(QColor(30, 41, 59), 3))
         p.drawLine(pad_x, h - pad_y, w - pad_x, h - pad_y)
 
-        # Ideale Rampe
+        # Ideale Rampe (dynamisch aus _frac_a/_frac_b/_frac_c)
+        x_a_end = pad_x + plot_w * self._frac_a
+        x_b_end = pad_x + plot_w * (self._frac_a + self._frac_b)
         path = QPainterPath()
         pt1 = QPointF(pad_x, h - pad_y)
-        pt2 = QPointF(pad_x + plot_w * 0.3, pad_y)
-        pt3 = QPointF(pad_x + plot_w * 0.7, pad_y)
+        pt2 = QPointF(x_a_end, pad_y)
+        pt3 = QPointF(x_b_end, pad_y)
         pt4 = QPointF(pad_x + plot_w, h - pad_y)
 
         path.moveTo(pt1)
@@ -193,13 +215,13 @@ class TrapezoidWidget(QFrame):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(path)
 
-        # Phase-Labels auf der X-Achse
+        # Phase-Labels auf der X-Achse (dynamisch positioniert)
         p.setPen(QColor("#64748B"))
         p.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
         label_y = h - pad_y + 14
-        p.drawText(QPointF(pad_x + plot_w * 0.12, label_y), "A")
-        p.drawText(QPointF(pad_x + plot_w * 0.48, label_y), "B")
-        p.drawText(QPointF(pad_x + plot_w * 0.83, label_y), "C")
+        p.drawText(QPointF(pad_x + plot_w * (self._frac_a * 0.5), label_y), "A")
+        p.drawText(QPointF(pad_x + plot_w * (self._frac_a + self._frac_b * 0.5), label_y), "B")
+        p.drawText(QPointF(pad_x + plot_w * (self._frac_a + self._frac_b + self._frac_c * 0.5), label_y), "C")
 
         # 4. SETPOINT-LINIE (horizontal, gestrichelt)
         disp_max = max(self._peak_p, 100.0)
@@ -216,12 +238,12 @@ class TrapezoidWidget(QFrame):
         norm_p = min(1.0, max(0.0, self._current_p / disp_max))
 
         if "PHASE_A" in self._phase:
-            dot_x = pad_x + (norm_p * plot_w * 0.3)
+            dot_x = pad_x + (norm_p * plot_w * self._frac_a)
         elif "PHASE_B" in self._phase:
-            dot_x = pad_x + plot_w * 0.5
+            dot_x = pad_x + plot_w * (self._frac_a + self._frac_b * 0.5)
         elif "PHASE_C" in self._phase:
             down_progress = 1.0 - norm_p
-            dot_x = pad_x + plot_w * 0.7 + (down_progress * plot_w * 0.3)
+            dot_x = pad_x + plot_w * (self._frac_a + self._frac_b) + (down_progress * plot_w * self._frac_c)
         else:
             dot_x = pad_x
             norm_p = 0.0
@@ -275,6 +297,7 @@ class RightFrame(QFrame):
     stop_clicked = Signal()
     manual_vent_clicked = Signal()
     ok_clicked = Signal()
+    filling_confirmed = Signal(float)  # Bediener hat Filling bestätigt: Menge in ml
 
     def __init__(self, config=None, parent=None):
         super().__init__(parent)
@@ -295,72 +318,45 @@ class RightFrame(QFrame):
         lay.setContentsMargins(15, 15, 15, 15)
         lay.setSpacing(12)
 
-        # 1. TABS (in RightFrame.__init__)
-        self.tabs = QTabWidget()
-        self.tabs.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #1E293B; border-radius: 6px; background: #050914; }
-            QTabBar::tab { background: #0F172A; color: #64748B; padding: 8px 16px; margin-right: 2px; 
-                           border-top-left-radius: 4px; border-top-right-radius: 4px; 
-                           font-family: 'Consolas'; font-weight: bold; font-size: 10px; }
-            QTabBar::tab:selected { background: #1E293B; color: #00E5FF; border-bottom: 2px solid #00E5FF; }
-        """)
+        # 1. PHYSICAL MODEL (direkt, ohne Tabs)
+        viz_frame = QFrame()
+        viz_frame.setStyleSheet("background-color: #050914; border: 1px solid #1E293B; border-radius: 6px;")
+        viz_lay = QHBoxLayout(viz_frame)
+        viz_lay.setContentsMargins(8, 8, 8, 8)
 
-        tab_viz = QWidget()
-        tab_viz.setStyleSheet("background-color: #050914;")
-        viz_lay = QHBoxLayout(tab_viz)
-
-        # --- NEU: Verschachtelter Container für die Kugel und den Kalibrierungs-Button ---
+        # Linker Block: Kugel + Kalibrierungs-Button
         left_viz_widget = QWidget()
+        left_viz_widget.setStyleSheet("background: transparent;")
         left_viz_lay = QVBoxLayout(left_viz_widget)
         left_viz_lay.setContentsMargins(0, 0, 0, 0)
-        
+
         self.sandglass = ReactorSphereWidget()
         left_viz_lay.addWidget(self.sandglass)
 
-        # Der dezent gestaltete, organische Kalibrierungs-Button
         self.btn_calib = QPushButton("⌖ SET MEMBRANE")
         self.btn_calib.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_calib.setStyleSheet("""
             QPushButton {
-                background: transparent;
-                color: #64748B;
-                font-family: 'Consolas';
-                font-size: 9px;
-                font-weight: bold;
-                border: 1px solid #1E293B;
-                border-radius: 4px;
-                padding: 4px 8px;
+                background: transparent; color: #64748B;
+                font-family: 'Consolas'; font-size: 9px; font-weight: bold;
+                border: 1px solid #1E293B; border-radius: 4px; padding: 4px 8px;
             }
-            QPushButton:hover {
-                background: #0F172A;
-                color: #00E5FF;
-                border: 1px solid #00E5FF;
-            }
+            QPushButton:hover { background: #0F172A; color: #00E5FF; border: 1px solid #00E5FF; }
         """)
         self.btn_calib.clicked.connect(self._calibrate_membrane)
-        
-        # Den Button zentriert unter die Kugel setzen
         left_viz_lay.addWidget(self.btn_calib, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        # Den neuen linken Block in das Haupt-Layout des Tabs einfügen
         viz_lay.addWidget(left_viz_widget)
-        # ---------------------------------------------------------------------------------
 
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.VLine)
         separator.setStyleSheet("color: #1E293B;")
         viz_lay.addWidget(separator)
-        
+
         self.trapezoid = TrapezoidWidget()
         viz_lay.addWidget(self.trapezoid)
 
-        _log_dir = Path(resolve_under(project_root(__file__), "logs"))
-        self.realtime_plot = EliteMonitorTab(_log_dir, max_points=2000)
-
-        self.tabs.addTab(tab_viz, "PHYSICAL MODEL")
-        self.tabs.addTab(self.realtime_plot, "LIVE TELEMETRY")
-
-        lay.addWidget(self.tabs, stretch=3)
+        lay.addWidget(viz_frame, stretch=3)
 
         # 2. TERMINAL
         term_lay = QVBoxLayout()
@@ -386,18 +382,22 @@ class RightFrame(QFrame):
         term_lay.addWidget(self.console)
         lay.addLayout(term_lay, stretch=2)
 
-        # 2b. PHASE PROGRESS PANEL
+        # 2b. PHASE PROGRESS PANEL (erweitert: B1/B2 Unterscheidung)
         self._progress_target_ml = 0.0
         self._progress_current_ml = 0.0
+        self._b1_target_ml = 0.0
+        self._b1_current_ml = 0.0
+        self._b2_target_ml = 0.0
+        self._b2_current_ml = 0.0
 
         self.frm_progress = QFrame()
-        self.frm_progress.setFixedHeight(56)
         self.frm_progress.setStyleSheet(
             "background: #0B1120; border: 1px solid #1E293B; border-radius: 4px;")
         prog_lay = QVBoxLayout(self.frm_progress)
-        prog_lay.setContentsMargins(12, 6, 12, 6)
+        prog_lay.setContentsMargins(12, 8, 12, 8)
         prog_lay.setSpacing(4)
 
+        # Zeile 1: Phase-Label + Gesamtwerte
         prog_top = QHBoxLayout()
         self.lbl_prog_phase = QLabel("IDLE")
         self.lbl_prog_phase.setStyleSheet(
@@ -406,30 +406,105 @@ class RightFrame(QFrame):
         self.lbl_prog_values = QLabel("")
         self.lbl_prog_values.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.lbl_prog_values.setStyleSheet(
-            "color: #94A3B8; font-family: 'Consolas'; font-size: 10px; "
-            "font-weight: bold; border: none;")
+            "color: #94A3B8; font-family: 'Consolas'; font-size: 10px; font-weight: bold; border: none;")
         prog_top.addWidget(self.lbl_prog_phase)
         prog_top.addStretch()
         prog_top.addWidget(self.lbl_prog_values)
         prog_lay.addLayout(prog_top)
 
+        # Haupt-Progressbar
         self.bar_progress = QProgressBar()
         self.bar_progress.setRange(0, 1000)
         self.bar_progress.setValue(0)
         self.bar_progress.setTextVisible(False)
-        self.bar_progress.setFixedHeight(8)
+        self.bar_progress.setFixedHeight(6)
         self.bar_progress.setStyleSheet("""
-            QProgressBar { background: #0F172A; border: none; border-radius: 4px; }
+            QProgressBar { background: #0F172A; border: none; border-radius: 3px; }
             QProgressBar::chunk { background: qlineargradient(
                 x1:0, y1:0, x2:1, y2:0,
                 stop:0 #8B5CF6, stop:0.5 #00E5FF, stop:1 #10B981
-            ); border-radius: 4px; }
+            ); border-radius: 3px; }
         """)
         prog_lay.addWidget(self.bar_progress)
-        self.frm_progress.hide()  # Erst sichtbar wenn ein Run startet
+
+        # B1/B2 Detail-Reihe
+        b_detail_lay = QHBoxLayout()
+        b_detail_lay.setSpacing(12)
+        self.lbl_b1_detail = QLabel("B1: —")
+        self.lbl_b1_detail.setStyleSheet(
+            "color: #F59E0B; font-family: 'Consolas'; font-size: 10px; font-weight: bold; border: none;")
+        self.lbl_b2_detail = QLabel("")
+        self.lbl_b2_detail.setStyleSheet(
+            "color: #10B981; font-family: 'Consolas'; font-size: 10px; font-weight: bold; border: none;")
+        self.lbl_b2_detail.hide()
+        b_detail_lay.addWidget(self.lbl_b1_detail)
+        b_detail_lay.addWidget(self.lbl_b2_detail)
+        b_detail_lay.addStretch()
+        prog_lay.addLayout(b_detail_lay)
+
+        # B1-Bar
+        self.bar_b1 = QProgressBar()
+        self.bar_b1.setRange(0, 1000)
+        self.bar_b1.setValue(0)
+        self.bar_b1.setTextVisible(False)
+        self.bar_b1.setFixedHeight(4)
+        self.bar_b1.setStyleSheet("""
+            QProgressBar { background: #0F172A; border: none; border-radius: 2px; }
+            QProgressBar::chunk { background: #F59E0B; border-radius: 2px; }
+        """)
+        self.bar_b1.hide()
+        prog_lay.addWidget(self.bar_b1)
+
+        self.frm_progress.hide()
         lay.addWidget(self.frm_progress)
 
-        # 3. ACTION BANNER
+        # 3a. FILLING BANNER (cyan – manuelles Filling)
+        self.banner_filling = QFrame()
+        self.banner_filling.setStyleSheet(
+            "background-color: #0C2A3A; border: 2px solid #00E5FF; border-radius: 4px;")
+        fill_banner_lay = QVBoxLayout(self.banner_filling)
+        fill_banner_lay.setContentsMargins(12, 8, 12, 8)
+        fill_banner_lay.setSpacing(6)
+
+        fill_title_row = QHBoxLayout()
+        lbl_fill_title = QLabel("MANUELLES FILLING ERFORDERLICH")
+        lbl_fill_title.setStyleSheet(
+            "color: #00E5FF; font-weight: bold; font-family: 'Consolas'; font-size: 12px; border: none;")
+        fill_title_row.addWidget(lbl_fill_title)
+        fill_title_row.addStretch()
+        fill_banner_lay.addLayout(fill_title_row)
+
+        fill_input_row = QHBoxLayout()
+        self.lbl_fill_recommend = QLabel("Empfohlen: — ml")
+        self.lbl_fill_recommend.setStyleSheet(
+            "color: #64748B; font-family: 'Consolas'; font-size: 11px; border: none;")
+        self.sp_fill_amount = NudgeSpinBox(0.0, 10000.0, 1, 100.0, " ml", 0.0)
+        lbl_fill_ml = QLabel("Eingefüllt:")
+        lbl_fill_ml.setStyleSheet("color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
+
+        self.btn_filling_done = QPushButton("FILLING COMPLETE → CONTINUE")
+        self.btn_filling_done.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_filling_done.setStyleSheet("""
+            QPushButton {
+                background-color: #052E16; color: #10B981;
+                font-family: 'Consolas'; font-weight: bold; font-size: 11px;
+                border: 1px solid #10B981; border-radius: 3px; padding: 6px 14px;
+            }
+            QPushButton:hover { background-color: #10B981; color: #000; }
+        """)
+        self.btn_filling_done.clicked.connect(self._on_filling_done)
+
+        fill_input_row.addWidget(self.lbl_fill_recommend)
+        fill_input_row.addStretch()
+        fill_input_row.addWidget(lbl_fill_ml)
+        fill_input_row.addWidget(self.sp_fill_amount)
+        fill_input_row.addWidget(self.btn_filling_done)
+        fill_banner_lay.addLayout(fill_input_row)
+
+        self.banner_filling.hide()
+        lay.addWidget(self.banner_filling)
+
+        # 3b. ACTION BANNER (amber – generische Phase-Gates)
         self.banner_ok = QFrame()
         self.banner_ok.setStyleSheet("background-color: #F59E0B; border-radius: 4px;")
         banner_lay = QHBoxLayout(self.banner_ok)
@@ -491,13 +566,15 @@ class RightFrame(QFrame):
     def reset_state(self):
         self.console.clear()
         self.banner_ok.hide()
+        self.banner_filling.hide()
         self._ui_phase = "IDLE"
         self._current_vol_ml = 0.0
         self._progress_target_ml = 0.0
         self._progress_current_ml = 0.0
+        self._b1_target_ml = 0.0
+        self._b2_target_ml = 0.0
         self.sandglass.set_state(0.5, "IDLE")
         self.trapezoid.set_state(0.0, 0.0, "IDLE")
-        self.realtime_plot.stop_logging()
         self.frm_progress.hide()
         self.bar_progress.setValue(0)
 
@@ -585,13 +662,6 @@ class RightFrame(QFrame):
         vs = self.console.verticalScrollBar()
         vs.setValue(vs.maximum())
 
-    def set_ok_banner(self, step: str, reason: str, show: bool):
-        if show:
-            self.lbl_banner_reason.setText(f"WAITING: {reason.upper()}")
-            self.banner_ok.show()
-        else:
-            self.banner_ok.hide()
-
     def enable_ok(self, enabled: bool):
         self.btn_ok.setEnabled(enabled)
 
@@ -601,7 +671,6 @@ class RightFrame(QFrame):
         self.btn_stop.setEnabled(running)
 
         if running:
-            self.realtime_plot.start_logging(run_name_prefix="PelliKAn_Run")
             self.btn_start.setStyleSheet("""
                 QPushButton {
                     background-color: #0F172A; color: #334155;
@@ -610,7 +679,6 @@ class RightFrame(QFrame):
                 }
             """)
         else:
-            self.realtime_plot.stop_logging()
             self.btn_start.setStyleSheet("""
                 QPushButton {
                     background-color: #111827; color: #10B981;
@@ -680,15 +748,72 @@ class RightFrame(QFrame):
         else:
             self.sandglass.set_state(0.5, "IDLE")
 
-        # =========================================================
-        # 🚀 DER NEUE PATCH: LOSS INJIZIEREN
-        # Wir schnappen uns den aktuellen "Total Loss", den das RightFrame
-        # bereits für die Progress Bar trackt, und geben ihn mit ins Paket.
-        # =========================================================
-        # Nutze _progress_current_ml (falls es vom Worker aktualisiert wurde) 
-        # oder den im sample enthaltenen Wert als Fallback.
-        current_loss = getattr(self, "_progress_current_ml", 0.0)
-        sample["loss_ml"] = current_loss
+        pass  # Telemetrie vollständig in TopFrame und Worker-CSV verarbeitet
 
-        # Jetzt das angereicherte Paket an den (neuen) Plotter senden
-        self.realtime_plot.ingest_telemetry(sample)
+    # -----------------------------------------------------------------
+    # FILLING BANNER
+    # -----------------------------------------------------------------
+    @Slot(float)
+    def show_filling_banner(self, recommended_ml: float):
+        """Zeigt das Filling-Banner mit empfohlenem Füllvolumen."""
+        rec = max(0.0, float(recommended_ml))
+        self.lbl_fill_recommend.setText(f"Empfohlen: {rec:.1f} ml (letzte Zyklus-Verluste)")
+        self.sp_fill_amount.setValue(rec)
+        self.banner_filling.show()
+        self.append_log(
+            f"FILLING REQUIRED — Recommended: {rec:.1f} ml", "#00E5FF"
+        )
+
+    @Slot()
+    def hide_filling_banner(self):
+        """Versteckt das Filling-Banner."""
+        self.banner_filling.hide()
+
+    @Slot()
+    def _on_filling_done(self):
+        """Bediener hat Filling bestätigt — emittiert Signal mit eingegebener Menge."""
+        ml = float(self.sp_fill_amount.value())
+        self.append_log(f"FILLING CONFIRMED: {ml:.1f} ml eingefüllt", "#10B981")
+        self.filling_confirmed.emit(ml)
+
+    def set_ok_banner(self, step: str, reason: str, show: bool):
+        # Filling wird über banner_filling abgewickelt — generischen Banner überspringen
+        if show and str(step).upper() == "FILLING":
+            return
+        if show:
+            self.lbl_banner_reason.setText(f"WAITING: {reason.upper()}")
+            self.banner_ok.show()
+        else:
+            self.banner_ok.hide()
+
+    # -----------------------------------------------------------------
+    # PHASE DETAIL (B1 / B2 Fortschritt)
+    # -----------------------------------------------------------------
+    @Slot(str, float, float)
+    def update_phase_detail(self, phase_id: str, current: float, target: float):
+        """Aktualisiert B1/B2 Detail-Labels und Balken."""
+        pid = phase_id.upper()
+        if pid == "B1":
+            self._b1_current_ml = float(current)
+            self._b1_target_ml = float(target)
+            if target > 0:
+                pct = min(100.0, current / target * 100.0)
+                self.lbl_b1_detail.setText(
+                    f"B1: {current:.1f} / {target:.1f} ml ({pct:.0f}%)"
+                )
+                self.bar_b1.setValue(int(pct * 10))
+            else:
+                self.lbl_b1_detail.setText(f"B1: {current:.1f} ml")
+                self.bar_b1.setValue(0)
+            self.bar_b1.show()
+        elif pid == "B2":
+            self._b2_current_ml = float(current)
+            self._b2_target_ml = float(target)
+            if target > 0:
+                pct = min(100.0, current / target * 100.0)
+                self.lbl_b2_detail.setText(
+                    f"B2: {current:.1f} / {target:.1f} ml ({pct:.0f}%)"
+                )
+            else:
+                self.lbl_b2_detail.setText(f"B2: {current:.1f} ml")
+            self.lbl_b2_detail.show()

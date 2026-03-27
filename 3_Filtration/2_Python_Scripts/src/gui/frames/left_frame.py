@@ -263,57 +263,38 @@ class LeftFrame(QFrame):
         self.mod_calc.content_lay.addWidget(self.lbl_bnnt, 3, 0, 1, 2)
         root.addWidget(self.mod_calc)
 
-        # STATE 0: FILLING SOLUTION
-        self.mod_p0 = EliteModule("STATE 0: FILLING SOLUTION", "#00E5FF", checkable=True)
-        self.cmb_fill_mode = QComboBox()
-        self.cmb_fill_mode.addItems(["Auto (Fill Target Vol)", "Continuous (Wait for Click)"])
-        self.cmb_fill_mode.setStyleSheet("background: #0F172A; color: #FFF; border: 1px solid #1E293B; font-family: 'Consolas'; padding: 2px;")
-        self.sp_h2o = NudgeSpinBox(0.0, 10000.0, 2, 100.0, " ml", 1400.0)
+        # PHASE 0: BACKWASH
+        self.mod_p0 = EliteModule("PHASE 0: BACKWASH", "#EC4899", checkable=True)
         self.sp_fill_p = NudgeSpinBox(0.0, 2000.0, 0, 10.0, " mbar", 300.0)
-        self.sp_est_flow = NudgeSpinBox(0.1, 500.0, 1, 5.0, " ml/min", 15.0) 
-        
-        self.mod_p0.addRow(0, "Fill Mode:", self.cmb_fill_mode)
-        self.mod_p0.addRow(1, "H2O Volume:", self.sp_h2o)
-        self.mod_p0.addRow(2, "Fill Pressure:", self.sp_fill_p)
-        self.mod_p0.addRow(3, "Est. Flow:", self.sp_est_flow)
-        
-        self.lbl_total_vol = QLabel("Target Vol: — ml | ETA: — min")
-        self.lbl_total_vol.setProperty("is_dynamic_result", True)
-        self.lbl_total_vol.setStyleSheet("color: #00E5FF; font-weight: bold; font-family: 'Consolas'; font-size: 11px; border: none; padding-top: 4px;")
-        self.mod_p0.content_lay.addWidget(self.lbl_total_vol, 4, 0, 1, 2)
+        self.sp_bw_stagnation = NudgeSpinBox(3.0, 60.0, 0, 1.0, " s", 8.0)
+        self.mod_p0.addRow(0, "Backwash Druck:", self.sp_fill_p)
+        self.mod_p0.addRow(1, "Stagnation-Ende:", self.sp_bw_stagnation)
+        lbl_bw_hint = QLabel("Automatisch bis Membran (Flow = 0)")
+        lbl_bw_hint.setStyleSheet("color: #64748B; font-size: 10px; font-family: 'Arial'; border: none;")
+        self.mod_p0.content_lay.addWidget(lbl_bw_hint, 2, 0, 1, 2)
         root.addWidget(self.mod_p0)
 
-        # PHASE A
+        # PHASE A: RAMP UP
         self.mod_pa = EliteModule("PHASE A: RAMP UP", "#8B5CF6", checkable=True)
-        self.cmb_ramp_mode = QComboBox()
-        self.cmb_ramp_mode.addItems(["Auto (Continuous Rate)", "Manual (Click for Step)"])
-        self.cmb_ramp_mode.setStyleSheet("background: #0F172A; color: #FFF; border: 1px solid #1E293B; font-family: 'Consolas'; padding: 2px;")
         self.sp_target_p = NudgeSpinBox(0.0, 8000.0, 0, 100.0, " mbar", 2000.0)
         self.sp_a_rate = NudgeSpinBox(1.0, 5000.0, 0, 10.0, " mbar/min", 125.0)
-        self.sp_a_step = NudgeSpinBox(1.0, 1000.0, 0, 10.0, " mbar", 250.0)
-        
-        self.mod_pa.addRow(0, "Ramp Mode:", self.cmb_ramp_mode)
-        self.mod_pa.addRow(1, "Target Pres.:", self.sp_target_p)
-        self.mod_pa.addRow(2, "Auto Rate:", self.sp_a_rate)
-        self.mod_pa.addRow(3, "Manual Step:", self.sp_a_step)
-        
-        self.lbl_pa_info = QLabel("Mode: CONTINUOUS | ETA: — min")
+        self.mod_pa.addRow(0, "Zieldruck:", self.sp_target_p)
+        self.mod_pa.addRow(1, "Rampenrate:", self.sp_a_rate)
+        self.lbl_pa_info = QLabel("ETA: — min")
         self.lbl_pa_info.setProperty("is_dynamic_result", True)
         self.lbl_pa_info.setStyleSheet("color: #8B5CF6; font-weight: bold; font-family: 'Consolas'; font-size: 11px; border: none; padding-top: 4px;")
-        self.mod_pa.content_lay.addWidget(self.lbl_pa_info, 4, 0, 1, 2)
+        self.mod_pa.content_lay.addWidget(self.lbl_pa_info, 2, 0, 1, 2)
         root.addWidget(self.mod_pa)
 
-        # PHASE B
+        # PHASE B: STEADY STATE
         self.mod_pb = EliteModule("PHASE B: STEADY STATE", "#F59E0B", checkable=True)
-        lbl_b1 = QLabel("B1 holds until 'Target Vol' is reached.")
-        lbl_b1.setStyleSheet("color: #64748B; font-size: 10px; font-family: 'Arial'; border: none;")
-        self.mod_pb.content_lay.addWidget(lbl_b1, 0, 0, 1, 2)
-        self.sp_v_extra = NudgeSpinBox(0.0, 5000.0, 2, 10.0, " ml", 0.0)
+        self.sp_h2o = NudgeSpinBox(0.0, 10000.0, 1, 100.0, " ml", 1400.0)
+        self.sp_v_extra = NudgeSpinBox(0.0, 5000.0, 1, 10.0, " ml", 0.0)
         self.sp_b_timeout = NudgeSpinBox(1.0, 60.0, 0, 1.0, " min", 5.0)
-        self.mod_pb.addRow(1, "B2 V_Extra:", self.sp_v_extra)
+        self.mod_pb.addRow(0, "B1 Zielvolumen:", self.sp_h2o)
+        self.mod_pb.addRow(1, "B2 Extra (Trockn.):", self.sp_v_extra)
         self.mod_pb.addRow(2, "No-Flow Timeout:", self.sp_b_timeout)
-        
-        self.lbl_pb_info = QLabel("Safety: stops if no flow for 5 min")
+        self.lbl_pb_info = QLabel("B1: — ml | B2: — ml | Total: — ml")
         self.lbl_pb_info.setProperty("is_dynamic_result", True)
         self.lbl_pb_info.setStyleSheet("color: #F59E0B; font-weight: bold; font-family: 'Consolas'; font-size: 11px; border: none; padding-top: 4px;")
         self.mod_pb.content_lay.addWidget(self.lbl_pb_info, 3, 0, 1, 2)
@@ -441,75 +422,68 @@ class LeftFrame(QFrame):
 
     def _wire_signals(self):
         widgets = [
-            self.sp_area, self.sp_calib, self.sp_thick, self.sp_h2o,
-            self.sp_fill_p, self.sp_est_flow, self.sp_target_p, self.sp_a_rate, 
-            self.sp_a_step, self.sp_v_extra, self.sp_b_timeout, self.sp_dn_rate,
-            self.cmb_fill_mode, self.cmb_ramp_mode
+            self.sp_area, self.sp_calib, self.sp_thick,
+            self.sp_fill_p, self.sp_bw_stagnation,
+            self.sp_target_p, self.sp_a_rate,
+            self.sp_h2o, self.sp_v_extra, self.sp_b_timeout,
+            self.sp_dn_rate,
         ]
-        for w in widgets: 
-            if isinstance(w, QComboBox): w.currentIndexChanged.connect(self._recalc_math)
-            else: w.valueChanged.connect(self._recalc_math)
-        
+        for w in widgets:
+            w.valueChanged.connect(self._recalc_math)
+
         self.modules = [self.mod_p0, self.mod_pa, self.mod_pb, self.mod_pc]
         for m in self.modules: m.toggled.connect(self._recalc_math)
 
     @Slot()
     def _recalc_math(self):
-        if self._is_running: return 
+        if self._is_running: return
 
         c = self.sp_calib.value()
         if c > 0:
-            self._current_bnnt_ml = ((self.sp_thick.value() / c) * (self.sp_area.value() / 1134.0) / 1000.0) 
+            self._current_bnnt_ml = ((self.sp_thick.value() / c) * (self.sp_area.value() / 1134.0) / 1000.0)
             self.lbl_bnnt.setText(f"Req. BNNT: {self._current_bnnt_ml:.4f} ml")
-        
-        tot = self._current_bnnt_ml + self.sp_h2o.value()
-        
-        if self.cmb_fill_mode.currentIndex() == 1:
-            self.lbl_total_vol.setText("Target Vol: MANUAL STOP")
-        else:
-            est_flow = self.sp_est_flow.value()
-            eta_m = (tot / est_flow) if est_flow > 0 else 0
-            self.lbl_total_vol.setText(f"Target: {tot:.2f} ml | ETA: {eta_m:.1f} min")
 
-        if self.cmb_ramp_mode.currentIndex() == 0:
-            rate = self.sp_a_rate.value()
-            eta = self.sp_target_p.value() / rate if rate > 0 else 0
-            self.lbl_pa_info.setText(f"Mode: CONTINUOUS | ETA: {eta:.1f} min")
-        else:
-            step_size = self.sp_a_step.value()
-            steps = math.ceil(self.sp_target_p.value() / step_size) if step_size > 0 else 0
-            self.lbl_pa_info.setText(f"Mode: MANUAL STEPS | Clicks req.: {steps}")
+        # Phase A ETA
+        rate_a = self.sp_a_rate.value()
+        eta_a = (self.sp_target_p.value() / rate_a) if rate_a > 0 else 0
+        self.lbl_pa_info.setText(f"ETA: {eta_a:.1f} min @ {rate_a:.0f} mbar/min")
 
+        # Phase C ETA
         rate_c = self.sp_dn_rate.value()
         if rate_c > 0:
             c_min = self.sp_target_p.value() / rate_c
             self.lbl_pc_info.setText(f"ETA: {c_min:.1f} min")
 
-        # Phase B Info
-        timeout_val = self.sp_b_timeout.value()
+        # Phase B Info (B1 + B2)
+        b1_target = self._current_bnnt_ml + self.sp_h2o.value()
         extra_val = self.sp_v_extra.value()
-        if extra_val > 0:
-            self.lbl_pb_info.setText(f"B2: {extra_val:.0f} ml extra | Timeout: {timeout_val:.0f} min")
-        else:
-            self.lbl_pb_info.setText(f"Safety: stops if no flow for {timeout_val:.0f} min")
+        timeout_val = self.sp_b_timeout.value()
+        total_b = b1_target + extra_val
+        self.lbl_pb_info.setText(
+            f"B1: {b1_target:.1f} ml | B2: {extra_val:.1f} ml | Total: {total_b:.1f} ml  "
+            f"(Timeout: {timeout_val:.0f} min)"
+        )
 
         self.params_changed.emit(self.get_run_params())
         self._save_last_params()
 
     def get_run_params(self) -> RunParams:
-        p = RunParams(
-            v_bnnt_ml=self._current_bnnt_ml, v_h2o_ml=self.sp_h2o.value(),
-            run_phase_0=self.mod_p0.isChecked(), phase_0_pressure_mbar=self.sp_fill_p.value(),
-            run_phase_a=self.mod_pa.isChecked(), phase_a_target_mbar=self.sp_target_p.value(),
-            phase_a_rate_mbar_min=self.sp_a_rate.value(), phase_a_step_mbar=self.sp_a_step.value(),
-            run_phase_b=self.mod_pb.isChecked(), v_extra_ml=self.sp_v_extra.value(),
+        return RunParams(
+            v_bnnt_ml=self._current_bnnt_ml,
+            phase_b1_target_ml=self.sp_h2o.value(),
+            run_phase_0=self.mod_p0.isChecked(),
+            phase_0_pressure_mbar=self.sp_fill_p.value(),
+            phase_0_stagnation_s=self.sp_bw_stagnation.value(),
+            run_phase_a=self.mod_pa.isChecked(),
+            phase_a_target_mbar=self.sp_target_p.value(),
+            phase_a_rate_mbar_min=self.sp_a_rate.value(),
+            run_phase_b=self.mod_pb.isChecked(),
+            v_extra_ml=self.sp_v_extra.value(),
             phase_b_no_flow_timeout_min=self.sp_b_timeout.value(),
-            run_phase_c=self.mod_pc.isChecked(), phase_c_rate_mbar_min=self.sp_dn_rate.value(),
-            confirm_between_phases=self.chk_confirm_gates.isChecked()
+            run_phase_c=self.mod_pc.isChecked(),
+            phase_c_rate_mbar_min=self.sp_dn_rate.value(),
+            confirm_between_phases=self.chk_confirm_gates.isChecked(),
         )
-        p.phase_0_mode = "auto" if self.cmb_fill_mode.currentIndex() == 0 else "continuous"
-        p.phase_a_mode = "auto" if self.cmb_ramp_mode.currentIndex() == 0 else "manual"
-        return p
 
     def _on_confirm_toggle(self, checked: bool):
         self._apply_confirm_style(checked)
@@ -531,12 +505,12 @@ class LeftFrame(QFrame):
         for m in self.modules + [self.mod_calc, self.mod_srv]:
             m.setEnabled(not running)
         self.frm_orchestrator.setEnabled(not running)
-        self.grp_valves.setEnabled(not running)
-            
+        # Valve panel bleibt immer aktiv (manuelle Übersteuerung während Experiment)
+
         if not running:
             self.countdown_timer.stop()
-            self._time_left_s = 0.0  # 🚀 FIX: Timer-State sauber zurücksetzen
-            self._recalc_math() 
+            self._time_left_s = 0.0
+            self._recalc_math()
             self.update_active_step_highlight("IDLE")
             
     def update_active_step_highlight(self, current_step_str: str, current_pressure_mbar: float = 0.0):
@@ -552,13 +526,11 @@ class LeftFrame(QFrame):
             
         self._active_phase_key = current_step_str
         
-        if "PHASE_A" in current_step_str: 
+        if "PHASE_A" in current_step_str:
             self.mod_pa.setHighlight(True)
-            if self.cmb_ramp_mode.currentIndex() == 0:
-                rate = self.sp_a_rate.value()
-                # Delta: Wie viel Druck noch aufzubauen ist
-                remaining_mbar = max(0.0, self.sp_target_p.value() - current_pressure_mbar)
-                self._time_left_s = (remaining_mbar / rate * 60) if rate > 0 else 0
+            rate = self.sp_a_rate.value()
+            remaining_mbar = max(0.0, self.sp_target_p.value() - current_pressure_mbar)
+            self._time_left_s = (remaining_mbar / rate * 60) if rate > 0 else 0
                 
         elif "PHASE_B" in current_step_str: 
             self.mod_pb.setHighlight(True)
@@ -572,10 +544,7 @@ class LeftFrame(QFrame):
             
         elif "FILLING" in current_step_str or "0" in current_step_str:
             self.mod_p0.setHighlight(True)
-            tot = self._current_bnnt_ml + self.sp_h2o.value()
-            est_flow = self.sp_est_flow.value()
-            if self.cmb_fill_mode.currentIndex() == 0 and est_flow > 0:
-                self._time_left_s = (tot / est_flow) * 60
+            # Backwash hat keine fixe ETA (stagnationsbasiert)
 
         # Nur starten, wenn wir wirklich im Run-Modus sind UND es Zeit gibt
         if self._time_left_s > 0 and self._is_running:
@@ -596,11 +565,9 @@ class LeftFrame(QFrame):
         ts = f"{m:02d}:{s:02d}"
         
         if "PHASE_A" in self._active_phase_key:
-            self.lbl_pa_info.setText(f"ACTION: RAMPING | REM: {ts}")
+            self.lbl_pa_info.setText(f"RAMPING | REM: {ts}")
         elif "PHASE_C" in self._active_phase_key:
-            self.lbl_pc_info.setText(f"ACTION: RAMPING | REM: {ts}")
-        elif "FILLING" in self._active_phase_key or "0" in self._active_phase_key:
-            self.lbl_total_vol.setText(f"ACTION: FILLING | REM: {ts}")
+            self.lbl_pc_info.setText(f"RAMPING | REM: {ts}")
 
     @Slot(bool)
     def set_hold_active(self, active: bool):
@@ -768,12 +735,11 @@ class LeftFrame(QFrame):
 
         # Werte in die Spinboxen schreiben (blockSignals um Cascade zu vermeiden)
         widgets_map = [
-            (self.sp_h2o, p.v_h2o_ml),
+            (self.sp_h2o, p.phase_b1_target_ml),
             (self.sp_fill_p, p.phase_0_pressure_mbar),
-            (self.sp_est_flow, 15.0),  # Est. Flow nicht persistiert (ist eine Schätzung)
+            (self.sp_bw_stagnation, p.phase_0_stagnation_s),
             (self.sp_target_p, p.phase_a_target_mbar),
             (self.sp_a_rate, p.phase_a_rate_mbar_min),
-            (self.sp_a_step, p.phase_a_step_mbar),
             (self.sp_v_extra, p.v_extra_ml),
             (self.sp_b_timeout, p.phase_b_no_flow_timeout_min),
             (self.sp_dn_rate, p.phase_c_rate_mbar_min),
@@ -785,20 +751,6 @@ class LeftFrame(QFrame):
                 widget.blockSignals(False)
             except Exception:
                 pass
-
-        # Comboboxen
-        try:
-            self.cmb_fill_mode.blockSignals(True)
-            self.cmb_fill_mode.setCurrentIndex(0 if p.phase_0_mode == "auto" else 1)
-            self.cmb_fill_mode.blockSignals(False)
-        except Exception:
-            pass
-        try:
-            self.cmb_ramp_mode.blockSignals(True)
-            self.cmb_ramp_mode.setCurrentIndex(0 if p.phase_a_mode == "auto" else 1)
-            self.cmb_ramp_mode.blockSignals(False)
-        except Exception:
-            pass
 
         # Phase-Toggles
         for mod, active in [(self.mod_p0, p.run_phase_0), (self.mod_pa, p.run_phase_a),
