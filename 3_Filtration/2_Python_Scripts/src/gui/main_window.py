@@ -957,7 +957,7 @@ class MainWindow(Qtw.QMainWindow):
             robust_switch_valves(dev, mode)
             self.left.update_valve_state(mode)
             if self._experiment_running():
-                self.right.append_log(f"⚠ MANUELLER VENTIL-OVERRIDE: {mode}", "#F59E0B")
+                self.right.append_log(f"⚠ MANUAL VALVE OVERRIDE: {mode}", "#F59E0B")
             else:
                 self.right.append_log(f"MANUAL: Valves → {mode}", "#0EA5E9")
         except Exception as e:
