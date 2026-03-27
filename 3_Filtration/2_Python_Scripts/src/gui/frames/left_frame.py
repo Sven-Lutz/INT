@@ -266,12 +266,13 @@ class LeftFrame(QFrame):
         # PHASE 0: BACKWASH
         self.mod_p0 = EliteModule("PHASE 0: BACKWASH", "#EC4899", checkable=True)
         self.sp_fill_p = NudgeSpinBox(0.0, 2000.0, 0, 10.0, " mbar", 300.0)
-        self.sp_bw_stagnation = NudgeSpinBox(3.0, 60.0, 0, 1.0, " s", 8.0)
+        self.sp_bw_target_ml = NudgeSpinBox(0.0, 10000.0, 0, 100.0, " ml", 1400.0)
         self.mod_p0.addRow(0, "Backwash Pressure:", self.sp_fill_p)
-        self.mod_p0.addRow(1, "Stagnation End:", self.sp_bw_stagnation)
-        lbl_bw_hint = QLabel("Automated to membrane (flow = 0)")
-        lbl_bw_hint.setStyleSheet("color: #64748B; font-size: 10px; font-family: 'Arial'; border: none;")
-        self.mod_p0.content_lay.addWidget(lbl_bw_hint, 2, 0, 1, 2)
+        self.mod_p0.addRow(1, "BW Target Volume:", self.sp_bw_target_ml)
+        self.lbl_bw_eta = QLabel("ETA: — min (at live flow)")
+        self.lbl_bw_eta.setProperty("is_dynamic_result", True)
+        self.lbl_bw_eta.setStyleSheet("color: #EC4899; font-weight: bold; font-family: 'Consolas'; font-size: 11px; border: none; padding-top: 4px;")
+        self.mod_p0.content_lay.addWidget(self.lbl_bw_eta, 2, 0, 1, 2)
         root.addWidget(self.mod_p0)
 
         # PHASE A: RAMP UP
@@ -291,7 +292,7 @@ class LeftFrame(QFrame):
         self.sp_h2o = NudgeSpinBox(0.0, 10000.0, 1, 100.0, " ml", 1400.0)
         self.sp_v_extra = NudgeSpinBox(0.0, 5000.0, 1, 10.0, " ml", 0.0)
         self.sp_b_timeout = NudgeSpinBox(1.0, 60.0, 0, 1.0, " min", 5.0)
-        self.mod_pb.addRow(0, "B1 Target Volume:", self.sp_h2o)
+        self.mod_pb.addRow(0, "H2O Vol (→ B1 target):", self.sp_h2o)
         self.mod_pb.addRow(1, "B2 Extra (Drying):", self.sp_v_extra)
         self.mod_pb.addRow(2, "No-Flow Timeout:", self.sp_b_timeout)
         self.lbl_pb_info = QLabel("B1: — ml | B2: — ml | Total: — ml")
@@ -423,7 +424,7 @@ class LeftFrame(QFrame):
     def _wire_signals(self):
         widgets = [
             self.sp_area, self.sp_calib, self.sp_thick,
-            self.sp_fill_p, self.sp_bw_stagnation,
+            self.sp_fill_p, self.sp_bw_target_ml,
             self.sp_target_p, self.sp_a_rate,
             self.sp_h2o, self.sp_v_extra, self.sp_b_timeout,
             self.sp_dn_rate,
@@ -473,7 +474,7 @@ class LeftFrame(QFrame):
             phase_b1_target_ml=self.sp_h2o.value(),
             run_phase_0=self.mod_p0.isChecked(),
             phase_0_pressure_mbar=self.sp_fill_p.value(),
-            phase_0_stagnation_s=self.sp_bw_stagnation.value(),
+            phase_0_target_ml=self.sp_bw_target_ml.value(),
             run_phase_a=self.mod_pa.isChecked(),
             phase_a_target_mbar=self.sp_target_p.value(),
             phase_a_rate_mbar_min=self.sp_a_rate.value(),
@@ -737,7 +738,7 @@ class LeftFrame(QFrame):
         widgets_map = [
             (self.sp_h2o, p.phase_b1_target_ml),
             (self.sp_fill_p, p.phase_0_pressure_mbar),
-            (self.sp_bw_stagnation, p.phase_0_stagnation_s),
+            (self.sp_bw_target_ml, p.phase_0_target_ml),
             (self.sp_target_p, p.phase_a_target_mbar),
             (self.sp_a_rate, p.phase_a_rate_mbar_min),
             (self.sp_v_extra, p.v_extra_ml),
