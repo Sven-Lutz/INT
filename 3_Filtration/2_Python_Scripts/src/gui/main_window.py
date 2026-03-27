@@ -32,6 +32,7 @@ from .frames.left_frame import LeftFrame
 from .frames.right_frame import RightFrame
 from .frames.top_frame import TopFrame
 from .frames.analysis_frame import AnalysisFrame
+from .frames.monitor_tab import EliteMonitorTab
 
 logger = logging.getLogger(__name__)
 
@@ -610,6 +611,10 @@ class MainWindow(Qtw.QMainWindow):
         self.tab_analysis = AnalysisFrame()
         self.tabs.addTab(self.tab_analysis, "RUN ANALYSIS")
 
+        _monitor_log_dir = resolve_under(project_root(__file__), "logs")
+        self.tab_monitor = EliteMonitorTab(log_dir=_monitor_log_dir)
+        self.tabs.addTab(self.tab_monitor, "LIVE MONITOR")
+
         apply_theme(self, "dark")
 
         self.master_grid.addWidget(self.main_container, 0, 0)
@@ -674,6 +679,11 @@ class MainWindow(Qtw.QMainWindow):
             except Exception:
                 pass
         self.left.params_changed.connect(_update_trapezoid)
+        # Fire once immediately so the widget reflects the loaded params on startup
+        try:
+            _update_trapezoid(self.left.get_run_params())
+        except Exception:
+            pass
 
         self._set_running_ui(False, reason="init")
         self._render_manual_state(reason="init")
@@ -836,6 +846,10 @@ class MainWindow(Qtw.QMainWindow):
                 worker.loss_updated.connect(self.monitor.update_loss)
                 worker.telemetry.connect(self._push_worker_telemetry_to_monitor)
 
+            # Live monitor tab — switch to it automatically when run starts
+            worker.telemetry.connect(self.tab_monitor.ingest_telemetry)
+            self.tabs.setCurrentWidget(self.tab_monitor)
+
             try:
                 pw = getattr(self.tab_analysis, "plot_widget", None)
                 if pw is not None and hasattr(pw, "plot"):
@@ -860,21 +874,41 @@ class MainWindow(Qtw.QMainWindow):
         pressures = sample.get("pressure", {})
         p1_data = pressures.get(1, pressures.get("1", {}))
         p2_data = pressures.get(2, pressures.get("2", {}))
-        
+
+        p1_meas = _safe_float(sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas"))
+        p1_set  = _safe_float(sample.get("p1_set")  if sample.get("p1_set")  is not None else p1_data.get("set"))
+        p2_meas = _safe_float(sample.get("p2_meas") if sample.get("p2_meas") is not None else p2_data.get("meas"))
+        p2_set  = _safe_float(sample.get("p2_set")  if sample.get("p2_set")  is not None else p2_data.get("set"))
+        flow    = _safe_float(sample.get("flow"))
+        vol_ml  = _safe_float(sample.get("volume_ml"))
+        loss_ml = abs(_safe_float(sample.get("loss_ml")))
+        t_s     = _safe_float(sample.get("t", 0.0))
+
         self.monitor.update_metrics(
-            flow=_safe_float(sample.get("flow")),
-            p1_meas=_safe_float(sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas")),
-            p1_set=_safe_float(sample.get("p1_set") if sample.get("p1_set") is not None else p1_data.get("set")),
-            p2_meas=_safe_float(sample.get("p2_meas") if sample.get("p2_meas") is not None else p2_data.get("meas")),
-            p2_set=_safe_float(sample.get("p2_set") if sample.get("p2_set") is not None else p2_data.get("set")),
-            valves=str(sample.get("valves", "—"))
+            flow=flow,
+            p1_meas=p1_meas, p1_set=p1_set,
+            p2_meas=p2_meas, p2_set=p2_set,
+            valves=str(sample.get("valves", "—")),
+            volume_ml=vol_ml,
+            loss_ml=loss_ml,
+            run_elapsed_s=t_s,
         )
+
+        # History ring buffer for full-run chart
+        self.monitor.write_sample({
+            "t": t_s,
+            "p1_meas": p1_meas, "p1_set": p1_set,
+            "p2_meas": p2_meas,
+            "flow": flow,
+            "volume_ml": vol_ml,
+            "loss_ml": loss_ml,
+            "step": str(sample.get("step", "IDLE")),
+        })
 
         # Progress an Monitor pushen
         if hasattr(self, '_monitor_target_ml') and self._monitor_target_ml > 0.01:
-            loss = abs(_safe_float(sample.get("loss_ml")) or 0.0)
-            pct = min(100.0, loss / self._monitor_target_ml * 100.0)
-            self.monitor.update_progress(pct, f"{loss:.1f}/{self._monitor_target_ml:.1f} mL")
+            pct = min(100.0, loss_ml / self._monitor_target_ml * 100.0)
+            self.monitor.update_progress(pct, f"{loss_ml:.1f}/{self._monitor_target_ml:.1f} mL")
 
     def _on_request_ok(self, step, reason):
         # FILLING step is handled by the dedicated filling banner; skip generic banner
@@ -962,6 +996,10 @@ class MainWindow(Qtw.QMainWindow):
             self.right.append_log("=== SEQUENCE COMPLETE ===", "#0EA5E9")
         except Exception:
             pass
+        try:
+            self.tab_monitor.stop_logging()
+        except Exception:
+            pass
         self._set_running_ui(False)
         if self._thread:
             self._thread.quit()
@@ -970,6 +1008,10 @@ class MainWindow(Qtw.QMainWindow):
         self._thread = None
 
     def _on_failed(self, err):
+        try:
+            self.tab_monitor.stop_logging()
+        except Exception:
+            pass
         self._stop_deterministic(reason=str(err))
         QMessageBox.critical(self, "Error", str(err))
 
@@ -1370,12 +1412,21 @@ class MainWindow(Qtw.QMainWindow):
         mon = self.monitor
         if mon is not None and hasattr(mon, "url"):
             link = mon.url()
+            short = f"http://{mon.lan_ip}:{mon.port}/"
             try:
                 self.right.append_log("TELEMETRY SERVER ONLINE:", "#10B981")
                 self.right.append_log(f"-> {link}", "#00E5FF")
                 if hasattr(self, "left") and hasattr(self.left, "update_server_url"):
                     self.left.update_server_url(link)
-            except Exception: pass
+            except Exception:
+                pass
+            # Show in status bar — always visible, easy to read from phone
+            try:
+                sb = self.statusBar()
+                if sb is not None:
+                    sb.showMessage(f"  MONITOR: {short}  |  Token: {mon.token_short()}…  |  Full URL in terminal")
+            except Exception:
+                pass
 
     def _poll_realtime(self) -> None:
         now = time.monotonic()
