@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 from typing import Optional
 
-import pyqtgraph as pg
-from PySide6.QtCore import Signal, Slot, Qt, QRectF, QPointF
+from PySide6.QtCore import Signal, Slot, Qt, QRectF, QPointF, QTimer
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QLinearGradient, QFont
+    QPainter, QColor, QPen, QBrush, QPainterPath, QLinearGradient, QRadialGradient, QFont
 )
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
@@ -18,40 +18,51 @@ from src.gui.widgets.nudge_spinbox import NudgeSpinBox
 
 
 # =========================================================================
-# VISUALISIERUNG 1: SPHERICAL REACTOR (DIGITAL TWIN)
+# VISUALISIERUNG 1: SPHERICAL REACTOR (DIGITAL TWIN) — ANIMATED
 # =========================================================================
 class ReactorSphereWidget(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(180, 200)
+        self.setMinimumSize(180, 210)
         self.setStyleSheet("background: transparent;")
-        self._fill_pct = 0.5  # 0.5 bedeutet exakt auf Membran-Höhe
+        self._fill_pct = 0.5       # current animated fill (0–1)
+        self._fill_target = 0.5    # target fill set externally
         self._color = QColor("#00E5FF")
         self._volume_ml = 0.0
         self._phase_label = ""
+        self._wave_phase = 0.0
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(40)      # ~25 fps
+
+    def _tick(self):
+        diff = self._fill_target - self._fill_pct
+        if abs(diff) > 0.002:
+            self._fill_pct += diff * 0.12
+        else:
+            self._fill_pct = self._fill_target
+        self._wave_phase += 0.07
+        self.update()
 
     def set_state(self, target_fill: float, phase: str):
-        # FLUID-DYNAMICS: Weiche Annäherung an den Zielwert
-        diff = target_fill - self._fill_pct
-        if abs(diff) < 0.005:
-            self._fill_pct = target_fill
-        else:
-            self._fill_pct += diff * 0.1
-
+        self._fill_target = max(0.0, min(1.0, float(target_fill)))
         phase_up = phase.upper()
         self._phase_label = phase_up
-        if "FILL" in phase_up or "0" in phase_up:
+        if "FILL" in phase_up or "PHASE_0" in phase_up or "BACKWASH" in phase_up:
             self._color = QColor("#00E5FF")
-        elif "PHASE" in phase_up or "FILTRATION" in phase_up:
+        elif "PHASE_A" in phase_up:
+            self._color = QColor("#8B5CF6")
+        elif "PHASE_B" in phase_up:
+            self._color = QColor("#F59E0B")
+        elif "PHASE_C" in phase_up:
+            self._color = QColor("#EC4899")
+        elif "FILTRATION" in phase_up or "PHASE" in phase_up:
             self._color = QColor("#8B5CF6")
         elif "VENT" in phase_up:
             self._color = QColor("#10B981")
-        elif "BACKWASH" in phase_up:
-            self._color = QColor("#EC4899")
         else:
             self._color = QColor("#0EA5E9")
-
-        self.update()
 
     def set_volume(self, vol_ml: float):
         self._volume_ml = float(vol_ml)
@@ -61,69 +72,127 @@ class ReactorSphereWidget(QFrame):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
 
-        radius = min(w, h) * 0.38
+        radius = min(w, h * 0.85) * 0.38
         cx = w / 2
-        cy = (h - 20) / 2
-
+        cy = (h - 30) / 2
         sphere_rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
 
-        # 1. HINTERGRUND: Dunkles Kugel-Innere
+        # 1. Outer glow rings (phase color, multi-layer)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(15, 23, 42, 200))
+        for alpha, extra in ((12, 20), (22, 12), (38, 6)):
+            gc = QColor(self._color)
+            gc.setAlpha(alpha)
+            p.setBrush(gc)
+            p.drawEllipse(QRectF(cx - radius - extra, cy - radius - extra,
+                                  (radius + extra) * 2, (radius + extra) * 2))
+
+        # 2. Sphere background — radial gradient (3D depth)
+        rad_bg = QRadialGradient(cx - radius * 0.25, cy - radius * 0.3, radius * 1.25)
+        rad_bg.setColorAt(0.0, QColor(28, 38, 72, 245))
+        rad_bg.setColorAt(0.55, QColor(13, 20, 40, 248))
+        rad_bg.setColorAt(1.0, QColor(4, 7, 16, 255))
+        p.setBrush(rad_bg)
         p.drawEllipse(sphere_rect)
 
-        # 2. FLÜSSIGKEIT
+        # 3. Liquid fill with animated sine-wave surface
         if self._fill_pct > 0.01:
-            liquid_h = (radius * 2) * self._fill_pct
-            liquid_rect = QRectF(cx - radius, (cy + radius) - liquid_h, radius * 2, liquid_h)
+            liquid_top_y = (cy + radius) - (radius * 2) * self._fill_pct
+            # Wave amplitude — larger near 50%, calm near empty/full
+            wave_amp = radius * 0.028 * math.sin(math.pi * min(1.0, self._fill_pct * 2)) * min(1.0, self._fill_pct * 6)
 
-            grad = QLinearGradient(0, liquid_rect.top(), 0, liquid_rect.bottom())
-            grad.setColorAt(0.0, self._color)
-            grad.setColorAt(1.0, self._color.darker(300))
+            liq_grad = QLinearGradient(0, liquid_top_y, 0, cy + radius)
+            c_top = QColor(self._color)
+            c_top.setAlpha(210)
+            c_bot = QColor(self._color).darker(300)
+            c_bot.setAlpha(170)
+            liq_grad.setColorAt(0.0, c_top)
+            liq_grad.setColorAt(1.0, c_bot)
 
-            p.save()
+            # Build wave path (clipped to sphere)
+            liq_path = QPainterPath()
+            liq_path.moveTo(cx - radius, cy + radius)
+            liq_path.arcTo(sphere_rect, 180, 180)  # bottom arc, right then left
+            liq_path.lineTo(cx + radius, liquid_top_y)
+            steps = 28
+            for i in range(steps, -1, -1):
+                t = i / steps
+                wx = (cx - radius) + t * (radius * 2)
+                wy = liquid_top_y + math.sin(self._wave_phase + t * math.pi * 3.5) * wave_amp
+                liq_path.lineTo(wx, wy)
+            liq_path.closeSubpath()
+
             clip_path = QPainterPath()
             clip_path.addEllipse(sphere_rect)
-            p.setClipPath(clip_path)
-            p.setBrush(grad)
-            p.drawRect(liquid_rect)
 
-            # Meniskus
-            p.setBrush(QColor(255, 255, 255, 40))
-            p.drawEllipse(QRectF(cx - radius, liquid_rect.top() - 3, radius * 2, 6))
+            p.save()
+            p.setClipPath(clip_path)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(liq_grad)
+            p.drawPath(liq_path)
+
+            # Surface sheen on wave top
+            p.setBrush(QColor(255, 255, 255, 28))
+            p.drawRect(QRectF(cx - radius, liquid_top_y - 2, radius * 2, 5))
             p.restore()
 
-        # 3. KUGEL-OUTLINE
-        p.setPen(QPen(QColor(71, 85, 105, 180), 2))
+        # 4. Tick marks at 25% / 50% / 75%
+        for tick_pct in (0.25, 0.50, 0.75):
+            ty = (cy + radius) - (radius * 2) * tick_pct
+            tick_alpha = 130 if tick_pct == 0.50 else 70
+            p.setPen(QPen(QColor(100, 116, 139, tick_alpha), 1))
+            p.drawLine(QPointF(cx - radius - 4, ty), QPointF(cx - radius + 6, ty))
+            p.setPen(QColor(71, 85, 105, tick_alpha))
+            p.setFont(QFont("Consolas", 6))
+            p.drawText(QRectF(cx - radius - 30, ty - 6, 24, 12),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                       f"{int(tick_pct * 100)}%")
+
+        # 5. Membrane line (dashed, at 50%)
+        p.setPen(QPen(QColor(248, 250, 252, 110), 1.5, Qt.PenStyle.DashLine))
+        p.drawLine(QPointF(cx - radius - 5, cy), QPointF(cx + radius + 5, cy))
+        p.setPen(QColor(71, 85, 105, 150))
+        p.setFont(QFont("Consolas", 6, QFont.Weight.Bold))
+        p.drawText(QRectF(cx + radius + 7, cy - 8, 55, 16),
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "MEM")
+
+        # 6. Sphere outline (phase-colored, subtle)
+        out_c = QColor(self._color)
+        out_c.setAlpha(100)
+        p.setPen(QPen(out_c, 1.5))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(sphere_rect)
 
-        # 4. MEMBRAN
-        p.setPen(QPen(QColor(248, 250, 252, 150), 2, Qt.PenStyle.DashLine))
-        p.drawLine(QPointF(cx - radius - 5, cy), QPointF(cx + radius + 5, cy))
-        p.setPen(QColor("#64748B"))
-        p.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
-        p.drawText(QRectF(cx + radius + 8, cy - 10, 60, 20),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "MEMBRANE")
+        # 7. Specular highlight (top-left lens flare)
+        clip2 = QPainterPath()
+        clip2.addEllipse(sphere_rect)
+        p.save()
+        p.setClipPath(clip2)
+        spec = QRadialGradient(cx - radius * 0.32, cy - radius * 0.38, radius * 0.52)
+        spec.setColorAt(0.0, QColor(255, 255, 255, 55))
+        spec.setColorAt(1.0, QColor(255, 255, 255, 0))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(spec)
+        p.drawEllipse(sphere_rect)
+        p.restore()
 
-        # 5. VOLUMEN-READOUT (zentriert in der Kugel)
+        # 8. Volume readout (centered in sphere)
         p.setPen(QColor("#F8FAFC"))
-        p.setFont(QFont("Consolas", 12, QFont.Weight.Bold))
+        p.setFont(QFont("Consolas", 13, QFont.Weight.Bold))
         vol_text = f"{self._volume_ml:.0f}" if self._volume_ml >= 10 else f"{self._volume_ml:.1f}"
-        p.drawText(QRectF(cx - radius, cy - 20, radius * 2, 25),
+        p.drawText(QRectF(cx - radius, cy - 20, radius * 2, 24),
                    Qt.AlignmentFlag.AlignCenter, f"{vol_text} mL")
 
-        # Prozent-Anzeige
-        p.setPen(QColor(255, 255, 255, 120))
+        pct_c = QColor(self._color).lighter(140)
+        p.setPen(pct_c)
         p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
-        pct_text = f"{self._fill_pct * 100:.0f}%"
-        p.drawText(QRectF(cx - radius, cy + 5, radius * 2, 15),
-                   Qt.AlignmentFlag.AlignCenter, pct_text)
+        p.drawText(QRectF(cx - radius, cy + 5, radius * 2, 14),
+                   Qt.AlignmentFlag.AlignCenter, f"{self._fill_pct * 100:.0f}%")
 
-        # 6. LABEL
-        p.setPen(QColor("#94A3B8"))
-        p.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
-        p.drawText(QRectF(0, cy + radius + 15, w, 15), Qt.AlignmentFlag.AlignCenter, "CELL STATE")
+        # 9. Bottom label
+        p.setPen(QColor("#64748B"))
+        p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+        p.drawText(QRectF(0, cy + radius + 8, w, 18),
+                   Qt.AlignmentFlag.AlignCenter, "CELL STATE")
 
 
 # =========================================================================
@@ -171,106 +240,193 @@ class TrapezoidWidget(QFrame):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
 
-        pad_x, pad_y = 25, 30
-        plot_w = w - 2 * pad_x
-        plot_h = h - 2 * pad_y
-
-        # 1. X-Achse
-        p.setPen(QPen(QColor(30, 41, 59), 3))
-        p.drawLine(pad_x, h - pad_y, w - pad_x, h - pad_y)
-
-        # Ideale Rampe (dynamisch aus _frac_a/_frac_b/_frac_c)
-        x_a_end = pad_x + plot_w * self._frac_a
-        x_b_end = pad_x + plot_w * (self._frac_a + self._frac_b)
-        path = QPainterPath()
-        pt1 = QPointF(pad_x, h - pad_y)
-        pt2 = QPointF(x_a_end, pad_y)
-        pt3 = QPointF(x_b_end, pad_y)
-        pt4 = QPointF(pad_x + plot_w, h - pad_y)
-
-        path.moveTo(pt1)
-        path.lineTo(pt2)
-        path.lineTo(pt3)
-        path.lineTo(pt4)
-
-        # 2. Füllung
-        grad_bg = QLinearGradient(0, pad_y, 0, h - pad_y)
-        grad_bg.setColorAt(0.0, QColor(139, 92, 246, 50))
-        grad_bg.setColorAt(1.0, QColor(139, 92, 246, 0))
-
-        bg_path = QPainterPath(path)
-        bg_path.lineTo(pt1)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(grad_bg)
-        p.drawPath(bg_path)
-
-        # 3. Kontur
-        p.setPen(QPen(QColor(139, 92, 246, 200), 3))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(path)
-
-        # Phase-Labels auf der X-Achse (dynamisch positioniert)
-        p.setPen(QColor("#64748B"))
-        p.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
-        label_y = h - pad_y + 14
-        p.drawText(QPointF(pad_x + plot_w * (self._frac_a * 0.5), label_y), "A")
-        p.drawText(QPointF(pad_x + plot_w * (self._frac_a + self._frac_b * 0.5), label_y), "B")
-        p.drawText(QPointF(pad_x + plot_w * (self._frac_a + self._frac_b + self._frac_c * 0.5), label_y), "C")
-
-        # 4. SETPOINT-LINIE (horizontal, gestrichelt)
+        pad_left, pad_top, pad_bot = 36, 14, 26
+        plot_w = w - pad_left - 8
+        plot_h = h - pad_top - pad_bot
         disp_max = max(self._peak_p, 100.0)
-        if self._setpoint_p > 0:
-            norm_sp = min(1.0, self._setpoint_p / disp_max)
-            sp_y = (h - pad_y) - (norm_sp * plot_h)
-            p.setPen(QPen(QColor(248, 250, 252, 60), 1, Qt.PenStyle.DashLine))
-            p.drawLine(QPointF(pad_x, sp_y), QPointF(w - pad_x, sp_y))
-            p.setPen(QColor(248, 250, 252, 100))
-            p.setFont(QFont("Consolas", 7))
-            p.drawText(QPointF(w - pad_x + 4, sp_y + 4), f"{int(self._setpoint_p)}")
+        orig_x = pad_left
+        base_y = h - pad_bot
 
-        # 5. LIVE TRACKER
+        def mbar_to_y(mbar: float) -> float:
+            return base_y - (mbar / disp_max) * plot_h
+
+        # Phase boundaries
+        x_a_end = orig_x + plot_w * self._frac_a
+        x_b_end = orig_x + plot_w * (self._frac_a + self._frac_b)
+        x_c_end = orig_x + plot_w
+
+        phase_a_active = "PHASE_A" in self._phase
+        phase_b_active = "PHASE_B" in self._phase
+        phase_c_active = "PHASE_C" in self._phase
+        any_active = phase_a_active or phase_b_active or phase_c_active
+
+        # 1. Horizontal grid lines + Y-axis labels
+        grid_step = 500 if disp_max >= 1000 else 250
+        p.setFont(QFont("Consolas", 7))
+        mbar_val = 0
+        while mbar_val <= disp_max:
+            gy = mbar_to_y(mbar_val)
+            p.setPen(QPen(QColor(30, 41, 59, 160), 1))
+            p.drawLine(QPointF(orig_x, gy), QPointF(x_c_end, gy))
+            p.setPen(QColor(71, 85, 105, 160))
+            p.drawText(QRectF(0, gy - 7, orig_x - 4, 14),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                       str(mbar_val))
+            mbar_val += grid_step
+
+        # 2. X-axis baseline
+        p.setPen(QPen(QColor(30, 41, 59, 220), 2))
+        p.drawLine(QPointF(orig_x, base_y), QPointF(x_c_end, base_y))
+
+        # 3. Phase fill segments — dimmed unless active
+        p.setPen(Qt.PenStyle.NoPen)
+
+        def _fill_alpha(phase_active: bool) -> int:
+            if not any_active:
+                return 45
+            return 80 if phase_active else 12
+
+        # Phase A (ramp up) — purple
+        a_path = QPainterPath()
+        a_path.moveTo(orig_x, base_y)
+        a_path.lineTo(x_a_end, pad_top)
+        a_path.lineTo(x_a_end, base_y)
+        a_path.closeSubpath()
+        grad_a = QLinearGradient(orig_x, pad_top, x_a_end, base_y)
+        grad_a.setColorAt(0.0, QColor(139, 92, 246, _fill_alpha(phase_a_active)))
+        grad_a.setColorAt(1.0, QColor(139, 92, 246, 0))
+        p.setBrush(grad_a)
+        p.drawPath(a_path)
+
+        # Phase B (hold) — amber
+        b_path = QPainterPath()
+        b_path.moveTo(x_a_end, pad_top)
+        b_path.lineTo(x_b_end, pad_top)
+        b_path.lineTo(x_b_end, base_y)
+        b_path.lineTo(x_a_end, base_y)
+        b_path.closeSubpath()
+        grad_b = QLinearGradient(0, pad_top, 0, base_y)
+        grad_b.setColorAt(0.0, QColor(245, 158, 11, _fill_alpha(phase_b_active)))
+        grad_b.setColorAt(1.0, QColor(245, 158, 11, 0))
+        p.setBrush(grad_b)
+        p.drawPath(b_path)
+
+        # Phase C (ramp down) — pink
+        c_path = QPainterPath()
+        c_path.moveTo(x_b_end, pad_top)
+        c_path.lineTo(x_c_end, base_y)
+        c_path.lineTo(x_b_end, base_y)
+        c_path.closeSubpath()
+        grad_c = QLinearGradient(x_b_end, pad_top, x_c_end, base_y)
+        grad_c.setColorAt(0.0, QColor(236, 72, 153, _fill_alpha(phase_c_active)))
+        grad_c.setColorAt(1.0, QColor(236, 72, 153, 0))
+        p.setBrush(grad_c)
+        p.drawPath(c_path)
+
+        # 4. Trapezoid outline — color shifts with active phase
+        if phase_a_active:
+            outline_c = QColor(139, 92, 246, 230)
+        elif phase_b_active:
+            outline_c = QColor(245, 158, 11, 230)
+        elif phase_c_active:
+            outline_c = QColor(236, 72, 153, 230)
+        else:
+            outline_c = QColor(100, 116, 139, 160)
+
+        contour = QPainterPath()
+        contour.moveTo(orig_x, base_y)
+        contour.lineTo(x_a_end, pad_top)
+        contour.lineTo(x_b_end, pad_top)
+        contour.lineTo(x_c_end, base_y)
+        p.setPen(QPen(outline_c, 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(contour)
+
+        # Active-phase underline bar (3 px below baseline)
+        if phase_a_active:
+            p.setPen(QPen(QColor(139, 92, 246), 3))
+            p.drawLine(QPointF(orig_x, base_y + 3), QPointF(x_a_end, base_y + 3))
+        elif phase_b_active:
+            p.setPen(QPen(QColor(245, 158, 11), 3))
+            p.drawLine(QPointF(x_a_end, base_y + 3), QPointF(x_b_end, base_y + 3))
+        elif phase_c_active:
+            p.setPen(QPen(QColor(236, 72, 153), 3))
+            p.drawLine(QPointF(x_b_end, base_y + 3), QPointF(x_c_end, base_y + 3))
+
+        # 5. Phase labels on X-axis
+        p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+        for label, lx1, lx2, col_act, col_dim in (
+            ("A", orig_x, x_a_end, "#8B5CF6", "#374151"),
+            ("B", x_a_end, x_b_end, "#F59E0B", "#374151"),
+            ("C", x_b_end, x_c_end, "#EC4899", "#374151"),
+        ):
+            is_active = (label == "A" and phase_a_active) or \
+                        (label == "B" and phase_b_active) or \
+                        (label == "C" and phase_c_active)
+            p.setPen(QColor(col_act if (is_active or not any_active) else col_dim))
+            p.drawText(QRectF(lx1, base_y + 3, lx2 - lx1, 14), Qt.AlignmentFlag.AlignCenter, label)
+
+        # 6. Setpoint dashed line
+        if self._setpoint_p > 0:
+            sp_y = mbar_to_y(self._setpoint_p)
+            p.setPen(QPen(QColor(248, 250, 252, 45), 1, Qt.PenStyle.DashLine))
+            p.drawLine(QPointF(orig_x, sp_y), QPointF(x_c_end, sp_y))
+            p.setPen(QColor(148, 163, 184, 100))
+            p.setFont(QFont("Consolas", 7))
+            p.drawText(QRectF(x_c_end + 2, sp_y - 7, 40, 14),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                       f"{int(self._setpoint_p)}")
+
+        # 7. Live tracker dot with multi-ring glow
         norm_p = min(1.0, max(0.0, self._current_p / disp_max))
 
-        if "PHASE_A" in self._phase:
-            dot_x = pad_x + (norm_p * plot_w * self._frac_a)
-        elif "PHASE_B" in self._phase:
-            dot_x = pad_x + plot_w * (self._frac_a + self._frac_b * 0.5)
-        elif "PHASE_C" in self._phase:
-            down_progress = 1.0 - norm_p
-            dot_x = pad_x + plot_w * (self._frac_a + self._frac_b) + (down_progress * plot_w * self._frac_c)
+        if phase_a_active:
+            dot_x = orig_x + (norm_p * plot_w * self._frac_a)
+        elif phase_b_active:
+            dot_x = orig_x + plot_w * (self._frac_a + self._frac_b * 0.5)
+        elif phase_c_active:
+            down_prog = 1.0 - norm_p
+            dot_x = x_b_end + (down_prog * plot_w * self._frac_c)
         else:
-            dot_x = pad_x
+            dot_x = orig_x
             norm_p = 0.0
 
-        dot_y = (h - pad_y) - (norm_p * plot_h)
+        dot_y = mbar_to_y(self._current_p if norm_p > 0 else 0)
 
-        # Crosshair
-        p.setPen(QPen(QColor(0, 229, 255, 120), 1, Qt.PenStyle.DashLine))
-        p.drawLine(QPointF(pad_x, dot_y), QPointF(dot_x, dot_y))
-        p.drawLine(QPointF(dot_x, dot_y), QPointF(dot_x, h - pad_y))
+        if any_active:
+            # Crosshair
+            p.setPen(QPen(QColor(0, 229, 255, 70), 1, Qt.PenStyle.DashLine))
+            p.drawLine(QPointF(orig_x, dot_y), QPointF(dot_x, dot_y))
+            p.drawLine(QPointF(dot_x, dot_y), QPointF(dot_x, base_y))
 
-        # Glow Point
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(0, 229, 255, 60))
-        p.drawEllipse(QPointF(dot_x, dot_y), 12, 12)
-        p.setBrush(QColor("#00E5FF"))
-        p.drawEllipse(QPointF(dot_x, dot_y), 5, 5)
+            # Glow rings
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(0, 229, 255, 18))
+            p.drawEllipse(QPointF(dot_x, dot_y), 20, 20)
+            p.setBrush(QColor(0, 229, 255, 45))
+            p.drawEllipse(QPointF(dot_x, dot_y), 11, 11)
+            p.setBrush(QColor("#00E5FF"))
+            p.drawEllipse(QPointF(dot_x, dot_y), 5, 5)
 
-        # Druck-Label am Punkt
-        p.setPen(QColor("#F8FAFC"))
-        p.setFont(QFont("Consolas", 9, QFont.Weight.Black))
-        p.drawText(QPointF(dot_x + 10, dot_y - 10), f"{int(self._current_p)}")
+            # Pressure label next to dot
+            p.setPen(QColor("#F8FAFC"))
+            p.setFont(QFont("Consolas", 9, QFont.Weight.Black))
+            p.drawText(QPointF(dot_x + 13, dot_y - 4), f"{int(self._current_p)}")
 
-        # 6. Y-Achse Beschriftung (mbar)
+        # 8. Rotated Y-axis "mbar" label
+        p.save()
+        p.setPen(QColor(71, 85, 105, 140))
+        p.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
+        p.translate(9, pad_top + plot_h / 2)
+        p.rotate(-90)
+        p.drawText(QRectF(-25, -8, 50, 16), Qt.AlignmentFlag.AlignCenter, "mbar")
+        p.restore()
+
+        # 9. Title
         p.setPen(QColor("#64748B"))
-        p.setFont(QFont("Consolas", 7))
-        p.drawText(QPointF(2, pad_y + 5), f"{int(disp_max)}")
-        p.drawText(QPointF(2, h - pad_y - 2), "0")
-
-        # 7. TITEL
-        p.setPen(QColor("#94A3B8"))
-        p.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
-        p.drawText(QRectF(0, h - 15, w, 15), Qt.AlignmentFlag.AlignCenter, "PRESSURE PROFILE")
+        p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+        p.drawText(QRectF(0, h - pad_bot + 5, w, 14),
+                   Qt.AlignmentFlag.AlignCenter, "PRESSURE PROFILE")
 
 
 def _to_float(x) -> float:
@@ -449,6 +605,21 @@ class RightFrame(QFrame):
         self.bar_b1.hide()
         prog_lay.addWidget(self.bar_b1)
 
+        # Flow / ETA row
+        flow_eta_lay = QHBoxLayout()
+        flow_eta_lay.setSpacing(12)
+        self.lbl_flow_rate = QLabel("FLOW: —")
+        self.lbl_flow_rate.setStyleSheet(
+            "color: #00FF66; font-family: 'Consolas'; font-size: 10px; font-weight: bold; border: none;")
+        self.lbl_eta = QLabel("")
+        self.lbl_eta.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.lbl_eta.setStyleSheet(
+            "color: #64748B; font-family: 'Consolas'; font-size: 10px; font-weight: bold; border: none;")
+        flow_eta_lay.addWidget(self.lbl_flow_rate)
+        flow_eta_lay.addStretch()
+        flow_eta_lay.addWidget(self.lbl_eta)
+        prog_lay.addLayout(flow_eta_lay)
+
         self.frm_progress.hide()
         lay.addWidget(self.frm_progress)
 
@@ -571,6 +742,8 @@ class RightFrame(QFrame):
         self.trapezoid.set_state(0.0, 0.0, "IDLE")
         self.frm_progress.hide()
         self.bar_progress.setValue(0)
+        self.lbl_flow_rate.setText("FLOW: —")
+        self.lbl_eta.setText("")
 
     @Slot(str)
     def set_step(self, step: str):
@@ -742,7 +915,22 @@ class RightFrame(QFrame):
         else:
             self.sandglass.set_state(0.5, "IDLE")
 
-        pass  # Telemetrie vollständig in TopFrame und Worker-CSV verarbeitet
+        # Live flow rate + ETA display in progress panel
+        flow_raw = sample.get("flow")
+        if flow_raw is not None:
+            flow_ml_min = _to_float(flow_raw) * 60.0  # convert ml/s → ml/min
+            if abs(flow_ml_min) > 0.001:
+                self.lbl_flow_rate.setText(f"FLOW: {abs(flow_ml_min):.2f} ml/min")
+                # Compute ETA from remaining progress if available
+                if self._progress_target_ml > 0.01 and self._progress_current_ml < self._progress_target_ml:
+                    remaining = self._progress_target_ml - self._progress_current_ml
+                    eta_min = remaining / abs(flow_ml_min) if abs(flow_ml_min) > 0 else 0.0
+                    self.lbl_eta.setText(f"ETA: {eta_min:.1f} min")
+                else:
+                    self.lbl_eta.setText("")
+            else:
+                self.lbl_flow_rate.setText("FLOW: 0.00 ml/min")
+                self.lbl_eta.setText("")
 
     # -----------------------------------------------------------------
     # FILLING BANNER
