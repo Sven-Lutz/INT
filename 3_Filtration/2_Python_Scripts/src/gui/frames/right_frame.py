@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import time
 from pathlib import Path
@@ -7,18 +8,21 @@ from typing import Optional
 
 from PySide6.QtCore import Signal, Slot, Qt, QRectF, QPointF, QTimer
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath, QLinearGradient, QRadialGradient, QFont
+    QPainter, QColor, QPen, QBrush, QPainterPath,
+    QLinearGradient, QRadialGradient, QFont,
 )
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTextBrowser, QWidget, QTabWidget, QProgressBar
+    QPushButton, QTextBrowser, QWidget, QProgressBar,
 )
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
 from src.gui.widgets.nudge_spinbox import NudgeSpinBox
 
+logger = logging.getLogger(__name__)
+
 
 # =========================================================================
-# VISUALISIERUNG 1: SPHERICAL REACTOR (DIGITAL TWIN) — ANIMATED
+# WIDGET 1: SPHERICAL REACTOR — animated digital twin of the filter cell
 # =========================================================================
 class ReactorSphereWidget(QFrame):
     def __init__(self, parent=None):
@@ -84,7 +88,7 @@ class ReactorSphereWidget(QFrame):
             gc.setAlpha(alpha)
             p.setBrush(gc)
             p.drawEllipse(QRectF(cx - radius - extra, cy - radius - extra,
-                                  (radius + extra) * 2, (radius + extra) * 2))
+                                 (radius + extra) * 2, (radius + extra) * 2))
 
         # 2. Sphere background — radial gradient (3D depth)
         rad_bg = QRadialGradient(cx - radius * 0.25, cy - radius * 0.3, radius * 1.25)
@@ -98,7 +102,8 @@ class ReactorSphereWidget(QFrame):
         if self._fill_pct > 0.01:
             liquid_top_y = (cy + radius) - (radius * 2) * self._fill_pct
             # Wave amplitude — larger near 50%, calm near empty/full
-            wave_amp = radius * 0.028 * math.sin(math.pi * min(1.0, self._fill_pct * 2)) * min(1.0, self._fill_pct * 6)
+            wave_amp = radius * 0.028 * \
+                math.sin(math.pi * min(1.0, self._fill_pct * 2)) * min(1.0, self._fill_pct * 6)
 
             liq_grad = QLinearGradient(0, liquid_top_y, 0, cy + radius)
             c_top = QColor(self._color)
@@ -430,9 +435,11 @@ class TrapezoidWidget(QFrame):
 
 
 def _to_float(x) -> float:
-    if x is None: return 0.0
+    if x is None:
+        return 0.0
     try:
-        if isinstance(x, dict): return 0.0
+        if isinstance(x, dict):
+            return 0.0
         v = float(x)
         return v if v == v else 0.0
     except Exception:
@@ -453,13 +460,19 @@ class RightFrame(QFrame):
         super().__init__(parent)
         self.setProperty("surface", "panel")
         self._running = False
-        
         self._ui_phase = "IDLE"
-        
-        # 🚀 GROUND TRUTH CALIBRATION STATES
+
+        # Calibration anchor: volume [ml] at the 50% fill line (membrane level).
+        # Fallback is half of a 7 L cell; overridden by SET MEMBRANE button.
         self._current_vol_ml = 0.0
-        self._membrane_vol_ml = 3500.0  # Fallback: Exakt die Mitte von 7 Litern
-        self.MAX_CELL_VOLUME_ML = 7000.0 
+        self._membrane_vol_ml = 3500.0
+        self.MAX_CELL_VOLUME_ML = 7000.0
+
+        # Elapsed-time tracking: monotonic timestamp set on run start, None at rest.
+        self._run_start: Optional[float] = None
+        self._clock_timer = QTimer(self)
+        self._clock_timer.setInterval(1000)  # 1 s resolution is sufficient
+        self._clock_timer.timeout.connect(self._tick_elapsed)
 
         root_path = project_root(__file__)
         ensure_dir(resolve_under(root_path, "logs"))
@@ -470,7 +483,8 @@ class RightFrame(QFrame):
 
         # 1. PHYSICAL MODEL (direkt, ohne Tabs)
         viz_frame = QFrame()
-        viz_frame.setStyleSheet("background-color: #050914; border: 1px solid #1E293B; border-radius: 6px;")
+        viz_frame.setStyleSheet(
+            "background-color: #050914; border: 1px solid #1E293B; border-radius: 6px;")
         viz_lay = QHBoxLayout(viz_frame)
         viz_lay.setContentsMargins(8, 8, 8, 8)
 
@@ -513,7 +527,8 @@ class RightFrame(QFrame):
         term_lay.setSpacing(2)
         lbl_term = QLabel("SYSTEM TERMINAL")
         lbl_term.setStyleSheet(
-            "color: #64748B; font-family: 'Consolas'; font-weight: bold; font-size: 10px; letter-spacing: 2px;")
+            "color: #64748B; font-family: 'Consolas'; font-weight: bold; "
+            "font-size: 10px; letter-spacing: 2px;")
         term_lay.addWidget(lbl_term)
 
         self.console = QTextBrowser()
@@ -556,11 +571,19 @@ class RightFrame(QFrame):
         self.lbl_prog_values = QLabel("")
         self.lbl_prog_values.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.lbl_prog_values.setStyleSheet(
-            "color: #94A3B8; font-family: 'Consolas'; font-size: 10px; font-weight: bold; border: none;")
+            "color: #94A3B8; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; border: none;")
         prog_top.addWidget(self.lbl_prog_phase)
         prog_top.addStretch()
         prog_top.addWidget(self.lbl_prog_values)
         prog_lay.addLayout(prog_top)
+
+        # Elapsed run time — updated every second by _clock_timer
+        self.lbl_elapsed = QLabel("")
+        self.lbl_elapsed.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.lbl_elapsed.setStyleSheet(
+            "color: #475569; font-family: 'Consolas'; font-size: 9px; border: none;")
+        prog_lay.addWidget(self.lbl_elapsed)
 
         # Haupt-Progressbar
         self.bar_progress = QProgressBar()
@@ -582,10 +605,12 @@ class RightFrame(QFrame):
         b_detail_lay.setSpacing(12)
         self.lbl_b1_detail = QLabel("B1: —")
         self.lbl_b1_detail.setStyleSheet(
-            "color: #F59E0B; font-family: 'Consolas'; font-size: 10px; font-weight: bold; border: none;")
+            "color: #F59E0B; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; border: none;")
         self.lbl_b2_detail = QLabel("")
         self.lbl_b2_detail.setStyleSheet(
-            "color: #10B981; font-family: 'Consolas'; font-size: 10px; font-weight: bold; border: none;")
+            "color: #10B981; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; border: none;")
         self.lbl_b2_detail.hide()
         b_detail_lay.addWidget(self.lbl_b1_detail)
         b_detail_lay.addWidget(self.lbl_b2_detail)
@@ -610,11 +635,13 @@ class RightFrame(QFrame):
         flow_eta_lay.setSpacing(12)
         self.lbl_flow_rate = QLabel("FLOW: —")
         self.lbl_flow_rate.setStyleSheet(
-            "color: #00FF66; font-family: 'Consolas'; font-size: 10px; font-weight: bold; border: none;")
+            "color: #00FF66; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; border: none;")
         self.lbl_eta = QLabel("")
         self.lbl_eta.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.lbl_eta.setStyleSheet(
-            "color: #64748B; font-family: 'Consolas'; font-size: 10px; font-weight: bold; border: none;")
+            "color: #64748B; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; border: none;")
         flow_eta_lay.addWidget(self.lbl_flow_rate)
         flow_eta_lay.addStretch()
         flow_eta_lay.addWidget(self.lbl_eta)
@@ -634,7 +661,8 @@ class RightFrame(QFrame):
         fill_title_row = QHBoxLayout()
         lbl_fill_title = QLabel("MANUAL FILLING REQUIRED")
         lbl_fill_title.setStyleSheet(
-            "color: #00E5FF; font-weight: bold; font-family: 'Consolas'; font-size: 12px; border: none;")
+            "color: #00E5FF; font-weight: bold; font-family: 'Consolas'; "
+            "font-size: 12px; border: none;")
         fill_title_row.addWidget(lbl_fill_title)
         fill_title_row.addStretch()
         fill_banner_lay.addLayout(fill_title_row)
@@ -645,7 +673,8 @@ class RightFrame(QFrame):
             "color: #64748B; font-family: 'Consolas'; font-size: 11px; border: none;")
         self.sp_fill_amount = NudgeSpinBox(0.0, 10000.0, 1, 100.0, " ml", 0.0)
         lbl_fill_ml = QLabel("Amount added:")
-        lbl_fill_ml.setStyleSheet("color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
+        lbl_fill_ml.setStyleSheet(
+            "color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
 
         self.btn_filling_done = QPushButton("FILLING COMPLETE → CONTINUE")
         self.btn_filling_done.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -683,7 +712,8 @@ class RightFrame(QFrame):
         self.btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_ok.setStyleSheet("""
             QPushButton {
-                background-color: #000000; color: #F59E0B; font-weight: bold; font-family: 'Consolas';
+                background-color: #000000; color: #F59E0B;
+                font-weight: bold; font-family: 'Consolas';
                 border: 1px solid #000000; border-radius: 3px; padding: 5px 15px;
             }
             QPushButton:hover { background-color: #111827; color: #FFF; }
@@ -723,7 +753,8 @@ class RightFrame(QFrame):
                 border: 1px solid #1E293B; border-bottom: 2px solid {color}; border-radius: 4px;
             }}
             QPushButton:hover:enabled {{ background-color: #1E293B; color: #FFF; }}
-            QPushButton:disabled {{ background-color: #050914; color: #334155; border: 1px solid #0F172A; }}
+            QPushButton:disabled {{ background-color: #050914; color: #334155;
+                border: 1px solid #0F172A; }}
         """)
         return btn
 
@@ -744,6 +775,9 @@ class RightFrame(QFrame):
         self.bar_progress.setValue(0)
         self.lbl_flow_rate.setText("FLOW: —")
         self.lbl_eta.setText("")
+        self._run_start = None
+        self._clock_timer.stop()
+        self.lbl_elapsed.setText("")
 
     @Slot(str)
     def set_step(self, step: str):
@@ -824,7 +858,8 @@ class RightFrame(QFrame):
     @Slot(str, str)
     def append_log(self, msg: str, color: str = "#94A3B8"):
         ts = time.strftime("%H:%M:%S")
-        html = f'<span style="color: #64748B;">[{ts}]</span> <span style="color: {color};">{msg}</span>'
+        html = (f'<span style="color: #64748B;">[{ts}]</span> '
+                f'<span style="color: {color};">{msg}</span>')
         self.console.append(html)
         vs = self.console.verticalScrollBar()
         vs.setValue(vs.maximum())
@@ -838,60 +873,91 @@ class RightFrame(QFrame):
         self.btn_stop.setEnabled(running)
 
         if running:
+            self._run_start = time.monotonic()
+            self._clock_timer.start()
+            logger.info("Run started — elapsed timer started.")
             self.btn_start.setStyleSheet("""
                 QPushButton {
                     background-color: #0F172A; color: #334155;
-                    font-family: 'Consolas'; font-weight: bold; font-size: 12px; letter-spacing: 1px;
-                    border: 1px solid #1E293B; border-bottom: 2px solid #1E293B; border-radius: 4px;
+                    font-family: 'Consolas'; font-weight: bold;
+                    font-size: 12px; letter-spacing: 1px;
+                    border: 1px solid #1E293B;
+                    border-bottom: 2px solid #1E293B; border-radius: 4px;
                 }
             """)
         else:
+            self._clock_timer.stop()
+            logger.info("Run stopped — elapsed timer stopped.")
             self.btn_start.setStyleSheet("""
                 QPushButton {
                     background-color: #111827; color: #10B981;
-                    font-family: 'Consolas'; font-weight: bold; font-size: 12px; letter-spacing: 1px;
-                    border: 1px solid #1E293B; border-bottom: 2px solid #10B981; border-radius: 4px;
+                    font-family: 'Consolas'; font-weight: bold;
+                    font-size: 12px; letter-spacing: 1px;
+                    border: 1px solid #1E293B;
+                    border-bottom: 2px solid #10B981; border-radius: 4px;
                 }
                 QPushButton:hover { background-color: #1E293B; color: #FFF; }
             """)
 
     @Slot()
+    def _tick_elapsed(self):
+        """Update the elapsed-time label every second while a run is active."""
+        if self._run_start is None:
+            return
+        elapsed = int(time.monotonic() - self._run_start)
+        hours, remainder = divmod(elapsed, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            text = f"ELAPSED  {hours:02d}:{minutes:02d}:{seconds:02d}"
+        else:
+            text = f"ELAPSED  {minutes:02d}:{seconds:02d}"
+        self.lbl_elapsed.setText(text)
+
+    @Slot()
     def _calibrate_membrane(self):
-        """Setzt das aktuell gemessene Volumen als exakten 50% Punkt der Zelle."""
+        """Pin current volume reading as the 50% fill anchor (membrane level)."""
         self._membrane_vol_ml = self._current_vol_ml
-        self.append_log(f"SYS: Membrane visual calibration set to {self._membrane_vol_ml:.2f} mL", "#00E5FF")
-        # Direkter Trigger um das UI an den neuen Ankerpunkt anzupassen
+        logger.info(
+            "Membrane calibration set to %.2f mL", self._membrane_vol_ml)
+        self.append_log(
+            f"SYS: Membrane calibrated → {self._membrane_vol_ml:.2f} mL = 50%",
+            "#00E5FF")
+        # Re-render immediately so the sphere snaps to the new anchor.
         self.update_telemetry({"volume_ml": self._current_vol_ml, "step": self._ui_phase})
 
     @Slot(dict)
     def update_telemetry(self, sample: dict):
         if not isinstance(sample, dict):
             return
-        
+
         pressures = sample.get("pressure")
-        if not isinstance(pressures, dict): 
+        if not isinstance(pressures, dict):
             pressures = {}
 
         p1_data = pressures.get(1, pressures.get("1", {}))
         if not isinstance(p1_data, dict):
             p1_data = {}
 
-        p1_raw = sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas", 0.0)
+        p1_raw = sample.get("p1_meas") if sample.get(
+            "p1_meas") is not None else p1_data.get("meas", 0.0)
         p1 = _to_float(p1_raw)
 
-        p1_set_raw = sample.get("p1_set") if sample.get("p1_set") is not None else p1_data.get("set", 0.0)
+        p1_set_raw = sample.get("p1_set") if sample.get(
+            "p1_set") is not None else p1_data.get("set", 0.0)
         p1_set = _to_float(p1_set_raw)
-        
+
         vol = _to_float(sample.get("volume_ml", 0.0))
         self._current_vol_ml = vol  # Speichern für Kalibrierung
         self.sandglass.set_volume(vol)
-        
+
         step = str(sample.get("step", "IDLE")).upper()
 
         self.trapezoid.set_state(p1, p1_set, self._ui_phase)
 
-        # 🚀 Visuelle Non-lineare Skalierung anhand des kalibrierten Membran-Punkts
-        if "FILLING" in step or "BACKWASH" in step or "FILTRATION" in step or "PHASE" in self._ui_phase:
+        # Non-linear fill scaling: volume is mapped around the membrane anchor.
+        active_step = ("FILLING" in step or "BACKWASH" in step
+                       or "FILTRATION" in step or "PHASE" in self._ui_phase)
+        if active_step:
             if vol <= self._membrane_vol_ml:
                 # Volumen unterhalb der Membran (0% bis 50% im UI)
                 if self._membrane_vol_ml > 0:
@@ -905,11 +971,12 @@ class RightFrame(QFrame):
                     fill_pct = 0.5 + ((vol - self._membrane_vol_ml) / upper_capacity) * 0.5
                 else:
                     fill_pct = 1.0
-            
+
             # Clamp zwischen 0.0 und 1.0 um Überläufe bei der Animation zu verhindern
             fill_pct = max(0.0, min(1.0, fill_pct))
-            self.sandglass.set_state(fill_pct, step if "PHASE" not in self._ui_phase else self._ui_phase)
-            
+            self.sandglass.set_state(
+                fill_pct, step if "PHASE" not in self._ui_phase else self._ui_phase)
+
         elif step == "VENTING":
             self.sandglass.set_state(0.5, "VENTING")
         else:
@@ -922,7 +989,9 @@ class RightFrame(QFrame):
             if abs(flow_ml_min) > 0.001:
                 self.lbl_flow_rate.setText(f"FLOW: {abs(flow_ml_min):.2f} ml/min")
                 # Compute ETA from remaining progress if available
-                if self._progress_target_ml > 0.01 and self._progress_current_ml < self._progress_target_ml:
+                target_known = self._progress_target_ml > 0.01
+                below_target = self._progress_current_ml < self._progress_target_ml
+                if target_known and below_target:
                     remaining = self._progress_target_ml - self._progress_current_ml
                     eta_min = remaining / abs(flow_ml_min) if abs(flow_ml_min) > 0 else 0.0
                     self.lbl_eta.setText(f"ETA: {eta_min:.1f} min")
