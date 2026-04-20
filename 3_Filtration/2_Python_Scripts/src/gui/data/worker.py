@@ -244,6 +244,7 @@ class ExperimentWorker(QObject):
         self._phase_vol_start: Optional[float] = None
         self._last_ramp_loss_ml: float = 0.0   # Verlust vom letzten Zyklus (Empfehlung für Filling)
         self._filling_amount_ml: float = 0.0   # Vom Bediener manuell eingegebene Füllmenge
+        self._flow_ema_ml_s: float = 0.0       # Exponential moving average des Flusses (Rauschen dämpfen)
 
         self.cmd_start_backwash_hold.connect(
             self._on_cmd_start_backwash_hold,
@@ -431,12 +432,14 @@ class ExperimentWorker(QObject):
         except Exception:
             pass
 
-    def _safe_set_pressure_mbar(self, *, channel: int, mbar: float) -> None:
+    def _safe_set_pressure_mbar(self, *, channel: int, mbar: float, ramp: bool = False) -> None:
+        """Setzt Drucksollwert. ramp=False verhindert Hardware-Rampen (Software regelt selbst)."""
         dev = self._dev
         if dev is None or getattr(dev, "pressure_controller", None) is None:
             return
         try:
-            dev.set_pressure_setpoint_mbar(channel=int(channel), setpoint_mbar=float(mbar))
+            dev.set_pressure_setpoint_mbar(
+                channel=int(channel), setpoint_mbar=float(mbar), ramp=ramp)
         except Exception:
             pass
 
@@ -599,19 +602,22 @@ class ExperimentWorker(QObject):
                 self.log_msg.emit(
                     f"Filling confirmed: {self._filling_amount_ml:.1f} ml added.", "#10B981")
 
-                # Gate 2: Initialize ramp (only when ramp phases are enabled)
-                if p.run_phase_a or p.run_phase_b or p.run_phase_c:
-                    self._raise_if_abort()
-                    self.log_msg.emit("─" * 52, "#8B5CF6")
-                    self.log_msg.emit(
-                        f"Ready to start RAMP. Target: {p.phase_a_target_mbar:.0f} mbar", "#8B5CF6")
-                    self.log_msg.emit("─" * 52, "#8B5CF6")
-                    self._wait_ok(Step.FILTRATION, "Initialize Ramp — confirm to start Phase A")
+            # Rampe beginnt automatisch nach Filling-Bestätigung — kein manuelles Gate
+            if p.run_phase_a or p.run_phase_b or p.run_phase_c:
+                self.log_msg.emit("─" * 52, "#8B5CF6")
+                self.log_msg.emit(
+                    f"Starting ramp automatically. "
+                    f"Target: {p.phase_a_target_mbar:.0f} mbar", "#8B5CF6")
+                self.log_msg.emit("─" * 52, "#8B5CF6")
 
-            # Determine B1 target from confirmed filling amount (fallback to config)
-            target_vol = (self._filling_amount_ml
-                          if self._filling_amount_ml > 0
-                          else float(p.v_bnnt_ml) + float(p.phase_b1_target_ml))
+            # B1-Zielvolumen: Bediener-Eingabe hat Vorrang; Fallback aus Konfiguration.
+            # Minimum = phase_b1_target_ml, damit B1 nie sofort endet.
+            _config_target = float(p.v_bnnt_ml) + float(p.phase_b1_target_ml)
+            target_vol = max(
+                self._filling_amount_ml if self._filling_amount_ml > 0 else _config_target,
+                float(p.phase_b1_target_ml),
+                1.0,  # absolutes Minimum: 1 ml
+            )
 
             # --- PHASE A: RAMP UP (automatisch, kontinuierlich) ---
             if p.run_phase_a:
@@ -659,12 +665,29 @@ class ExperimentWorker(QObject):
                 self._total_loss_so_far += loss_a
                 self._phase_vol_start = None
 
-            # --- GATE: Phase A → Phase B (nur wenn confirm_between_phases) ---
-            if p.run_phase_a and p.run_phase_b and p.confirm_between_phases:
-                self._raise_if_abort()
-                self.log_msg.emit(
-                    "Phase A complete. Continuing to Phase B (Steady State).", "#F59E0B")
-                self._wait_ok(Step.FILTRATION, "Phase A → B: confirm pressure hold")
+                # Druckstabilisierung: warte bis Istdruck innerhalb 5% des Sollwerts.
+                # Verhindert Überschwingen (max. 30 s).
+                if getattr(dev, "pressure_controller", None) is not None:
+                    _stab_target = float(p.phase_a_target_mbar)
+                    _stab_deadline = time.monotonic() + 30.0
+                    self.status.emit(
+                        f"Phase A → B: waiting for pressure to stabilize at "
+                        f"{_stab_target:.0f} mbar...")
+                    while not self._should_abort() and time.monotonic() < _stab_deadline:
+                        try:
+                            _p_now = self._unwrap_sensor(dev.get_pressure_mbar(ch))
+                        except Exception:
+                            break
+                        if _stab_target <= 0 or abs(_p_now - _stab_target) / _stab_target < 0.05:
+                            break
+                        self._emit_sample(event="PHASE_A_STABILIZING")
+                        time.sleep(0.5)
+                    logger.info(
+                        "Phase A pressure stabilization done (%.0f mbar).",
+                        self._unwrap_sensor(
+                            dev.get_pressure_mbar(ch) if getattr(
+                                dev, "pressure_controller", None) else _stab_target)
+                    )
 
             # --- PHASE B: STEADY STATE & TROCKNUNG ---
             if p.run_phase_b:
@@ -703,6 +726,8 @@ class ExperimentWorker(QObject):
                 last_flow_time_b1 = time.monotonic()
                 mode_b1 = "PHASE_B1_STEADY"
                 loss_b1 = 0.0
+                self._flow_ema_ml_s = 0.0  # EMA für B1 zurücksetzen
+                _ema_alpha = 0.15  # Glättungskoeffizient (0.15 ≈ ~13 Samples warm-up)
 
                 self._exp._log_row(mode_b1, 0.0, float("nan"), float("nan"),
                                    pressure_channel=ch, event="START_B1")
@@ -712,13 +737,17 @@ class ExperimentWorker(QObject):
                     flow_ml_s = self._exp._flow_to_ml_per_s(flow_raw)
                     net_ml_s = self._exp._update_volume(dt_s, flow_raw, net_sign=-1.0)
 
+                    # EMA-Glättung: dämpft Ausreißer des Flusssensors
+                    self._flow_ema_ml_s = (
+                        _ema_alpha * abs(flow_ml_s) + (1 - _ema_alpha) * self._flow_ema_ml_s)
+
                     loss_b1 = max(0.0, v_start_b1 - float(self._exp.volume_ml))
 
                     self._exp._log_row(mode_b1, dt_s, flow_raw, flow_ml_s,
                                        net_flow_ml_s=net_ml_s, pressure_channel=ch)
 
-                    # Stagnation-Watchdog: Wenn Fluss vorhanden → Timer resetten
-                    if abs(flow_ml_s) > flow_dead:
+                    # Stagnation-Watchdog: EMA-Fluss für robuste Erkennung
+                    if self._flow_ema_ml_s > flow_dead:
                         last_flow_time_b1 = time.monotonic()
                     elif (time.monotonic() - last_flow_time_b1) > stagnation_timeout_s:
                         self.log_msg.emit(
@@ -742,14 +771,14 @@ class ExperimentWorker(QObject):
                     self.phase_detail_updated.emit("B1", loss_b1, remaining_b1)
                     self._emit_sample(event="PHASE_B1_HOLD")
 
-                    # Flow-based ETA in status bar
+                    # ETA basiert auf geglättetem Fluss
                     _remaining_ml = max(0.0, remaining_b1 - loss_b1)
-                    if abs(flow_ml_s) > flow_dead:
-                        _eta_s = _remaining_ml / abs(flow_ml_s)
-                        _eta_min = _eta_s / 60.0
+                    if self._flow_ema_ml_s > flow_dead:
+                        _eta_s = _remaining_ml / self._flow_ema_ml_s
+                        _flow_ml_min = self._flow_ema_ml_s * 60.0
                         self.status.emit(
                             f"B1: {loss_b1:.1f}/{remaining_b1:.1f} ml | "
-                            f"Flow: {abs(flow_ml_s)*60:.1f} ml/min | ETA: {_eta_min:.1f} min")
+                            f"Flow: {_flow_ml_min:.1f} ml/min | ETA: {_eta_s/60:.1f} min")
                     else:
                         self.status.emit(
                             f"B1: {loss_b1:.1f}/{remaining_b1:.1f} ml | Flow: waiting...")
@@ -775,6 +804,7 @@ class ExperimentWorker(QObject):
                     self._exp._step_start_volume = v_start_b2
                     last_flow_time_b2 = time.monotonic()
                     mode_b2 = "PHASE_B2_DRYING"
+                    self._flow_ema_ml_s = 0.0  # EMA für B2 zurücksetzen
 
                     self._exp._log_row(mode_b2, 0.0, float("nan"), float("nan"),
                                        pressure_channel=ch, event="START_B2")
@@ -784,13 +814,18 @@ class ExperimentWorker(QObject):
                         flow_ml_s = self._exp._flow_to_ml_per_s(flow_raw)
                         net_ml_s = self._exp._update_volume(dt_s, flow_raw, net_sign=-1.0)
 
+                        # EMA-Glättung
+                        self._flow_ema_ml_s = (
+                            _ema_alpha * abs(flow_ml_s)
+                            + (1 - _ema_alpha) * self._flow_ema_ml_s)
+
                         loss_b2 = max(0.0, v_start_b2 - float(self._exp.volume_ml))
 
                         self._exp._log_row(mode_b2, dt_s, flow_raw, flow_ml_s,
                                            net_flow_ml_s=net_ml_s, pressure_channel=ch)
 
-                        # Stagnation-Watchdog
-                        if abs(flow_ml_s) > flow_dead:
+                        # Stagnation-Watchdog: EMA-Fluss
+                        if self._flow_ema_ml_s > flow_dead:
                             last_flow_time_b2 = time.monotonic()
                         elif (time.monotonic() - last_flow_time_b2) > stagnation_timeout_s:
                             self.log_msg.emit(
@@ -811,13 +846,15 @@ class ExperimentWorker(QObject):
                         self.phase_detail_updated.emit("B2", loss_b2, p.v_extra_ml)
                         self._emit_sample(event="PHASE_B2_DRYING")
 
-                        # Flow-based ETA
+                        # ETA basiert auf geglättetem Fluss
                         _rem_b2 = max(0.0, p.v_extra_ml - loss_b2)
-                        if abs(flow_ml_s) > flow_dead:
-                            _eta_s = _rem_b2 / abs(flow_ml_s)
+                        if self._flow_ema_ml_s > flow_dead:
+                            _eta_s = _rem_b2 / self._flow_ema_ml_s
+                            _flow_ml_min_b2 = self._flow_ema_ml_s * 60.0
                             self.status.emit(
                                 f"B2: {loss_b2:.1f}/{p.v_extra_ml:.1f} ml | "
-                                f"Flow: {abs(flow_ml_s)*60:.1f} ml/min | ETA: {_eta_s/60:.1f} min")
+                                f"Flow: {_flow_ml_min_b2:.1f} ml/min | "
+                                f"ETA: {_eta_s/60:.1f} min")
                         else:
                             self.status.emit(
                                 f"B2: {loss_b2:.1f}/{p.v_extra_ml:.1f} ml | Flow: waiting...")
@@ -831,12 +868,6 @@ class ExperimentWorker(QObject):
                 self._total_loss_so_far += loss_b1 + loss_b2
                 self._emit_sample(event=f"PHASE_B_END total_b={loss_b1 + loss_b2:.4f}")
                 self._phase_vol_start = None
-
-            # --- GATE: Phase B → Phase C ---
-            if p.run_phase_b and p.run_phase_c and p.confirm_between_phases:
-                self._raise_if_abort()
-                self.log_msg.emit("Phase B complete. Continuing to Phase C (Ramp Down).", "#F59E0B")
-                self._wait_ok(Step.FILTRATION, "Phase B → C: confirm pressure release")
 
             # --- PHASE C: RAMP DOWN ---
             if p.run_phase_c:
