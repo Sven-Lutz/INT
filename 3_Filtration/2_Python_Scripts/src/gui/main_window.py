@@ -33,6 +33,7 @@ from .frames.left_frame import LeftFrame
 from .frames.right_frame import RightFrame
 from .frames.top_frame import TopFrame
 from .frames.analysis_frame import AnalysisFrame
+from .frames.monitor_tab import EliteMonitorTab
 
 logger = logging.getLogger(__name__)
 
@@ -764,6 +765,15 @@ class MainWindow(Qtw.QMainWindow):
         self.tab_analysis = AnalysisFrame()
         self.tabs.addTab(self.tab_analysis, "RUN ANALYSIS")
 
+        # LIVE MONITOR: pyqtgraph charts driven by worker.telemetry during a run
+        try:
+            log_dir = ensure_dir(project_root() / "logs" / "monitor")
+            self.tab_monitor = EliteMonitorTab(log_dir=log_dir)
+            self.tabs.addTab(self.tab_monitor, "LIVE MONITOR")
+        except Exception as exc:
+            logger.warning("Could not create LIVE MONITOR tab: %s", exc)
+            self.tab_monitor = None
+
         apply_theme(self, "dark")
 
         self.master_grid.addWidget(self.main_container, 0, 0)
@@ -971,6 +981,9 @@ class MainWindow(Qtw.QMainWindow):
             worker.telemetry.connect(self.right.update_telemetry)
             worker.loss_updated.connect(self.top.set_loss_ml)
 
+            if self.tab_monitor is not None:
+                worker.telemetry.connect(self.tab_monitor.ingest_telemetry)
+
             # Filling-Banner Verbindungen
             worker.filling_requested.connect(self.right.show_filling_banner)
             self.right.filling_confirmed.connect(
@@ -1024,6 +1037,12 @@ class MainWindow(Qtw.QMainWindow):
                 self._run_log_handler = start_run_log(log_dir)
             except Exception as exc:
                 logger.warning("Could not start per-run log: %s", exc)
+
+            if self.tab_monitor is not None:
+                try:
+                    self.tab_monitor.start_logging()
+                except Exception as exc:
+                    logger.warning("Could not start monitor tab logging: %s", exc)
 
             thread.start()
 
@@ -1177,12 +1196,22 @@ class MainWindow(Qtw.QMainWindow):
         if self._run_log_handler is not None:
             stop_run_log(self._run_log_handler)
             self._run_log_handler = None
+        if self.tab_monitor is not None:
+            try:
+                self.tab_monitor.stop_logging()
+            except Exception as exc:
+                logger.warning("Could not stop monitor tab logging: %s", exc)
 
     def _on_failed(self, err):
         self._stop_deterministic(reason=str(err))
         if self._run_log_handler is not None:
             stop_run_log(self._run_log_handler)
             self._run_log_handler = None
+        if self.tab_monitor is not None:
+            try:
+                self.tab_monitor.stop_logging()
+            except Exception as exc:
+                logger.warning("Could not stop monitor tab logging: %s", exc)
         QMessageBox.critical(self, "Error", str(err))
 
     @Slot()
@@ -1699,15 +1728,44 @@ class MainWindow(Qtw.QMainWindow):
                     self.left.update_server_url(link)
             except Exception:
                 pass
-            # Show in status bar — always visible, easy to read from phone
+            # Permanent clickable WEB button in status bar — copies full URL on click.
             try:
                 sb = self.statusBar()
                 if sb is not None:
+                    btn = getattr(self, "_monitor_url_btn", None)
+                    if btn is None:
+                        btn = Qtw.QPushButton("WEB", sb)
+                        btn.setCursor(Qt.PointingHandCursor)
+                        btn.setFlat(True)
+                        btn.setStyleSheet(
+                            "QPushButton { background: #0B3B2E; color: #10B981; "
+                            "border: 1px solid #10B981; border-radius: 3px; "
+                            "padding: 2px 8px; font-family: \'Consolas\'; "
+                            "font-weight: bold; font-size: 11px; } "
+                            "QPushButton:hover { background: #10B981; color: #0B1120; }"
+                        )
+                        btn.clicked.connect(self._copy_monitor_url)
+                        sb.addPermanentWidget(btn)
+                        self._monitor_url_btn = btn
+                    btn.setToolTip(f"Click to copy: {link}")
                     sb.showMessage(
                         f"  MONITOR: {short}  |  Token: {mon.token_short()}\u2026"
-                        "  |  Full URL in terminal")
-            except Exception:
-                pass
+                    )
+            except Exception as exc:
+                logger.warning("Could not install monitor URL button: %s", exc)
+
+    def _copy_monitor_url(self) -> None:
+        mon = getattr(self, "monitor", None)
+        if mon is None or not hasattr(mon, "url"):
+            return
+        try:
+            link = mon.url()
+            app = Qtw.QApplication.instance()
+            if app is not None:
+                app.clipboard().setText(link)
+            self._toast(f"Monitor URL copied ({mon.lan_ip}:{mon.port})")
+        except Exception as exc:
+            logger.warning("Could not copy monitor URL: %s", exc)
 
     def _poll_realtime(self) -> None:
         now = time.monotonic()
