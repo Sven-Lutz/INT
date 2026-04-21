@@ -262,8 +262,8 @@ class ExperimentWorker(QObject):
         try:
             if self._store is not None:
                 self._store.write_event("OK_BUTTON_PRESSED", {"step": self._current_step.value})
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("confirm_ok: telemetry write failed: %s", exc)
 
     def set_filling_amount(self, ml: float) -> None:
         """Wird vom MainWindow aufgerufen wenn der Bediener die Füllmenge bestätigt hat."""
@@ -429,8 +429,8 @@ class ExperimentWorker(QObject):
         try:
             if self._store is not None:
                 self._store.write_sample(sample)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("_emit_sample: telemetry store write failed: %s", exc)
 
     def _safe_set_pressure_mbar(self, *, channel: int, mbar: float, ramp: bool = False) -> None:
         """Setzt Drucksollwert. ramp=False verhindert Hardware-Rampen (Software regelt selbst)."""

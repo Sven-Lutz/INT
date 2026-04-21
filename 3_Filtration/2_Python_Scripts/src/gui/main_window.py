@@ -22,6 +22,7 @@ from PySide6.QtWidgets import QMessageBox, QGraphicsOpacityEffect
 
 from src.gui.data.worker import ExperimentConfig
 from src.gui.data import ExperimentWorker, RunParams, worker
+from src.gui.data.logger import start_run_log, stop_run_log
 from src.gui.monitor.server import MonitorServer
 from src.gui.health import HealthEvaluator, HealthRules, SystemHealth
 from src.gui.style.theme import apply_theme
@@ -677,6 +678,8 @@ class MainWindow(Qtw.QMainWindow):
         self._thread: Optional[QThread] = None
         self._worker: Optional[ExperimentWorker] = None
         self._current_step: str = "IDLE"
+        self._bg_threads: list = []  # tracked daemon threads, joined on close
+        self._run_log_handler: Optional[logging.Handler] = None
         self._hold_active: bool = False
         self._hold_sources: Set[str] = set()
         self._last_good_comm_ts: Optional[float] = None
@@ -1014,6 +1017,14 @@ class MainWindow(Qtw.QMainWindow):
             self._worker = worker
             self._thread = thread
             self._set_running_ui(True)
+
+            # Per-run log: capture everything from this run to a timestamped file
+            try:
+                log_dir = str(ensure_dir(project_root() / "logs"))
+                self._run_log_handler = start_run_log(log_dir)
+            except Exception as exc:
+                logger.warning("Could not start per-run log: %s", exc)
+
             thread.start()
 
         except Exception as e:
@@ -1163,9 +1174,15 @@ class MainWindow(Qtw.QMainWindow):
             self._thread.wait(3000)
         self._worker = None
         self._thread = None
+        if self._run_log_handler is not None:
+            stop_run_log(self._run_log_handler)
+            self._run_log_handler = None
 
     def _on_failed(self, err):
         self._stop_deterministic(reason=str(err))
+        if self._run_log_handler is not None:
+            stop_run_log(self._run_log_handler)
+            self._run_log_handler = None
         QMessageBox.critical(self, "Error", str(err))
 
     @Slot()
@@ -1578,7 +1595,9 @@ class MainWindow(Qtw.QMainWindow):
                 self._worker_hold_start_best_effort(self._worker, p)
         else:
             logger.debug("MANUAL HOLD: Requesting BACKWASH")
-            threading.Thread(target=self._bg_hw_hold_start, args=(p,), daemon=True).start()
+            t = threading.Thread(target=self._bg_hw_hold_start, args=(p,), daemon=True)
+            self._bg_threads.append(t)
+            t.start()
 
     def _bg_hw_hold_start(self, p: float):
         with self._hw_mutex:
@@ -1603,7 +1622,9 @@ class MainWindow(Qtw.QMainWindow):
                 self._worker_hold_stop_best_effort(self._worker)
         else:
             logger.debug("MANUAL HOLD RELEASED: Shutting all valves")
-            threading.Thread(target=self._bg_hw_hold_stop, daemon=True).start()
+            t = threading.Thread(target=self._bg_hw_hold_stop, daemon=True)
+            self._bg_threads.append(t)
+            t.start()
 
     def _bg_hw_hold_stop(self):
         with self._hw_mutex:
@@ -1736,7 +1757,9 @@ class MainWindow(Qtw.QMainWindow):
 
         if not self._rt_hw_reading:
             self._rt_hw_reading = True
-            threading.Thread(target=self._do_hw_poll_bg, daemon=True).start()
+            t = threading.Thread(target=self._do_hw_poll_bg, daemon=True)
+            self._bg_threads.append(t)
+            t.start()
 
         # Periodischer Health-Check (alle 200ms via RT-Timer)
         if not getattr(self, '_is_booting', False):
@@ -1798,10 +1821,15 @@ class MainWindow(Qtw.QMainWindow):
             return cls()
 
     def closeEvent(self, event):
-        if hasattr(self, '_rt_timer'):
-            self._rt_timer.stop()
-        if hasattr(self, '_hold_setpoint_timer'):
-            self._hold_setpoint_timer.stop()
+        for attr in ('_master_timer', '_rt_timer', '_hold_setpoint_timer'):
+            t = getattr(self, attr, None)
+            if t is not None:
+                t.stop()
+        for t in getattr(self, '_bg_threads', []):
+            try:
+                t.join(timeout=2.0)
+            except Exception:
+                pass
         self._force_release_all("close")
         if getattr(self, '_thread', None):
             self._stop_deterministic(reason="close")

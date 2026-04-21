@@ -1,4 +1,5 @@
-project_path: C:/Users/Operator/PelliKAn/3_Filtration/2_Python_Scripts
+# project_path is resolved automatically at runtime via path_utils.project_root()
+# Remove this key or override it with an absolute path only if needed.
 logging:
   level: INFO
   format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

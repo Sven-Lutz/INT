@@ -198,7 +198,7 @@ class DeviceManager:
         self.set_pressure_setpoint_mbar(channel=channel, setpoint_mbar=float(val), ramp=ramp)
         
     def get_pressure(self, channel: int) -> float: return self.get_pressure_mbar(channel)
-    def get_pressure_setpoint(self, channel: int) -> float: return self.get_pressure_mbar(channel)
+    def get_pressure_setpoint(self, channel: int) -> float: return self._setpoints.get(int(channel), 0.0)
 
     def disconnect(self) -> None:
         if self.flow_sensor is not None:
