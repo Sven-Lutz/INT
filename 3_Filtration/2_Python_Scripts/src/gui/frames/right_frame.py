@@ -13,7 +13,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTextBrowser, QWidget, QProgressBar,
+    QPushButton, QTextBrowser, QWidget, QProgressBar, QInputDialog,
 )
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
 from src.gui.widgets.nudge_spinbox import NudgeSpinBox
@@ -455,6 +455,7 @@ class RightFrame(QFrame):
     manual_vent_clicked = Signal()
     ok_clicked = Signal()
     filling_confirmed = Signal(float)  # Bediener hat Filling bestätigt: Menge in ml
+    annotation_requested = Signal(str)  # operator mark: (text,)
 
     def __init__(self, config=None, parent=None):
         super().__init__(parent)
@@ -736,10 +737,27 @@ class RightFrame(QFrame):
         self.btn_stop.clicked.connect(self.stop_clicked.emit)
         self.btn_stop.setEnabled(False)
 
-        # Der Kalibrierungs-Button wurde hier entfernt!
         ctrl_lay.addWidget(self.btn_start)
         ctrl_lay.addWidget(self.btn_stop)
         lay.addLayout(ctrl_lay)
+
+        mark_row = QHBoxLayout()
+        mark_row.addStretch()
+        self.btn_mark = QPushButton("MARK EVENT")
+        self.btn_mark.setFixedHeight(26)
+        self.btn_mark.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_mark.setEnabled(False)
+        self.btn_mark.setStyleSheet(
+            "QPushButton { background: #1E0B30; color: #8B5CF6; "
+            "border: 1px solid #8B5CF6; border-radius: 3px; "
+            "padding: 2px 12px; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; } "
+            "QPushButton:hover:enabled { background: #8B5CF6; color: #FFF; } "
+            "QPushButton:disabled { background: #050914; color: #334155; "
+            "border-color: #1E293B; }")
+        self.btn_mark.clicked.connect(self._on_mark_clicked)
+        mark_row.addWidget(self.btn_mark)
+        lay.addLayout(mark_row)
 
     def _action_btn(self, text: str, color: str) -> QPushButton:
         btn = QPushButton(text)
@@ -867,10 +885,17 @@ class RightFrame(QFrame):
     def enable_ok(self, enabled: bool):
         self.btn_ok.setEnabled(enabled)
 
+    @Slot()
+    def _on_mark_clicked(self):
+        text, ok = QInputDialog.getText(self, "Mark Event", "Annotation:")
+        if ok and text.strip():
+            self.annotation_requested.emit(text.strip())
+
     def set_running(self, running: bool):
         self._running = running
         self.btn_start.setEnabled(not running)
         self.btn_stop.setEnabled(running)
+        self.btn_mark.setEnabled(running)
 
         if running:
             self._run_start = time.monotonic()

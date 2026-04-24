@@ -8,8 +8,8 @@ from typing import List, Optional
 from PySide6.QtCore import QTimer, QUrl, Signal, Slot, Qt
 from PySide6.QtGui import QCursor, QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QPushButton, QVBoxLayout, QWidget,
+    QComboBox, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
+    QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
 
 from src.gui.data.worker import RunParams
@@ -162,6 +162,58 @@ class LeftFrame(QFrame):
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
+
+        # ── RECIPE PICKER ──────────────────────────────────────────────────
+        recipe_frm = QFrame()
+        recipe_frm.setStyleSheet(
+            "QFrame { background: #0B1120; border-radius: 4px; "
+            "border: 1px solid #1E293B; border-top: 2px solid #F59E0B; "
+            "margin-bottom: 4px; }")
+        recipe_lay = QHBoxLayout(recipe_frm)
+        recipe_lay.setContentsMargins(8, 6, 8, 6)
+        recipe_lay.setSpacing(4)
+
+        lbl_recipe = QLabel("RECIPE:")
+        lbl_recipe.setStyleSheet(
+            "color: #F59E0B; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; border: none;")
+        self.cmb_recipes = QComboBox()
+        self.cmb_recipes.setStyleSheet(
+            "QComboBox { background: #111827; color: #E2E8F0; "
+            "font-family: 'Consolas'; font-size: 10px; "
+            "border: 1px solid #334155; border-radius: 3px; padding: 2px 4px; }"
+            "QComboBox::drop-down { border: none; }"
+            "QComboBox QAbstractItemView { background: #111827; color: #E2E8F0; "
+            "selection-background-color: #1E3A5F; font-size: 10px; }")
+        self.cmb_recipes.setSizePolicy(
+            self.cmb_recipes.sizePolicy().horizontalPolicy(),
+            self.cmb_recipes.sizePolicy().verticalPolicy())
+
+        _rcss = (
+            "QPushButton { background: #111827; color: #F59E0B; "
+            "border: 1px solid #F59E0B; border-radius: 3px; "
+            "padding: 2px 8px; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; } "
+            "QPushButton:hover { background: #F59E0B; color: #000; } "
+            "QPushButton:disabled { background: #050914; color: #334155; "
+            "border-color: #1E293B; }")
+        self.btn_recipe_load = QPushButton("LOAD")
+        self.btn_recipe_save = QPushButton("SAVE")
+        self.btn_recipe_del = QPushButton("DEL")
+        for b in (self.btn_recipe_load, self.btn_recipe_save, self.btn_recipe_del):
+            b.setStyleSheet(_rcss)
+
+        recipe_lay.addWidget(lbl_recipe)
+        recipe_lay.addWidget(self.cmb_recipes, 1)
+        recipe_lay.addWidget(self.btn_recipe_load)
+        recipe_lay.addWidget(self.btn_recipe_save)
+        recipe_lay.addWidget(self.btn_recipe_del)
+        root.addWidget(recipe_frm)
+
+        self.btn_recipe_load.clicked.connect(self._load_selected_recipe)
+        self.btn_recipe_save.clicked.connect(self._save_recipe_as)
+        self.btn_recipe_del.clicked.connect(self._delete_selected_recipe)
+        self._refresh_recipe_list()
 
         # MANUAL HOLD
         self.grp_manual = QFrame()
@@ -793,11 +845,12 @@ class LeftFrame(QFrame):
         """Restore last UI values from YAML on startup. Falls back to defaults on failure."""
         try:
             p = RunParams.load_yaml(self._params_path())
+            self._apply_run_params(p)
         except Exception as exc:
             logger.info("No saved params found (using defaults): %s", exc)
-            return
 
-        # Werte in die Spinboxen schreiben (blockSignals um Cascade zu vermeiden)
+    def _apply_run_params(self, p: RunParams) -> None:
+        """Push a RunParams object into all UI spinboxes / toggles."""
         widgets_map = [
             (self.sp_h2o, p.phase_b1_target_ml),
             (self.sp_fill_p, p.phase_0_pressure_mbar),
@@ -815,8 +868,6 @@ class LeftFrame(QFrame):
                 widget.blockSignals(False)
             except Exception:
                 pass
-
-        # Phase-Toggles
         for mod, active in [(self.mod_p0, p.run_phase_0), (self.mod_pa, p.run_phase_a),
                             (self.mod_pb, p.run_phase_b), (self.mod_pc, p.run_phase_c)]:
             try:
@@ -825,8 +876,6 @@ class LeftFrame(QFrame):
                     mod._apply_state_styles()
             except Exception:
                 pass
-
-        # Orchestrator Toggle
         try:
             self.chk_confirm_gates.blockSignals(True)
             self.chk_confirm_gates.setChecked(p.confirm_between_phases)
@@ -834,3 +883,92 @@ class LeftFrame(QFrame):
             self.chk_confirm_gates.blockSignals(False)
         except Exception:
             pass
+        self._recalc_math()
+
+    # -----------------------------------------------------------------
+    # RECIPE LIBRARY
+    # -----------------------------------------------------------------
+    @staticmethod
+    def _recipes_dir() -> "Path":
+        from pathlib import Path
+        from src.utils.path_utils import project_root
+        d = project_root() / "src" / "config" / "recipes"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _refresh_recipe_list(self) -> None:
+        from pathlib import Path
+        self.cmb_recipes.blockSignals(True)
+        current = self.cmb_recipes.currentText()
+        self.cmb_recipes.clear()
+        try:
+            names = sorted(
+                p.stem for p in self._recipes_dir().glob("*.yaml")
+            )
+            self.cmb_recipes.addItems(names)
+            idx = self.cmb_recipes.findText(current)
+            if idx >= 0:
+                self.cmb_recipes.setCurrentIndex(idx)
+        except Exception as exc:
+            logger.warning("Could not list recipes: %s", exc)
+        self.cmb_recipes.blockSignals(False)
+
+    def _load_selected_recipe(self) -> None:
+        name = self.cmb_recipes.currentText().strip()
+        if not name:
+            return
+        path = self._recipes_dir() / f"{name}.yaml"
+        try:
+            p = RunParams.load_yaml(str(path))
+            self._apply_run_params(p)
+            self._save_last_params()
+            logger.info("Recipe loaded: %s", name)
+        except Exception as exc:
+            QMessageBox.warning(self, "Load Recipe", f"Could not load '{name}':\n{exc}")
+
+    def _save_recipe_as(self) -> None:
+        default = self.cmb_recipes.currentText().strip() or "new_recipe"
+        name, ok = QInputDialog.getText(
+            self, "Save Recipe", "Recipe name:", text=default)
+        if not ok or not name.strip():
+            return
+        name = name.strip().replace(" ", "_")
+        path = self._recipes_dir() / f"{name}.yaml"
+        if path.exists():
+            reply = QMessageBox.question(
+                self, "Overwrite?",
+                f"Recipe '{name}' already exists. Overwrite?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            self.get_run_params().save_yaml(str(path))
+            self._refresh_recipe_list()
+            idx = self.cmb_recipes.findText(name)
+            if idx >= 0:
+                self.cmb_recipes.setCurrentIndex(idx)
+            logger.info("Recipe saved: %s", name)
+        except Exception as exc:
+            QMessageBox.warning(self, "Save Recipe", f"Could not save '{name}':\n{exc}")
+
+    def _delete_selected_recipe(self) -> None:
+        name = self.cmb_recipes.currentText().strip()
+        if not name:
+            return
+        reply = QMessageBox.question(
+            self, "Delete Recipe",
+            f"Delete recipe '{name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        path = self._recipes_dir() / f"{name}.yaml"
+        try:
+            path.unlink(missing_ok=True)
+            self._refresh_recipe_list()
+            logger.info("Recipe deleted: %s", name)
+        except Exception as exc:
+            QMessageBox.warning(self, "Delete Recipe", f"Could not delete '{name}':\n{exc}")

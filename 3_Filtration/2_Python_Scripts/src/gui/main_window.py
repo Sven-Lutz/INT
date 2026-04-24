@@ -8,6 +8,8 @@ import math
 from collections import deque
 from typing import Deque, Optional, Set, Tuple, Any
 
+from pathlib import Path
+
 import PySide6.QtWidgets as Qtw
 from PySide6.QtCore import (
     QObject, QEvent, Qt, QThread, QTimer, Signal,
@@ -34,6 +36,7 @@ from .frames.right_frame import RightFrame
 from .frames.top_frame import TopFrame
 from .frames.analysis_frame import AnalysisFrame
 from .frames.monitor_tab import EliteMonitorTab
+from .frames.compare_frame import CompareFrame
 
 logger = logging.getLogger(__name__)
 
@@ -681,6 +684,7 @@ class MainWindow(Qtw.QMainWindow):
         self._current_step: str = "IDLE"
         self._bg_threads: list = []  # tracked daemon threads, joined on close
         self._run_log_handler: Optional[logging.Handler] = None
+        self._last_run_dir: Optional[Path] = None
         self._hold_active: bool = False
         self._hold_sources: Set[str] = set()
         self._last_good_comm_ts: Optional[float] = None
@@ -773,6 +777,14 @@ class MainWindow(Qtw.QMainWindow):
         except Exception as exc:
             logger.warning("Could not create LIVE MONITOR tab: %s", exc)
             self.tab_monitor = None
+
+        # COMPARE RUNS: overlay multiple telemetry.csv traces
+        try:
+            self.tab_compare = CompareFrame()
+            self.tabs.addTab(self.tab_compare, "COMPARE RUNS")
+        except Exception as exc:
+            logger.warning("Could not create COMPARE RUNS tab: %s", exc)
+            self.tab_compare = None
 
         apply_theme(self, "dark")
 
@@ -983,6 +995,14 @@ class MainWindow(Qtw.QMainWindow):
 
             if self.tab_monitor is not None:
                 worker.telemetry.connect(self.tab_monitor.ingest_telemetry)
+                worker.annotation_placed.connect(self.tab_monitor.add_annotation)
+
+            # Annotation: MARK button → worker → live chart
+            self.right.annotation_requested.connect(worker.make_annotation)
+
+            # Track run dir for PDF report and compare-tab refresh
+            worker.run_started.connect(
+                lambda p: setattr(self, "_last_run_dir", Path(p)))
 
             # Filling-Banner Verbindungen
             worker.filling_requested.connect(self.right.show_filling_banner)
@@ -1201,6 +1221,12 @@ class MainWindow(Qtw.QMainWindow):
                 self.tab_monitor.stop_logging()
             except Exception as exc:
                 logger.warning("Could not stop monitor tab logging: %s", exc)
+        self._spawn_run_report()
+        if self.tab_compare is not None:
+            try:
+                self.tab_compare.refresh()
+            except Exception as exc:
+                logger.warning("Could not refresh compare tab: %s", exc)
 
     def _on_failed(self, err):
         self._stop_deterministic(reason=str(err))
@@ -1212,7 +1238,31 @@ class MainWindow(Qtw.QMainWindow):
                 self.tab_monitor.stop_logging()
             except Exception as exc:
                 logger.warning("Could not stop monitor tab logging: %s", exc)
+        if self.tab_compare is not None:
+            try:
+                self.tab_compare.refresh()
+            except Exception as exc:
+                logger.warning("Could not refresh compare tab: %s", exc)
         QMessageBox.critical(self, "Error", str(err))
+
+    def _spawn_run_report(self) -> None:
+        """Generate a PDF run report in a background thread (non-blocking)."""
+        run_dir = self._last_run_dir
+        if run_dir is None or not run_dir.is_dir():
+            return
+
+        def _bg():
+            try:
+                from src.gui.data.report import generate_report
+                pdf = generate_report(run_dir)
+                if pdf:
+                    logger.info("PDF report ready: %s", pdf)
+            except Exception as exc:
+                logger.warning("PDF report generation failed: %s", exc)
+
+        t = threading.Thread(target=_bg, daemon=True, name="pdf-report")
+        t.start()
+        self._bg_threads.append(t)
 
     @Slot()
     def _on_thread_finished(self):

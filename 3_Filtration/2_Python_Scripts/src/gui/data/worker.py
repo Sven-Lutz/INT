@@ -220,6 +220,11 @@ class ExperimentWorker(QObject):
     filling_requested = Signal(float)
     # B1/B2 Detail-Fortschritt: (phase_id, current_ml, target_ml)
     phase_detail_updated = Signal(str, float, float)
+    # Annotation flow: main thread → worker (write to store); worker → main thread (chart marker)
+    make_annotation = Signal(str)
+    annotation_placed = Signal(float, str)
+    # Emits the run_dir path once the telemetry store is initialised
+    run_started = Signal(str)
 
     def __init__(self, cfg: ExperimentConfig):
         super().__init__()
@@ -253,6 +258,8 @@ class ExperimentWorker(QObject):
             self._on_cmd_stop_backwash_hold,
             Qt.ConnectionType.QueuedConnection)
         self.cmd_abort.connect(self._on_cmd_abort, Qt.ConnectionType.QueuedConnection)
+        self.make_annotation.connect(
+            self._on_make_annotation, Qt.ConnectionType.QueuedConnection)
 
     def set_params(self, params: RunParams) -> None:
         self._params = params
@@ -309,6 +316,16 @@ class ExperimentWorker(QObject):
                         "reason": self._abort_reason, "step": self._current_step.value})
         except Exception:
             pass
+
+    @Slot(str)
+    def _on_make_annotation(self, text: str) -> None:
+        t = self._store.t_s() if self._store is not None else 0.0
+        if self._store is not None:
+            try:
+                self._store.write_event("ANNOTATION", {"text": str(text)})
+            except Exception as exc:
+                logger.warning("Annotation write failed: %s", exc)
+        self.annotation_placed.emit(float(t), str(text))
 
     def _should_abort(self) -> bool:
         return self._abort_event.is_set()
@@ -497,6 +514,7 @@ class ExperimentWorker(QObject):
                 meta = build_run_meta(experiment_config=self.cfg, run_params=p)
                 self._store = RunTelemetryStore(meta=meta)
                 self._store.write_event("RUN_START", {"step": self._current_step.value})
+                self.run_started.emit(str(self._store.paths.run_dir))
             except Exception:
                 self._store = None
 
