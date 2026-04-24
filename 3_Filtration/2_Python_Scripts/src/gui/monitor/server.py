@@ -314,8 +314,19 @@ body { padding: 12px; overflow-x: hidden; }
 </div>
 
 <script>
-const qs = new URLSearchParams(location.search);
-const TOKEN = qs.get("token") || "";
+// Token: read from URL once, persist in sessionStorage, then strip from URL.
+// This prevents the token appearing in browser history or referer headers.
+(function() {
+  const qs = new URLSearchParams(location.search);
+  const t = qs.get("token");
+  if (t) {
+    sessionStorage.setItem("chonker_token", t);
+    qs.delete("token");
+    const clean = location.pathname + (qs.toString() ? "?" + qs.toString() : "");
+    history.replaceState(null, "", clean);
+  }
+})();
+const TOKEN = sessionStorage.getItem("chonker_token") || "";
 
 // ── Chart.js setup ──────────────────────────────────────────────
 Chart.defaults.color = '#64748B';
@@ -659,7 +670,16 @@ class MonitorServer:
                 return self._send(404, b"Not Found", "text/plain; charset=utf-8")
 
             def log_message(self, _format: str, *args: Any) -> None:
-                return
+                # Suppress stdout spam but forward 4xx/5xx to the module logger
+                try:
+                    msg = _format % args if args else str(_format)
+                    code_str = args[1] if len(args) > 1 else ""
+                    if str(code_str).startswith(("4", "5")):
+                        logger.warning("MonitorServer HTTP %s — %s", code_str, self.path)
+                    else:
+                        logger.debug("MonitorServer: %s", msg)
+                except Exception:
+                    pass
 
         httpd = ThreadingHTTPServer((self.host, self.port), Handler)
         httpd.daemon_threads = True

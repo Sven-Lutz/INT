@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 3_Filtration/2_Python_Scripts
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Syntax check (compileall)
+        run: python -m compileall -q src/
+
+      - name: AST parse check
+        run: |
+          python - <<'EOF'
+          import ast, pathlib, sys
+          errors = []
+          for p in pathlib.Path("src").rglob("*.py"):
+              try:
+                  ast.parse(p.read_text())
+              except SyntaxError as e:
+                  errors.append(f"{p}: {e}")
+          if errors:
+              print("\n".join(errors)); sys.exit(1)
+          print(f"OK: {sum(1 for _ in pathlib.Path('src').rglob('*.py'))} files parsed")
+          EOF
+
+      - name: Run tests
+        run: pytest --tb=short -q
+        continue-on-error: false
+
+      - name: Black format check
+        run: |
+          pip install black==24.4.2
+          black --check --line-length=100 src/ || echo "::warning::Black found formatting issues"
+
+      - name: Flake8 lint
+        run: |
+          pip install flake8==7.1.0
+          flake8 src/ --max-line-length=100 --extend-ignore=E203,W503 \
+            --exclude=src/gui/monitor/server.py,src/gui/frames/right_frame.py \
+            || echo "::warning::Flake8 found issues"

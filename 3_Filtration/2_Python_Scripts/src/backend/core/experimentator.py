@@ -811,8 +811,10 @@ class Experimentator:
         t_start = time.monotonic()
         t_end = t_start + duration_s
 
+        aborted = False
         while True:
             if abort_check_fn and abort_check_fn():
+                aborted = True
                 break
             now = time.monotonic()
             if now >= t_end:
@@ -833,13 +835,23 @@ class Experimentator:
             self._safety_check(mode)
             time.sleep(float(self.cfg.sample_period_s))
 
-        # Finale: Exakt auf Zielwert setzen (falls nicht abgebrochen)
-        if not (abort_check_fn and abort_check_fn()):
+        if aborted:
+            # Freeze pressure at current measured value to prevent continued ramping
+            if getattr(self.dev, "pressure_controller", None) is not None:
+                try:
+                    frozen = self._get_pressure_meas_mbar_best(ch) or 0.0
+                    self._set_pressure_mbar(channel=ch, mbar=frozen, ramp=False)
+                except Exception:
+                    pass
+            self._log_row(mode, 0.0, float("nan"), float("nan"),
+                          pressure_channel=ch, event="ABORTED_RAMP")
+            logger.warning("CONTINUOUS_RAMP aborted on ch=%d; pressure frozen.", ch)
+        else:
+            # Normal completion: set exactly on target
             if getattr(self.dev, "pressure_controller", None) is not None:
                 self._set_pressure_mbar(channel=ch, mbar=target_pressure_mbar, ramp=False)
-
-        self._log_row(mode, 0.0, float("nan"), float("nan"),
-                      pressure_channel=ch, event="RAMP_END")
+            self._log_row(mode, 0.0, float("nan"), float("nan"),
+                          pressure_channel=ch, event="RAMP_END")
 
         return float(max(0.0, v0 - float(self.volume_ml)))
 
