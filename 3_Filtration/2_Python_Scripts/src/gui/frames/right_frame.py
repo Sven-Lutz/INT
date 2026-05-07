@@ -28,13 +28,11 @@ logger = logging.getLogger(__name__)
 class ReactorSphereWidget(QFrame):
     """Animated digital twin of the filter cell.
 
-    Single public entry point is ``update(vol_ml, phase, membrane_ml, max_ml)`` —
-    volume text and fill graphic are always derived from the same input, so the
-    two can never desync. ``set_state`` / ``set_volume`` remain as back-compat
-    shims for older callers.
+    Single public entry point is ``update_state(vol_ml, phase)`` —
+    volume text and fill graphic are always derived from the same input.
+    ``set_state`` / ``set_volume`` remain as back-compat shims.
     """
 
-    # Default membrane / max-cell capacity used when callers forget to pass them.
     _DEFAULT_MEMBRANE_ML = 3500.0
     _DEFAULT_MAX_ML = 7000.0
 
@@ -45,20 +43,26 @@ class ReactorSphereWidget(QFrame):
         self._fill_pct = 0.0
         self._fill_target = 0.0
         self._color = QColor("#00E5FF")
+        self._color_target = QColor("#00E5FF")
         self._volume_ml = 0.0
         self._phase_label = "IDLE"
         self._wave_phase = 0.0
         self._membrane_ml = 3500.0
         self._max_ml = 7000.0
 
+        self._bubbles: list = []
+        self._bubble_spawn_accum: float = 0.0
+        self._overflow_pulse: float = 0.0
+
+        self._p_setpoint: float = 0.0
+        self._p_meas: float = 0.0
+        self._target_vol_ml: float = 0.0
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(40)       # ~25 fps
-
-    # ── animation tick ────────────────────────────────────────────────────
+        self._timer.start(40)      # ~25 fps
 
     def _tick(self):
-        # Fill level animator.
         diff = self._fill_target - self._fill_pct
         if abs(diff) > 0.002:
             self._fill_pct += diff * 0.12
@@ -71,40 +75,35 @@ class ReactorSphereWidget(QFrame):
             cr = int(self._color.red() + (self._color_target.red() - self._color.red()) * 0.18)
             cg = int(self._color.green() + (self._color_target.green() - self._color.green()) * 0.18)
             cb = int(self._color.blue() + (self._color_target.blue() - self._color.blue()) * 0.18)
-            nxt = QColor(cr, cg, cb)
-            if abs(cr - self._color_target.red()) < 3 and \
-               abs(cg - self._color_target.green()) < 3 and \
-               abs(cb - self._color_target.blue()) < 3:
+            if (abs(cr - self._color_target.red()) < 3 and
+                    abs(cg - self._color_target.green()) < 3 and
+                    abs(cb - self._color_target.blue()) < 3):
                 self._color = QColor(self._color_target)
             else:
-                self._color = nxt
+                self._color = QColor(cr, cg, cb)
 
         # Bubble physics + spawn (only during fluid phases with visible liquid).
         fluid_phase = ("FILL" in self._phase_label or "BACKWASH" in self._phase_label
                        or "PHASE_B" in self._phase_label or "FILTRATION" in self._phase_label)
         if fluid_phase and self._fill_pct > 0.05:
-            self._bubble_spawn_accum += 0.04  # 40 ms/tick → ~1 bubble per 0.8 s
+            self._bubble_spawn_accum += 0.04
             while self._bubble_spawn_accum >= 0.8:
                 self._bubble_spawn_accum -= 0.8
                 self._bubbles.append({
-                    "x": random.uniform(0.15, 0.85),   # normalized 0..1 (sphere x-axis)
-                    "y": 0.02,                          # starts near bottom of liquid
-                    "r": random.uniform(1.5, 3.5),     # radius in px
-                    "vy": random.uniform(0.010, 0.022), # rise speed (fraction / tick)
+                    "x": random.uniform(0.15, 0.85),
+                    "y": 0.02,
+                    "r": random.uniform(1.5, 3.5),
+                    "vy": random.uniform(0.010, 0.022),
                     "alpha": random.randint(60, 130),
                 })
-        # Advance bubbles regardless of phase (they just finish their run).
         survivors = []
         for b in self._bubbles:
             b["y"] += b["vy"]
-            # Bubble dies when it reaches the liquid surface.
             if b["y"] < self._fill_pct - 0.02:
                 survivors.append(b)
         self._bubbles = survivors
 
-        # Overflow pulse (slow sine).
         self._overflow_pulse = (self._overflow_pulse + 0.12) % (2 * math.pi)
-
         self.update()
 
     def configure_calibration(self, membrane_ml: float, max_ml: float) -> None:
@@ -113,6 +112,10 @@ class ReactorSphereWidget(QFrame):
 
     @staticmethod
     def _volume_to_fill(vol_ml: float, membrane_ml: float, max_ml: float) -> float:
+        """Map volume to 0..1 fill level anchored at the membrane.
+
+        0 mL → 0.0, membrane_ml → 0.5, max_ml → 1.0, clamped.
+        """
         v = max(0.0, float(vol_ml))
         if membrane_ml <= 0 or max_ml <= membrane_ml:
             return 0.0
@@ -128,7 +131,7 @@ class ReactorSphereWidget(QFrame):
         self.set_state(fill, phase)
 
     def set_state(self, target_fill: float, phase: str):
-        """Legacy API kept for callers that pass a pre-computed fill %."""
+        """Set fill target and phase color."""
         self._phase_label = str(phase).upper()
         self._color_target = self._phase_color(self._phase_label)
         self._fill_target = max(0.0, min(1.0, float(target_fill)))
@@ -139,26 +142,12 @@ class ReactorSphereWidget(QFrame):
         self._volume_ml = v
         self._fill_target = self._volume_to_fill(v, self._membrane_ml, self._max_ml)
 
-    # ── helpers ───────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _volume_to_fill(vol_ml: float, membrane_ml: float, max_ml: float) -> float:
-        """Map a cumulative volume to a 0..1 fill level anchored at the membrane.
-
-        0 mL → 0.0, membrane_ml → 0.5, max_ml → 1.0, clamped. Non-linear on purpose:
-        operators read the dashed membrane line as the "midpoint" reference.
-        """
-        v = max(0.0, float(vol_ml))
-        if membrane_ml <= 0 or max_ml <= membrane_ml:
-            return 0.0
-        if v <= membrane_ml:
-            return max(0.0, 0.5 * v / membrane_ml)
-        upper = max_ml - membrane_ml
-        return min(1.0, 0.5 + 0.5 * (v - membrane_ml) / upper)
+    def set_target_volume(self, target_ml: float):
+        """Set the B1 target-fill dashed gold indicator."""
+        self._target_vol_ml = max(0.0, float(target_ml))
 
     @staticmethod
     def _short_phase(phase: str) -> str:
-        """Short label for the in-sphere phase pill (P0 / A / B1 / B2 / C)."""
         up = str(phase).upper()
         if "FILL" in up or "PHASE_0" in up or "BACKWASH" in up:
             return "P0"
@@ -205,9 +194,7 @@ class ReactorSphereWidget(QFrame):
         cy = (h - 30) / 2
         sphere_rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
 
-        # 1. Outer glow rings (phase color, pressure-reactive alpha)
-        # Glow scales with measured pressure relative to setpoint (falls back to
-        # a reference of 2000 mbar so the sphere still glows in hold/idle).
+        # 1. Outer glow rings (pressure-reactive alpha)
         ref = self._p_setpoint if self._p_setpoint > 1.0 else 2000.0
         pr_factor = max(0.35, min(1.6, self._p_meas / ref)) if ref > 0 else 0.35
         p.setPen(Qt.PenStyle.NoPen)
@@ -229,7 +216,6 @@ class ReactorSphereWidget(QFrame):
         # 3. Liquid fill with animated sine-wave surface
         if self._fill_pct > 0.01:
             liquid_top_y = (cy + radius) - (radius * 2) * self._fill_pct
-            # Wave amplitude — larger near 50%, calm near empty/full
             wave_amp = radius * 0.028 * \
                 math.sin(math.pi * min(1.0, self._fill_pct * 2)) * min(1.0, self._fill_pct * 6)
 
@@ -241,10 +227,9 @@ class ReactorSphereWidget(QFrame):
             liq_grad.setColorAt(0.0, c_top)
             liq_grad.setColorAt(1.0, c_bot)
 
-            # Build wave path (clipped to sphere)
             liq_path = QPainterPath()
             liq_path.moveTo(cx - radius, cy + radius)
-            liq_path.arcTo(sphere_rect, 180, 180)  # bottom arc, right then left
+            liq_path.arcTo(sphere_rect, 180, 180)
             liq_path.lineTo(cx + radius, liquid_top_y)
             steps = 28
             for i in range(steps, -1, -1):
@@ -263,15 +248,12 @@ class ReactorSphereWidget(QFrame):
             p.setBrush(liq_grad)
             p.drawPath(liq_path)
 
-            # Surface sheen on wave top
             p.setBrush(QColor(255, 255, 255, 28))
             p.drawRect(QRectF(cx - radius, liquid_top_y - 2, radius * 2, 5))
 
-            # B3 — rising bubbles (inside the clip; only below the surface)
             if self._bubbles:
                 for b in self._bubbles:
                     bx = (cx - radius) + b["x"] * (radius * 2)
-                    # b["y"] is a 0..1 fill-fraction coordinate (same scale as _fill_pct)
                     by = (cy + radius) - (radius * 2) * b["y"]
                     bc = QColor(255, 255, 255, b["alpha"])
                     p.setBrush(bc)
@@ -310,10 +292,9 @@ class ReactorSphereWidget(QFrame):
                 p.setPen(QColor("#F59E0B"))
                 p.setFont(QFont("Consolas", 6, QFont.Weight.Bold))
                 p.drawText(QRectF(cx + radius + 7, ty - 8, 55, 16),
-                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                           "TGT")
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "TGT")
 
-        # 6. Sphere outline (phase-colored, subtle — or pulsing red on overflow)
+        # 6. Sphere outline (pulsing red on overflow, phase-colored otherwise)
         overflow = self._volume_ml > self._max_ml > 0
         if overflow:
             pulse_a = 150 + int(90 * math.sin(self._overflow_pulse))
@@ -338,11 +319,10 @@ class ReactorSphereWidget(QFrame):
         p.drawEllipse(sphere_rect)
         p.restore()
 
-        # 7b. Phase pill — compact short-name tag above the volume number
+        # 7b. Phase pill tag above volume number
         short = self._short_phase(self._phase_label)
         if short:
-            pill_w = 36.0
-            pill_h = 13.0
+            pill_w, pill_h = 36.0, 13.0
             pill_x = cx - pill_w / 2
             pill_y = cy - 38
             pill_bg = QColor(self._color)
@@ -1000,11 +980,6 @@ class RightFrame(QFrame):
         self._progress_target_ml = max(0.01, float(target_ml))
         self.frm_progress.show()
         self._update_progress_bar()
-        # Also drive the sphere's dashed gold goal line (B1 — Tier B1).
-        try:
-            self.sandglass.set_target_volume(float(target_ml))
-        except Exception:
-            pass
 
     def _update_progress_phase(self, phase: str):
         """Aktualisiert Phase-Label und Farbe des Fortschrittsbalkens."""
