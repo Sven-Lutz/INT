@@ -159,13 +159,20 @@ def _pid_is_alive(pid: int) -> bool:
     if sys.platform.startswith("win"):
         try:
             import ctypes
+            import ctypes.wintypes
 
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
             handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
-            if handle:
-                ctypes.windll.kernel32.CloseHandle(handle)
-                return True
-            return False
+            if not handle:
+                return False
+            exit_code = ctypes.wintypes.DWORD()
+            alive = bool(
+                ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                and exit_code.value == STILL_ACTIVE
+            )
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return alive
         except Exception:
             return False
     else:
