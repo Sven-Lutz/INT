@@ -42,28 +42,14 @@ class ReactorSphereWidget(QFrame):
         super().__init__(parent)
         self.setMinimumSize(180, 210)
         self.setStyleSheet("background: transparent;")
-        # An empty cell starts empty — not half-full.
-        self._fill_pct = 0.0        # current animated fill (0–1)
-        self._fill_target = 0.0     # target fill derived from volume
-        idle_color = QColor("#0EA5E9")
-        self._color = idle_color            # animated phase color
-        self._color_target = idle_color     # target for interp
+        self._fill_pct = 0.0
+        self._fill_target = 0.0
+        self._color = QColor("#00E5FF")
         self._volume_ml = 0.0
         self._phase_label = "IDLE"
         self._wave_phase = 0.0
-        # Remembered capacities so plain set_volume() / set_state() still work.
-        self._membrane_ml = self._DEFAULT_MEMBRANE_ML
-        self._max_ml = self._DEFAULT_MAX_ML
-        # Live pressure (drives glow intensity in paintEvent).
-        self._p_meas: float = 0.0
-        self._p_setpoint: float = 0.0
-        # B1 target volume (drives dashed gold target line).
-        self._target_vol_ml: float = 0.0
-        # Rising-bubble particle system (active only during fluid phases).
-        self._bubbles: list[dict] = []
-        self._bubble_spawn_accum: float = 0.0
-        # Overflow pulse timer.
-        self._overflow_pulse: float = 0.0
+        self._membrane_ml = 3500.0
+        self._max_ml = 7000.0
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -121,32 +107,25 @@ class ReactorSphereWidget(QFrame):
 
         self.update()
 
-    # ── public API ────────────────────────────────────────────────────────
+    def configure_calibration(self, membrane_ml: float, max_ml: float) -> None:
+        self._membrane_ml = max(1.0, float(membrane_ml))
+        self._max_ml = max(self._membrane_ml + 1.0, float(max_ml))
 
-    def update_state(self, vol_ml: float, phase: str,
-                     membrane_ml: float | None = None,
-                     max_ml: float | None = None) -> None:
-        """Single source of truth: text and fill are always derived together."""
+    @staticmethod
+    def _volume_to_fill(vol_ml: float, membrane_ml: float, max_ml: float) -> float:
         v = max(0.0, float(vol_ml))
-        self._volume_ml = v
-        self._phase_label = str(phase).upper()
-        self._color_target = self._phase_color(self._phase_label)
-        if membrane_ml is not None:
-            self._membrane_ml = float(membrane_ml)
-        if max_ml is not None:
-            self._max_ml = float(max_ml)
-        self._fill_target = self._volume_to_fill(v, self._membrane_ml, self._max_ml)
+        if membrane_ml <= 0 or max_ml <= membrane_ml:
+            return 0.0
+        if v <= membrane_ml:
+            return max(0.0, 0.5 * v / membrane_ml)
+        upper = max_ml - membrane_ml
+        return min(1.0, 0.5 + 0.5 * (v - membrane_ml) / upper)
 
-    def set_pressure(self, p_meas: float, p_setpoint: float = 0.0) -> None:
-        """Live pressure (mbar). Drives glow-ring brightness in paintEvent."""
-        self._p_meas = max(0.0, float(p_meas))
-        self._p_setpoint = max(0.0, float(p_setpoint))
-
-    def set_target_volume(self, target_ml: float) -> None:
-        """Phase-B1 target (mL). Drives the dashed gold goal line."""
-        self._target_vol_ml = max(0.0, float(target_ml))
-
-    # ── back-compat shims (route through update_state) ────────────────────
+    def update_state(self, vol_ml: float, phase: str) -> None:
+        """Single authoritative entry point — volume drives both text and fill graphic."""
+        self._volume_ml = float(vol_ml)
+        fill = self._volume_to_fill(vol_ml, self._membrane_ml, self._max_ml)
+        self.set_state(fill, phase)
 
     def set_state(self, target_fill: float, phase: str):
         """Legacy API kept for callers that pass a pre-computed fill %."""
@@ -698,6 +677,7 @@ class RightFrame(QFrame):
         left_viz_lay.setContentsMargins(0, 0, 0, 0)
 
         self.sandglass = ReactorSphereWidget()
+        self.sandglass.configure_calibration(self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
         left_viz_lay.addWidget(self.sandglass)
 
         self.btn_calib = QPushButton("⌖ SET MEMBRANE")
@@ -989,11 +969,7 @@ class RightFrame(QFrame):
         self._progress_current_ml = 0.0
         self._b1_target_ml = 0.0
         self._b2_target_ml = 0.0
-        self.sandglass.update_state(
-            0.0, "IDLE",
-            membrane_ml=self._membrane_vol_ml,
-            max_ml=self.MAX_CELL_VOLUME_ML,
-        )
+        self.sandglass.update_state(0.0, "IDLE")
         self.trapezoid.set_state(0.0, 0.0, "IDLE")
         self.frm_progress.hide()
         self.bar_progress.setValue(0)
@@ -1153,13 +1129,11 @@ class RightFrame(QFrame):
     def _calibrate_membrane(self):
         """Pin current volume reading as the 50% fill anchor (membrane level)."""
         self._membrane_vol_ml = self._current_vol_ml
-        logger.info(
-            "Membrane calibration set to %.2f mL", self._membrane_vol_ml)
+        self.sandglass.configure_calibration(self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
+        logger.info("Membrane calibration set to %.2f mL", self._membrane_vol_ml)
         self.append_log(
-            f"SYS: Membrane calibrated → {self._membrane_vol_ml:.2f} mL = 50%",
-            "#00E5FF")
-        # Re-render immediately so the sphere snaps to the new anchor.
-        self.update_telemetry({"volume_ml": self._current_vol_ml, "step": self._ui_phase})
+            f"SYS: Membrane calibrated → {self._membrane_vol_ml:.2f} mL = 50%", "#00E5FF")
+        self.sandglass.update_state(self._current_vol_ml, self._ui_phase)
 
     @Slot(dict)
     def update_telemetry(self, sample: dict):
@@ -1183,21 +1157,14 @@ class RightFrame(QFrame):
         p1_set = _to_float(p1_set_raw)
 
         vol = _to_float(sample.get("volume_ml", 0.0))
-        self._current_vol_ml = vol  # Speichern für Kalibrierung
-
+        self._current_vol_ml = vol
         step = str(sample.get("step", "IDLE")).upper()
 
         self.trapezoid.set_state(p1, p1_set, self._ui_phase)
 
-        # Single source of truth: volume text and fill graphic always agree.
-        sphere_phase = self._ui_phase if "PHASE" in self._ui_phase else step
-        self.sandglass.update_state(
-            vol, sphere_phase,
-            membrane_ml=self._membrane_vol_ml,
-            max_ml=self.MAX_CELL_VOLUME_ML,
-        )
-        # B2 — pressure modulates the outer-glow intensity.
-        self.sandglass.set_pressure(p1, p1_set)
+        # Sphere: update_state handles fill calculation via _volume_to_fill internally.
+        display_phase = self._ui_phase if self._ui_phase not in ("IDLE", "") else step
+        self.sandglass.update_state(vol, display_phase)
 
         # Live flow rate + ETA display in progress panel
         flow_raw = sample.get("flow")
@@ -1259,9 +1226,19 @@ class RightFrame(QFrame):
     # -----------------------------------------------------------------
     @Slot(str, float, float)
     def update_phase_detail(self, phase_id: str, current: float, target: float):
-        """Aktualisiert B1/B2 Detail-Labels und Balken."""
         pid = phase_id.upper()
-        if pid == "B1":
+        if pid == "P0":
+            self.frm_progress.show()
+            if target > 0:
+                pct = min(100.0, current / target * 100.0)
+                self.lbl_b1_detail.setText(f"FILL: {current:.1f} / {target:.1f} ml ({pct:.0f}%)")
+                self.bar_b1.setValue(int(pct * 10))
+                self.lbl_prog_values.setText(f"{current:.1f} / {target:.1f} mL ({pct:.0f}%)")
+                self.bar_progress.setValue(int(pct * 10))
+            else:
+                self.lbl_b1_detail.setText(f"FILL: {current:.1f} ml")
+            self.bar_b1.show()
+        elif pid == "B1":
             self._b1_current_ml = float(current)
             self._b1_target_ml = float(target)
             if target > 0:

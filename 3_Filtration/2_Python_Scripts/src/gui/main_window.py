@@ -35,7 +35,6 @@ from .frames.left_frame import LeftFrame
 from .frames.right_frame import RightFrame
 from .frames.top_frame import TopFrame
 from .frames.analysis_frame import AnalysisFrame
-from .frames.monitor_tab import EliteMonitorTab
 from .frames.compare_frame import CompareFrame
 
 logger = logging.getLogger(__name__)
@@ -769,15 +768,6 @@ class MainWindow(Qtw.QMainWindow):
         self.tab_analysis = AnalysisFrame()
         self.tabs.addTab(self.tab_analysis, "RUN ANALYSIS")
 
-        # LIVE MONITOR: pyqtgraph charts driven by worker.telemetry during a run
-        try:
-            log_dir = ensure_dir(project_root() / "logs" / "monitor")
-            self.tab_monitor = EliteMonitorTab(log_dir=log_dir)
-            self.tabs.addTab(self.tab_monitor, "LIVE MONITOR")
-        except Exception as exc:
-            logger.warning("Could not create LIVE MONITOR tab: %s", exc)
-            self.tab_monitor = None
-
         # COMPARE RUNS: overlay multiple telemetry.csv traces
         try:
             self.tab_compare = CompareFrame()
@@ -993,10 +983,6 @@ class MainWindow(Qtw.QMainWindow):
             worker.telemetry.connect(self.right.update_telemetry)
             worker.loss_updated.connect(self.top.set_loss_ml)
 
-            if self.tab_monitor is not None:
-                worker.telemetry.connect(self.tab_monitor.ingest_telemetry)
-                worker.annotation_placed.connect(self.tab_monitor.add_annotation)
-
             # Annotation: MARK button → worker → live chart
             self.right.annotation_requested.connect(worker.make_annotation)
 
@@ -1057,12 +1043,6 @@ class MainWindow(Qtw.QMainWindow):
                 self._run_log_handler = start_run_log(log_dir)
             except Exception as exc:
                 logger.warning("Could not start per-run log: %s", exc)
-
-            if self.tab_monitor is not None:
-                try:
-                    self.tab_monitor.start_logging()
-                except Exception as exc:
-                    logger.warning("Could not start monitor tab logging: %s", exc)
 
             thread.start()
 
@@ -1216,11 +1196,6 @@ class MainWindow(Qtw.QMainWindow):
         if self._run_log_handler is not None:
             stop_run_log(self._run_log_handler)
             self._run_log_handler = None
-        if self.tab_monitor is not None:
-            try:
-                self.tab_monitor.stop_logging()
-            except Exception as exc:
-                logger.warning("Could not stop monitor tab logging: %s", exc)
         self._spawn_run_report()
         if self.tab_compare is not None:
             try:
@@ -1233,11 +1208,6 @@ class MainWindow(Qtw.QMainWindow):
         if self._run_log_handler is not None:
             stop_run_log(self._run_log_handler)
             self._run_log_handler = None
-        if self.tab_monitor is not None:
-            try:
-                self.tab_monitor.stop_logging()
-            except Exception as exc:
-                logger.warning("Could not stop monitor tab logging: %s", exc)
         if self.tab_compare is not None:
             try:
                 self.tab_compare.refresh()

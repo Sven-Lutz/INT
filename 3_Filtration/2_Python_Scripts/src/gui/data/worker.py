@@ -136,17 +136,23 @@ class RunParams:
     run_phase_c: bool
 
     phase_0_pressure_mbar: float = 300.0
-    # Backwash target volume (ml); stop when this volume is filled
     phase_0_target_ml: float = 1400.0
+    phase_0_mode: str = "AUTO"          # "AUTO" | "CONTINUOUS" | "MANUAL"
 
     phase_a_target_mbar: float = 2000.0
     phase_a_rate_mbar_min: float = 125.0
+    phase_a_mode: str = "SMOOTH"        # "SMOOTH" | "STEPPED"
+    phase_a_step_mbar: float = 250.0
+    phase_a_time_per_step_min: float = 2.0
 
     v_extra_ml: float = 0.0
     phase_b_no_flow_timeout_min: float = 5.0
-    phase_c_rate_mbar_min: float = 500.0
 
-    # Orchestrator: Bestätigungs-Gates zwischen Phasen
+    phase_c_rate_mbar_min: float = 500.0
+    phase_c_mode: str = "SMOOTH"        # "SMOOTH" | "STEPPED"
+    phase_c_step_mbar: float = 250.0
+    phase_c_time_per_step_min: float = 2.0
+
     confirm_between_phases: bool = True
 
     def save_yaml(self, path: str) -> None:
@@ -189,8 +195,7 @@ class RunParams:
         if "run_phase_c" not in data:
             data["run_phase_c"] = True
         # Alte Felder entfernen die nicht mehr existieren
-        for _old in ("v_h2o_ml", "phase_0_mode", "phase_a_mode",
-                     "phase_a_step_mbar", "phase_0_stagnation_s"):
+        for _old in ("v_h2o_ml", "phase_0_stagnation_s"):
             data.pop(_old, None)
         # Nur bekannte Felder übergeben (ignoriert alte/unbekannte Keys)
         import dataclasses
@@ -527,7 +532,10 @@ class ExperimentWorker(QObject):
             total_loss = 0.0
 
             # -------------------------------------------------------------
-            # PHASE 0: BACKWASH (volume target — stop when bw_target_ml filled)
+            # PHASE 0: BACKWASH — modes: AUTO | CONTINUOUS | MANUAL
+            # MANUAL  → skip fill loop; HOLD SPACE handles pressure manually
+            # CONTINUOUS → fill until abort/stop signal (no volume target)
+            # AUTO (default) → fill until phase_0_target_ml reached
             # -------------------------------------------------------------
             if p.run_phase_0:
                 self._current_step = Step.FILLING
@@ -536,74 +544,88 @@ class ExperimentWorker(QObject):
                 flow_dead = float(self.cfg.flow_deadband_ml_per_s)
                 bw_target_ml = max(1.0, float(p.phase_0_target_ml))
                 max_bw_duration_s = 3600.0  # Safety: max 60 min (silent)
+                _p0_mode = str(getattr(p, "phase_0_mode", "AUTO")).upper()
 
                 self.log_msg.emit("═" * 52, "#EC4899")
                 self.log_msg.emit(
-                    f"PHASE 0: BACKWASH  target: {bw_target_ml:.0f} ml"
-                    f"  @ {p.phase_0_pressure_mbar:.0f} mbar",
+                    f"PHASE 0: BACKWASH [{_p0_mode}]  "
+                    + (f"target: {bw_target_ml:.0f} ml  " if _p0_mode == "AUTO" else "")
+                    + f"@ {p.phase_0_pressure_mbar:.0f} mbar",
                     "#EC4899")
                 self.log_msg.emit("═" * 52, "#EC4899")
-                self.status.emit(f"BACKWASH: filling {bw_target_ml:.0f} ml to membrane...")
 
-                robust_switch_valves(dev, "BACKWASH", self.log_msg)
-                if getattr(dev, "pressure_controller", None) is not None:
-                    self._safe_set_pressure_mbar(channel=bw_ch, mbar=float(p.phase_0_pressure_mbar))
+                if _p0_mode == "MANUAL":
+                    self.log_msg.emit(
+                        "Phase 0 MANUAL: use HOLD SPACE to backwash. "
+                        "Click OK when done.", "#EC4899")
+                    self.status.emit("Phase 0 MANUAL — operator controls pressure via HOLD SPACE")
+                else:
+                    self.status.emit(
+                        f"BACKWASH [{_p0_mode}]: "
+                        + (f"filling {bw_target_ml:.0f} ml..." if _p0_mode == "AUTO"
+                           else "fill until stopped..."))
 
-                mode_bw = "PHASE_0_BACKWASH"
-                bw_vol_start = float(self._exp.volume_ml)
-                self._phase_vol_start = bw_vol_start
-                self._exp._step_start_volume = bw_vol_start
-                self._exp._log_row(mode_bw, 0.0, float("nan"), float("nan"),
-                                   pressure_channel=bw_ch, event="START_BACKWASH")
+                    robust_switch_valves(dev, "BACKWASH", self.log_msg)
+                    if getattr(dev, "pressure_controller", None) is not None:
+                        self._safe_set_pressure_mbar(
+                            channel=bw_ch, mbar=float(p.phase_0_pressure_mbar))
 
-                t_deadline = time.monotonic() + max_bw_duration_s
-                _eta_logged = False
+                    mode_bw = "PHASE_0_BACKWASH"
+                    bw_vol_start = float(self._exp.volume_ml)
+                    self._phase_vol_start = bw_vol_start
+                    self._exp._step_start_volume = bw_vol_start
+                    self._exp._log_row(mode_bw, 0.0, float("nan"), float("nan"),
+                                       pressure_channel=bw_ch, event="START_BACKWASH")
 
-                while not self._should_abort():
-                    dt_s, flow_raw = self._exp._sample_flow()
-                    flow_ml_s = self._exp._flow_to_ml_per_s(flow_raw)
-                    self._exp._update_volume(dt_s, flow_raw, net_sign=+1.0)
-                    self._exp._log_row(mode_bw, dt_s, flow_raw, flow_ml_s, pressure_channel=bw_ch)
-                    self._emit_sample(event="BACKWASH")
+                    t_deadline = time.monotonic() + max_bw_duration_s
+                    bw_vol_filled = 0.0
 
-                    bw_vol_filled = max(0.0, float(self._exp.volume_ml) - bw_vol_start)
+                    while not self._should_abort():
+                        dt_s, flow_raw = self._exp._sample_flow()
+                        flow_ml_s = self._exp._flow_to_ml_per_s(flow_raw)
+                        self._exp._update_volume(dt_s, flow_raw, net_sign=+1.0)
+                        self._exp._log_row(mode_bw, dt_s, flow_raw, flow_ml_s,
+                                           pressure_channel=bw_ch)
+                        self._emit_sample(event="BACKWASH")
 
-                    # Live status with flow and ETA
-                    if abs(flow_ml_s) > flow_dead:
-                        _bw_remaining = max(0.0, bw_target_ml - bw_vol_filled)
-                        _bw_eta_s = _bw_remaining / abs(flow_ml_s) if abs(flow_ml_s) > 0 else 0
-                        self.status.emit(
-                            f"BW: {bw_vol_filled:.1f}/{bw_target_ml:.0f} ml | "
-                            f"Flow: {abs(flow_ml_s)*60:.1f} ml/min | ETA: {_bw_eta_s/60:.1f} min")
-                    else:
-                        self.status.emit(
-                            f"BW: {bw_vol_filled:.1f}/{bw_target_ml:.0f} ml | Flow: waiting...")
+                        bw_vol_filled = max(0.0, float(self._exp.volume_ml) - bw_vol_start)
+                        self.phase_detail_updated.emit("P0", bw_vol_filled, bw_target_ml)
 
-                    if bw_vol_filled >= bw_target_ml:
-                        self.log_msg.emit(
-                            f"Backwash complete: {bw_vol_filled:.1f} ml"
-                            f" filled (target: {bw_target_ml:.0f} ml).",
-                            "#10B981")
-                        self._exp._log_row(mode_bw, 0.0, float("nan"), 0.0,
-                                           pressure_channel=bw_ch, event="END_BACKWASH_TARGET")
-                        break
+                        if abs(flow_ml_s) > flow_dead:
+                            _bw_eta_s = (max(0.0, bw_target_ml - bw_vol_filled) / abs(flow_ml_s)
+                                         if _p0_mode == "AUTO" else 0)
+                            self.status.emit(
+                                f"BW: {bw_vol_filled:.1f}"
+                                + (f"/{bw_target_ml:.0f}" if _p0_mode == "AUTO" else "")
+                                + f" ml | Flow: {abs(flow_ml_s)*60:.1f} ml/min"
+                                + (f" | ETA: {_bw_eta_s/60:.1f} min" if _p0_mode == "AUTO" else ""))
+                        else:
+                            self.status.emit(f"BW: {bw_vol_filled:.1f} ml | Flow: waiting...")
 
-                    if time.monotonic() > t_deadline:
-                        self.log_msg.emit(
-                            f"BW safety timeout (60 min) — "
-                            f"{bw_vol_filled:.1f}/{bw_target_ml:.0f} ml filled. "
-                            "Continuing to filling step.", "#F59E0B")
-                        self._exp._log_row(mode_bw, 0.0, float("nan"), 0.0,
-                                           pressure_channel=bw_ch, event="END_BACKWASH_TIMEOUT")
-                        break
+                        if _p0_mode == "AUTO" and bw_vol_filled >= bw_target_ml:
+                            self.log_msg.emit(
+                                f"Backwash complete: {bw_vol_filled:.1f} ml filled "
+                                f"(target: {bw_target_ml:.0f} ml).", "#10B981")
+                            self._exp._log_row(mode_bw, 0.0, float("nan"), 0.0,
+                                               pressure_channel=bw_ch,
+                                               event="END_BACKWASH_TARGET")
+                            break
 
-                    time.sleep(float(self.cfg.sample_period_s))
+                        if time.monotonic() > t_deadline:
+                            self.log_msg.emit(
+                                f"BW safety timeout (60 min) — {bw_vol_filled:.1f} ml filled. "
+                                "Continuing.", "#F59E0B")
+                            self._exp._log_row(mode_bw, 0.0, float("nan"), 0.0,
+                                               pressure_channel=bw_ch,
+                                               event="END_BACKWASH_TIMEOUT")
+                            break
 
-                # Drop pressure and close valves
-                if getattr(dev, "pressure_controller", None) is not None:
-                    self._safe_set_pressure_mbar(channel=bw_ch, mbar=0.0)
-                robust_switch_valves(dev, "SHUT", self.log_msg)
-                self._phase_vol_start = None
+                        time.sleep(float(self.cfg.sample_period_s))
+
+                    if getattr(dev, "pressure_controller", None) is not None:
+                        self._safe_set_pressure_mbar(channel=bw_ch, mbar=0.0)
+                    robust_switch_valves(dev, "SHUT", self.log_msg)
+                    self._phase_vol_start = None
 
                 # Gate 1: Manual filling
                 self._raise_if_abort()
@@ -637,44 +659,72 @@ class ExperimentWorker(QObject):
                 1.0,  # absolutes Minimum: 1 ml
             )
 
-            # --- PHASE A: RAMP UP (automatisch, kontinuierlich) ---
+            # --- PHASE A: RAMP UP ---
             if p.run_phase_a:
                 self._current_step = Step.FILTRATION
                 self.step_changed.emit("PHASE_A")
                 self._phase_vol_start = float(self._exp.volume_ml)
                 ch = int(self.cfg.main_pressure_channel)
+                _pa_mode = str(getattr(p, "phase_a_mode", "SMOOTH")).upper()
 
                 current_mbar = self._exp._get_pressure_setpoint_mbar_best(ch)
                 if current_mbar is None or current_mbar < 0:
                     current_mbar = 0.0
-                delta_mbar = max(0.0, float(p.phase_a_target_mbar) - current_mbar)
-                rate_mbar_s = float(p.phase_a_rate_mbar_min) / 60.0
-                total_duration_s = (delta_mbar /
-                                    rate_mbar_s) if rate_mbar_s > 0 and delta_mbar > 0 else 10.0
 
                 self.log_msg.emit("═" * 52, "#8B5CF6")
                 self.log_msg.emit(
-                    f"PHASE A: RAMP  {current_mbar:.0f} → {p.phase_a_target_mbar:.0f} mbar  "
-                    f"({p.phase_a_rate_mbar_min:.0f} mbar/min, "
-                    f"ETA {total_duration_s / 60:.1f} min)", "#8B5CF6")
-                self.log_msg.emit(
-                    f"Next phase: B1 — Steady State (target: {target_vol:.1f} ml)",
-                    "#64748B")
+                    f"Next phase: B1 — Steady State (target: {target_vol:.1f} ml)", "#64748B")
                 self.log_msg.emit("═" * 52, "#8B5CF6")
-                self.status.emit(
-                    f"Phase A: ramp {current_mbar:.0f} → {p.phase_a_target_mbar:.0f} mbar")
+                self._emit_sample(event=f"PHASE_A_START current={current_mbar:.0f}"
+                                  f" target={p.phase_a_target_mbar:.0f} mode={_pa_mode}")
+                loss_a = 0.0
 
-                _ev_a_start = (
-                    f"PHASE_A_START current={current_mbar:.0f}"
-                    f" target={p.phase_a_target_mbar:.0f}")
-                self._emit_sample(event=_ev_a_start)
+                if _pa_mode == "STEPPED":
+                    import math as _math
+                    step_mbar = max(1.0, float(getattr(p, "phase_a_step_mbar", 250.0)))
+                    time_per_step_s = max(1.0, float(
+                        getattr(p, "phase_a_time_per_step_min", 2.0)) * 60.0)
+                    n_steps = max(1, _math.ceil(
+                        (float(p.phase_a_target_mbar) - current_mbar) / step_mbar))
+                    total_eta_min = n_steps * time_per_step_s / 60.0
+                    self.log_msg.emit(
+                        f"PHASE A [STEPPED]: {current_mbar:.0f} → {p.phase_a_target_mbar:.0f} mbar"
+                        f"  {n_steps} steps × {step_mbar:.0f} mbar"
+                        f"  @ {time_per_step_s/60:.1f} min/step"
+                        f"  (ETA {total_eta_min:.1f} min)", "#8B5CF6")
 
-                # Kontinuierliche Rampe
-                loss_a = self._exp.step_continuous_ramp(
-                    target_pressure_mbar=float(p.phase_a_target_mbar),
-                    duration_s=total_duration_s,
-                    abort_check_fn=self._should_abort
-                )
+                    vol_a_start = float(self._exp.volume_ml)
+                    for i in range(1, n_steps + 1):
+                        self._raise_if_abort()
+                        next_p = min(current_mbar + i * step_mbar, float(p.phase_a_target_mbar))
+                        if getattr(dev, "pressure_controller", None) is not None:
+                            self._safe_set_pressure_mbar(channel=ch, mbar=next_p)
+                        self.log_msg.emit(
+                            f"Phase A step {i}/{n_steps}: {next_p:.0f} mbar — "
+                            f"holding {time_per_step_s/60:.1f} min", "#8B5CF6")
+                        self.status.emit(
+                            f"Phase A [{i}/{n_steps}]: {next_p:.0f} mbar — "
+                            f"ETA {(n_steps - i) * time_per_step_s / 60:.1f} min remaining")
+                        self._emit_sample(event=f"PHASE_A_STEP_{i}_of_{n_steps}")
+                        self._sleep_abortable(time_per_step_s)
+
+                    loss_a = max(0.0, vol_a_start - float(self._exp.volume_ml))
+                else:
+                    delta_mbar = max(0.0, float(p.phase_a_target_mbar) - current_mbar)
+                    rate_mbar_s = float(p.phase_a_rate_mbar_min) / 60.0
+                    total_duration_s = (delta_mbar / rate_mbar_s
+                                        ) if rate_mbar_s > 0 and delta_mbar > 0 else 10.0
+                    self.log_msg.emit(
+                        f"PHASE A [SMOOTH]: {current_mbar:.0f} → {p.phase_a_target_mbar:.0f} mbar"
+                        f"  ({p.phase_a_rate_mbar_min:.0f} mbar/min"
+                        f"  ETA {total_duration_s/60:.1f} min)", "#8B5CF6")
+                    self.status.emit(
+                        f"Phase A: ramp {current_mbar:.0f} → {p.phase_a_target_mbar:.0f} mbar")
+                    loss_a = self._exp.step_continuous_ramp(
+                        target_pressure_mbar=float(p.phase_a_target_mbar),
+                        duration_s=total_duration_s,
+                        abort_check_fn=self._should_abort,
+                    )
 
                 self._emit_sample(event=f"PHASE_A_END loss={loss_a:.4f}")
                 self.log_msg.emit(f"Phase A complete. Loss: {loss_a:.3f} ml", "#8B5CF6")
@@ -894,6 +944,7 @@ class ExperimentWorker(QObject):
                 self._phase_vol_start = float(self._exp.volume_ml)
 
                 ch = int(self.cfg.main_pressure_channel)
+                _pc_mode = str(getattr(p, "phase_c_mode", "SMOOTH")).upper()
 
                 start_mbar = self._exp._get_pressure_meas_mbar_best(ch)
                 if start_mbar is None or start_mbar <= 0:
@@ -901,31 +952,58 @@ class ExperimentWorker(QObject):
                 if start_mbar is None or start_mbar <= 0:
                     start_mbar = float(p.phase_a_target_mbar)
 
-                rate_mbar_min = float(p.phase_c_rate_mbar_min)
-                duration_s = (
-                    start_mbar /
-                    rate_mbar_min *
-                    60.0) if rate_mbar_min > 0 and start_mbar > 0 else 30.0
-
                 self.log_msg.emit("═" * 52, "#EC4899")
-                self.log_msg.emit(
-                    f"PHASE C: RAMP DOWN  {start_mbar:.0f} → 0 mbar  "
-                    f"({rate_mbar_min:.0f} mbar/min, ETA {duration_s/60:.1f} min)", "#EC4899")
-                self.log_msg.emit("═" * 52, "#EC4899")
-                self.status.emit(f"Phase C: pressure release {start_mbar:.0f} → 0 mbar")
-                self._emit_sample(event=f"PHASE_C_START from={start_mbar:.0f}")
+                self._emit_sample(event=f"PHASE_C_START from={start_mbar:.0f} mode={_pc_mode}")
+                loss_c = 0.0
 
-                loss_c = self._exp.step_continuous_ramp(
-                    target_pressure_mbar=0.0,
-                    duration_s=duration_s,
-                    abort_check_fn=self._should_abort
-                )
+                if _pc_mode == "STEPPED":
+                    import math as _math
+                    step_mbar = max(1.0, float(getattr(p, "phase_c_step_mbar", 250.0)))
+                    time_per_step_s = max(1.0, float(
+                        getattr(p, "phase_c_time_per_step_min", 2.0)) * 60.0)
+                    n_steps = max(1, _math.ceil(start_mbar / step_mbar))
+                    total_eta_min = n_steps * time_per_step_s / 60.0
+                    self.log_msg.emit(
+                        f"PHASE C [STEPPED]: {start_mbar:.0f} → 0 mbar"
+                        f"  {n_steps} steps × {step_mbar:.0f} mbar"
+                        f"  @ {time_per_step_s/60:.1f} min/step"
+                        f"  (ETA {total_eta_min:.1f} min)", "#EC4899")
+                    self.log_msg.emit("═" * 52, "#EC4899")
 
-                # Druck explizit auf 0 setzen (Sicherheit falls Rampe durch Abort abgebrochen)
+                    vol_c_start = float(self._exp.volume_ml)
+                    for i in range(1, n_steps + 1):
+                        self._raise_if_abort()
+                        next_p = max(0.0, start_mbar - i * step_mbar)
+                        if getattr(dev, "pressure_controller", None) is not None:
+                            self._safe_set_pressure_mbar(channel=ch, mbar=next_p)
+                        self.log_msg.emit(
+                            f"Phase C step {i}/{n_steps}: {next_p:.0f} mbar — "
+                            f"holding {time_per_step_s/60:.1f} min", "#EC4899")
+                        self.status.emit(
+                            f"Phase C [{i}/{n_steps}]: {next_p:.0f} mbar — "
+                            f"ETA {(n_steps - i) * time_per_step_s / 60:.1f} min remaining")
+                        self._emit_sample(event=f"PHASE_C_STEP_{i}_of_{n_steps}")
+                        self._sleep_abortable(time_per_step_s)
+
+                    loss_c = max(0.0, vol_c_start - float(self._exp.volume_ml))
+                else:
+                    rate_mbar_min = float(p.phase_c_rate_mbar_min)
+                    duration_s = (start_mbar / rate_mbar_min * 60.0
+                                  ) if rate_mbar_min > 0 and start_mbar > 0 else 30.0
+                    self.log_msg.emit(
+                        f"PHASE C [SMOOTH]: {start_mbar:.0f} → 0 mbar"
+                        f"  ({rate_mbar_min:.0f} mbar/min, ETA {duration_s/60:.1f} min)",
+                        "#EC4899")
+                    self.log_msg.emit("═" * 52, "#EC4899")
+                    self.status.emit(f"Phase C: pressure release {start_mbar:.0f} → 0 mbar")
+                    loss_c = self._exp.step_continuous_ramp(
+                        target_pressure_mbar=0.0,
+                        duration_s=duration_s,
+                        abort_check_fn=self._should_abort,
+                    )
+
                 if getattr(dev, "pressure_controller", None) is not None:
                     self._safe_set_pressure_mbar(channel=ch, mbar=0.0)
-
-                # Ventile nach Druckabbau schließen
                 robust_switch_valves(dev, "SHUT", self.log_msg)
 
                 _loss_c = loss_c
