@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 import time
 from pathlib import Path
 from typing import Optional
@@ -25,6 +26,16 @@ logger = logging.getLogger(__name__)
 # WIDGET 1: SPHERICAL REACTOR — animated digital twin of the filter cell
 # =========================================================================
 class ReactorSphereWidget(QFrame):
+    """Animated digital twin of the filter cell.
+
+    Single public entry point is ``update_state(vol_ml, phase)`` —
+    volume text and fill graphic are always derived from the same input.
+    ``set_state`` / ``set_volume`` remain as back-compat shims.
+    """
+
+    _DEFAULT_MEMBRANE_ML = 3500.0
+    _DEFAULT_MAX_ML = 7000.0
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(180, 210)
@@ -32,11 +43,20 @@ class ReactorSphereWidget(QFrame):
         self._fill_pct = 0.0
         self._fill_target = 0.0
         self._color = QColor("#00E5FF")
+        self._color_target = QColor("#00E5FF")
         self._volume_ml = 0.0
-        self._phase_label = ""
+        self._phase_label = "IDLE"
         self._wave_phase = 0.0
         self._membrane_ml = 3500.0
         self._max_ml = 7000.0
+
+        self._bubbles: list = []
+        self._bubble_spawn_accum: float = 0.0
+        self._overflow_pulse: float = 0.0
+
+        self._p_setpoint: float = 0.0
+        self._p_meas: float = 0.0
+        self._target_vol_ml: float = 0.0
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -49,6 +69,41 @@ class ReactorSphereWidget(QFrame):
         else:
             self._fill_pct = self._fill_target
         self._wave_phase += 0.07
+
+        # Smooth phase-color transition (lerp RGB over ~10 frames).
+        if self._color != self._color_target:
+            cr = int(self._color.red() + (self._color_target.red() - self._color.red()) * 0.18)
+            cg = int(self._color.green() + (self._color_target.green() - self._color.green()) * 0.18)
+            cb = int(self._color.blue() + (self._color_target.blue() - self._color.blue()) * 0.18)
+            if (abs(cr - self._color_target.red()) < 3 and
+                    abs(cg - self._color_target.green()) < 3 and
+                    abs(cb - self._color_target.blue()) < 3):
+                self._color = QColor(self._color_target)
+            else:
+                self._color = QColor(cr, cg, cb)
+
+        # Bubble physics + spawn (only during fluid phases with visible liquid).
+        fluid_phase = ("FILL" in self._phase_label or "BACKWASH" in self._phase_label
+                       or "PHASE_B" in self._phase_label or "FILTRATION" in self._phase_label)
+        if fluid_phase and self._fill_pct > 0.05:
+            self._bubble_spawn_accum += 0.04
+            while self._bubble_spawn_accum >= 0.8:
+                self._bubble_spawn_accum -= 0.8
+                self._bubbles.append({
+                    "x": random.uniform(0.15, 0.85),
+                    "y": 0.02,
+                    "r": random.uniform(1.5, 3.5),
+                    "vy": random.uniform(0.010, 0.022),
+                    "alpha": random.randint(60, 130),
+                })
+        survivors = []
+        for b in self._bubbles:
+            b["y"] += b["vy"]
+            if b["y"] < self._fill_pct - 0.02:
+                survivors.append(b)
+        self._bubbles = survivors
+
+        self._overflow_pulse = (self._overflow_pulse + 0.12) % (2 * math.pi)
         self.update()
 
     def configure_calibration(self, membrane_ml: float, max_ml: float) -> None:
@@ -57,6 +112,10 @@ class ReactorSphereWidget(QFrame):
 
     @staticmethod
     def _volume_to_fill(vol_ml: float, membrane_ml: float, max_ml: float) -> float:
+        """Map volume to 0..1 fill level anchored at the membrane.
+
+        0 mL → 0.0, membrane_ml → 0.5, max_ml → 1.0, clamped.
+        """
         v = max(0.0, float(vol_ml))
         if membrane_ml <= 0 or max_ml <= membrane_ml:
             return 0.0
@@ -72,26 +131,58 @@ class ReactorSphereWidget(QFrame):
         self.set_state(fill, phase)
 
     def set_state(self, target_fill: float, phase: str):
+        """Set fill target and phase color."""
+        self._phase_label = str(phase).upper()
+        self._color_target = self._phase_color(self._phase_label)
         self._fill_target = max(0.0, min(1.0, float(target_fill)))
-        phase_up = phase.upper()
-        self._phase_label = phase_up
-        if "FILL" in phase_up or "PHASE_0" in phase_up or "BACKWASH" in phase_up:
-            self._color = QColor("#00E5FF")
-        elif "PHASE_A" in phase_up:
-            self._color = QColor("#8B5CF6")
-        elif "PHASE_B" in phase_up:
-            self._color = QColor("#F59E0B")
-        elif "PHASE_C" in phase_up:
-            self._color = QColor("#EC4899")
-        elif "FILTRATION" in phase_up or "PHASE" in phase_up:
-            self._color = QColor("#8B5CF6")
-        elif "VENT" in phase_up:
-            self._color = QColor("#10B981")
-        else:
-            self._color = QColor("#0EA5E9")
 
     def set_volume(self, vol_ml: float):
-        self._volume_ml = float(vol_ml)
+        """Legacy API: update volume text and recompute fill from current caps."""
+        v = max(0.0, float(vol_ml))
+        self._volume_ml = v
+        self._fill_target = self._volume_to_fill(v, self._membrane_ml, self._max_ml)
+
+    def set_target_volume(self, target_ml: float):
+        """Set the B1 target-fill dashed gold indicator."""
+        self._target_vol_ml = max(0.0, float(target_ml))
+
+    @staticmethod
+    def _short_phase(phase: str) -> str:
+        up = str(phase).upper()
+        if "FILL" in up or "PHASE_0" in up or "BACKWASH" in up:
+            return "P0"
+        if "PHASE_A" in up:
+            return "A"
+        if "PHASE_B1" in up:
+            return "B1"
+        if "PHASE_B2" in up:
+            return "B2"
+        if "PHASE_B" in up:
+            return "B"
+        if "PHASE_C" in up:
+            return "C"
+        if "VENT" in up:
+            return "VENT"
+        if "FILTRATION" in up:
+            return "FILT"
+        return ""
+
+    @staticmethod
+    def _phase_color(phase: str) -> QColor:
+        phase_up = str(phase).upper()
+        if "FILL" in phase_up or "PHASE_0" in phase_up or "BACKWASH" in phase_up:
+            return QColor("#00E5FF")
+        if "PHASE_A" in phase_up:
+            return QColor("#8B5CF6")
+        if "PHASE_B" in phase_up:
+            return QColor("#F59E0B")
+        if "PHASE_C" in phase_up:
+            return QColor("#EC4899")
+        if "FILTRATION" in phase_up or "PHASE" in phase_up:
+            return QColor("#8B5CF6")
+        if "VENT" in phase_up:
+            return QColor("#10B981")
+        return QColor("#0EA5E9")
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -103,11 +194,13 @@ class ReactorSphereWidget(QFrame):
         cy = (h - 30) / 2
         sphere_rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
 
-        # 1. Outer glow rings (phase color, multi-layer)
+        # 1. Outer glow rings (pressure-reactive alpha)
+        ref = self._p_setpoint if self._p_setpoint > 1.0 else 2000.0
+        pr_factor = max(0.35, min(1.6, self._p_meas / ref)) if ref > 0 else 0.35
         p.setPen(Qt.PenStyle.NoPen)
         for alpha, extra in ((12, 20), (22, 12), (38, 6)):
             gc = QColor(self._color)
-            gc.setAlpha(alpha)
+            gc.setAlpha(max(4, min(200, int(alpha * pr_factor))))
             p.setBrush(gc)
             p.drawEllipse(QRectF(cx - radius - extra, cy - radius - extra,
                                  (radius + extra) * 2, (radius + extra) * 2))
@@ -123,7 +216,6 @@ class ReactorSphereWidget(QFrame):
         # 3. Liquid fill with animated sine-wave surface
         if self._fill_pct > 0.01:
             liquid_top_y = (cy + radius) - (radius * 2) * self._fill_pct
-            # Wave amplitude — larger near 50%, calm near empty/full
             wave_amp = radius * 0.028 * \
                 math.sin(math.pi * min(1.0, self._fill_pct * 2)) * min(1.0, self._fill_pct * 6)
 
@@ -135,10 +227,9 @@ class ReactorSphereWidget(QFrame):
             liq_grad.setColorAt(0.0, c_top)
             liq_grad.setColorAt(1.0, c_bot)
 
-            # Build wave path (clipped to sphere)
             liq_path = QPainterPath()
             liq_path.moveTo(cx - radius, cy + radius)
-            liq_path.arcTo(sphere_rect, 180, 180)  # bottom arc, right then left
+            liq_path.arcTo(sphere_rect, 180, 180)
             liq_path.lineTo(cx + radius, liquid_top_y)
             steps = 28
             for i in range(steps, -1, -1):
@@ -157,9 +248,17 @@ class ReactorSphereWidget(QFrame):
             p.setBrush(liq_grad)
             p.drawPath(liq_path)
 
-            # Surface sheen on wave top
             p.setBrush(QColor(255, 255, 255, 28))
             p.drawRect(QRectF(cx - radius, liquid_top_y - 2, radius * 2, 5))
+
+            if self._bubbles:
+                for b in self._bubbles:
+                    bx = (cx - radius) + b["x"] * (radius * 2)
+                    by = (cy + radius) - (radius * 2) * b["y"]
+                    bc = QColor(255, 255, 255, b["alpha"])
+                    p.setBrush(bc)
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.drawEllipse(QPointF(bx, by), b["r"], b["r"])
             p.restore()
 
         # 4. Tick marks at 25% / 50% / 75%
@@ -182,10 +281,28 @@ class ReactorSphereWidget(QFrame):
         p.drawText(QRectF(cx + radius + 7, cy - 8, 55, 16),
                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "MEM")
 
-        # 6. Sphere outline (phase-colored, subtle)
-        out_c = QColor(self._color)
-        out_c.setAlpha(100)
-        p.setPen(QPen(out_c, 1.5))
+        # 5b. B1 target-fill indicator (dashed gold, only if target is set)
+        if self._target_vol_ml > 0.0:
+            tgt_frac = self._volume_to_fill(
+                self._target_vol_ml, self._membrane_ml, self._max_ml)
+            if 0.02 < tgt_frac < 0.98:
+                ty = (cy + radius) - (radius * 2) * tgt_frac
+                p.setPen(QPen(QColor("#F59E0B"), 1.2, Qt.PenStyle.DashLine))
+                p.drawLine(QPointF(cx - radius - 2, ty), QPointF(cx + radius + 2, ty))
+                p.setPen(QColor("#F59E0B"))
+                p.setFont(QFont("Consolas", 6, QFont.Weight.Bold))
+                p.drawText(QRectF(cx + radius + 7, ty - 8, 55, 16),
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "TGT")
+
+        # 6. Sphere outline (pulsing red on overflow, phase-colored otherwise)
+        overflow = self._volume_ml > self._max_ml > 0
+        if overflow:
+            pulse_a = 150 + int(90 * math.sin(self._overflow_pulse))
+            p.setPen(QPen(QColor(255, 23, 68, max(80, min(255, pulse_a))), 2.5))
+        else:
+            out_c = QColor(self._color)
+            out_c.setAlpha(100)
+            p.setPen(QPen(out_c, 1.5))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(sphere_rect)
 
@@ -202,6 +319,22 @@ class ReactorSphereWidget(QFrame):
         p.drawEllipse(sphere_rect)
         p.restore()
 
+        # 7b. Phase pill tag above volume number
+        short = self._short_phase(self._phase_label)
+        if short:
+            pill_w, pill_h = 36.0, 13.0
+            pill_x = cx - pill_w / 2
+            pill_y = cy - 38
+            pill_bg = QColor(self._color)
+            pill_bg.setAlpha(55)
+            p.setPen(QPen(QColor(self._color), 1))
+            p.setBrush(pill_bg)
+            p.drawRoundedRect(QRectF(pill_x, pill_y, pill_w, pill_h), 5, 5)
+            p.setPen(QColor(self._color).lighter(160))
+            p.setFont(QFont("Consolas", 7, QFont.Weight.Bold))
+            p.drawText(QRectF(pill_x, pill_y, pill_w, pill_h),
+                       Qt.AlignmentFlag.AlignCenter, short)
+
         # 8. Volume readout (centered in sphere)
         p.setPen(QColor("#F8FAFC"))
         p.setFont(QFont("Consolas", 13, QFont.Weight.Bold))
@@ -209,11 +342,17 @@ class ReactorSphereWidget(QFrame):
         p.drawText(QRectF(cx - radius, cy - 20, radius * 2, 24),
                    Qt.AlignmentFlag.AlignCenter, f"{vol_text} mL")
 
-        pct_c = QColor(self._color).lighter(140)
-        p.setPen(pct_c)
-        p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
-        p.drawText(QRectF(cx - radius, cy + 5, radius * 2, 14),
-                   Qt.AlignmentFlag.AlignCenter, f"{self._fill_pct * 100:.0f}%")
+        if overflow:
+            p.setPen(QColor("#FF1744"))
+            p.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
+            p.drawText(QRectF(cx - radius, cy + 5, radius * 2, 14),
+                       Qt.AlignmentFlag.AlignCenter, "OVERFILL")
+        else:
+            pct_c = QColor(self._color).lighter(140)
+            p.setPen(pct_c)
+            p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+            p.drawText(QRectF(cx - radius, cy + 5, radius * 2, 14),
+                       Qt.AlignmentFlag.AlignCenter, f"{self._fill_pct * 100:.0f}%")
 
         # 9. Bottom label
         p.setPen(QColor("#64748B"))
