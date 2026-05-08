@@ -8,8 +8,6 @@ import math
 from collections import deque
 from typing import Deque, Optional, Set, Tuple, Any
 
-from pathlib import Path
-
 import PySide6.QtWidgets as Qtw
 from PySide6.QtCore import (
     QObject, QEvent, Qt, QThread, QTimer, Signal,
@@ -23,7 +21,7 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QMessageBox, QGraphicsOpacityEffect
 
 from src.gui.data.worker import ExperimentConfig
-from src.gui.data import ExperimentWorker, RunParams, worker
+from src.gui.data import ExperimentWorker
 from src.gui.data.logger import start_run_log, stop_run_log
 from src.gui.health import HealthEvaluator, HealthRules, SystemHealth
 from src.gui.style.theme import apply_theme

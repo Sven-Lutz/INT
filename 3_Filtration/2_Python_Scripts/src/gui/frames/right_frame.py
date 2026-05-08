@@ -5,17 +5,16 @@ import logging
 import math
 import random
 import time
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Signal, Slot, Qt, QRectF, QPointF, QTimer
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath,
+    QPainter, QColor, QPen, QPainterPath,
     QLinearGradient, QRadialGradient, QFont,
 )
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTextBrowser, QWidget, QProgressBar, QInputDialog,
+    QPushButton, QTextBrowser, QWidget, QProgressBar, QInputDialog, QSizePolicy,
 )
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
 from src.gui.widgets.nudge_spinbox import NudgeSpinBox
@@ -74,7 +73,9 @@ class ReactorSphereWidget(QFrame):
         # Smooth phase-color transition (lerp RGB over ~10 frames).
         if self._color != self._color_target:
             cr = int(self._color.red() + (self._color_target.red() - self._color.red()) * 0.18)
-            cg = int(self._color.green() + (self._color_target.green() - self._color.green()) * 0.18)
+            cg = int(
+                self._color.green()
+                + (self._color_target.green() - self._color.green()) * 0.18)
             cb = int(self._color.blue() + (self._color_target.blue() - self._color.blue()) * 0.18)
             if (abs(cr - self._color_target.red()) < 3 and
                     abs(cg - self._color_target.green()) < 3 and
@@ -616,6 +617,72 @@ def _to_float(x) -> float:
 
 
 # =========================================================================
+# WIDGET 3: FLOW SPARKLINE — 60-sample miniature trend chart
+# =========================================================================
+class FlowSparklineWidget(QWidget):
+    """200 × 32 px amber sparkline showing the last N flow samples."""
+
+    _AMBER = QColor("#F59E0B")
+    _BG = QColor("#050914")
+    _MAXSAMPLES = 60
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._samples: collections.deque = collections.deque(maxlen=self._MAXSAMPLES)
+        self.setFixedHeight(32)
+        self.setMinimumWidth(100)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setToolTip("Flow rate trend (last 60 samples)")
+
+    def push(self, value: float) -> None:
+        self._samples.append(float(value))
+        self.update()
+
+    def clear(self) -> None:
+        self._samples.clear()
+        self.update()
+
+    def paintEvent(self, _event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        p.fillRect(0, 0, w, h, self._BG)
+
+        data = list(self._samples)
+        if len(data) < 2:
+            return
+
+        lo, hi = min(data), max(data)
+        span = hi - lo if hi != lo else 1.0
+        pad = 3
+
+        def _x(i: int) -> float:
+            return pad + (i / (len(data) - 1)) * (w - 2 * pad)
+
+        def _y(v: float) -> float:
+            return (h - pad) - ((v - lo) / span) * (h - 2 * pad)
+
+        path = QPainterPath()
+        path.moveTo(_x(0), _y(data[0]))
+        for i, v in enumerate(data[1:], 1):
+            path.lineTo(_x(i), _y(v))
+
+        pen = QPen(self._AMBER, 1.5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        p.drawPath(path)
+
+        # Highlight the latest sample
+        last_x = _x(len(data) - 1)
+        last_y = _y(data[-1])
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(self._AMBER)
+        p.drawEllipse(QPointF(last_x, last_y), 2.5, 2.5)
+        p.end()
+
+
+# =========================================================================
 # RIGHT FRAME MAIN
 # =========================================================================
 class RightFrame(QFrame):
@@ -625,6 +692,8 @@ class RightFrame(QFrame):
     ok_clicked = Signal()
     filling_confirmed = Signal(float)  # Bediener hat Filling bestätigt: Menge in ml
     annotation_requested = Signal(str)  # operator mark: (text,)
+
+    _ETA_EMA_ALPHA = 0.12  # α ≈ 6 s smoothing at 5 Hz telemetry rate
 
     def __init__(self, config=None, parent=None):
         super().__init__(parent)
@@ -644,6 +713,8 @@ class RightFrame(QFrame):
 
         # Rolling window (30 samples) for stable ETA calculation.
         self._flow_history: collections.deque = collections.deque(maxlen=30)
+        # EMA flow for trend ETA
+        self._flow_ema: Optional[float] = None
         self._clock_timer.setInterval(1000)  # 1 s resolution is sufficient
         self._clock_timer.timeout.connect(self._tick_elapsed)
 
@@ -670,6 +741,9 @@ class RightFrame(QFrame):
         self.sandglass = ReactorSphereWidget()
         self.sandglass.configure_calibration(self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
         left_viz_lay.addWidget(self.sandglass)
+
+        self.sparkline = FlowSparklineWidget()
+        left_viz_lay.addWidget(self.sparkline)
 
         self.btn_calib = QPushButton("⌖ SET MEMBRANE")
         self.btn_calib.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -816,9 +890,14 @@ class RightFrame(QFrame):
         self.lbl_eta.setStyleSheet(
             "color: #64748B; font-family: 'Consolas'; font-size: 10px; "
             "font-weight: bold; border: none;")
+        self.lbl_eta_trend = QLabel("")
+        self.lbl_eta_trend.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.lbl_eta_trend.setStyleSheet(
+            "color: #64748B; font-family: 'Consolas'; font-size: 9px; border: none;")
         flow_eta_lay.addWidget(self.lbl_flow_rate)
         flow_eta_lay.addStretch()
         flow_eta_lay.addWidget(self.lbl_eta)
+        flow_eta_lay.addWidget(self.lbl_eta_trend)
         prog_lay.addLayout(flow_eta_lay)
 
         self.frm_progress.hide()
@@ -966,15 +1045,38 @@ class RightFrame(QFrame):
         self.bar_progress.setValue(0)
         self.lbl_flow_rate.setText("FLOW: —")
         self.lbl_eta.setText("")
+        self.lbl_eta_trend.setText("")
         self._flow_history.clear()
+        self._flow_ema = None
+        self.sparkline.clear()
         self._run_start = None
         self._clock_timer.stop()
         self.lbl_elapsed.setText("")
 
+    _PHASE_BANNER: dict = {
+        "FILLING": ("#00E5FF", "PHASE 0 ❄  FILLING"),
+        "PHASE_A": ("#8B5CF6", "PHASE A ▲  RAMP UP"),
+        "PHASE_B": ("#F59E0B", "PHASE B ◆  STEADY STATE"),
+        "PHASE_C": ("#EC4899", "PHASE C ▼  RAMP DOWN"),
+        "FINISHED": ("#10B981", "✔  RUN COMPLETE"),
+        "ABORTED":  ("#FF1744", "✖  RUN ABORTED"),
+    }
+    _BANNER_WIDTH = 46
+
     @Slot(str)
     def set_step(self, step: str):
         self._ui_phase = step.upper()
-        self.append_log(f"--- STEP TRANSITION: {self._ui_phase} ---", "#8B5CF6")
+        color, label = "#64748B", self._ui_phase
+        for key, (c, lbl) in self._PHASE_BANNER.items():
+            if key in self._ui_phase:
+                color, label = c, lbl
+                break
+
+        pad = max(0, self._BANNER_WIDTH - len(label) - 4)
+        left = "═" * (pad // 2 + pad % 2)
+        right = "═" * (pad // 2)
+        banner = f"{left}  {label}  {right}"
+        self.append_log(banner, color)
         self._update_progress_phase(self._ui_phase)
 
     @Slot(str)
@@ -1119,8 +1221,9 @@ class RightFrame(QFrame):
         self.sandglass.configure_calibration(self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
         logger.info("Membrane calibration set to %.2f mL", self._membrane_vol_ml)
         self.append_log(
-            f"SYS: Membrane calibrated → {self._membrane_vol_ml:.2f} mL = 50%", "#00E5FF")
-        self.sandglass.update_state(self._current_vol_ml, self._ui_phase)
+            f"SYS: Membrane → {self._membrane_vol_ml:.1f} mL = 50%  "
+            f"(max {self.MAX_CELL_VOLUME_ML:.1f} mL)", "#00E5FF")
+        self.sandglass.update_state(self._cell_volume_ml, self._ui_phase)
 
     @Slot(dict)
     def update_telemetry(self, sample: dict):
@@ -1134,6 +1237,20 @@ class RightFrame(QFrame):
         p1_data = pressures.get(1, pressures.get("1", {}))
         if not isinstance(p1_data, dict):
             p1_data = {}
+
+        # --- Persistent cell volume via flow integration (always, running or not) ---
+        flow_raw = _to_float(sample.get("flow", 0.0))
+        now = time.monotonic()
+        if self._flow_integrate_ts is not None:
+            dt = now - self._flow_integrate_ts
+            if 0.0 < dt < 2.0:   # ignore stale gaps > 2 s (app pause, etc.)
+                # Positive flow = filtration = cell draining → subtract
+                # Negative flow = backwash   = cell filling → subtract a negative = add
+                delta = flow_raw * (dt / 60.0)
+                self._cell_volume_ml -= delta
+                self._cell_volume_ml = max(
+                    0.0, min(self.MAX_CELL_VOLUME_ML * 1.5, self._cell_volume_ml))
+        self._flow_integrate_ts = now
 
         p1_raw = sample.get("p1_meas") if sample.get(
             "p1_meas") is not None else p1_data.get("meas", 0.0)
@@ -1160,16 +1277,57 @@ class RightFrame(QFrame):
             self.lbl_flow_rate.setText(f"FLOW: {flow_ml_min:.2f} ml/min")
             if flow_ml_min > 0.001:
                 self._flow_history.append(flow_ml_min)
-            # Use 30-sample rolling average for stable ETA
-            avg_flow = sum(self._flow_history) / len(self._flow_history) if self._flow_history else 0.0
+                self.sparkline.push(flow_ml_min)
+            avg_flow = (
+                sum(self._flow_history) / len(self._flow_history)
+                if self._flow_history else 0.0
+            )
+            # Update EMA flow for trend ETA
+            if self._flow_ema is None:
+                self._flow_ema = flow_ml_min
+            else:
+                self._flow_ema = (
+                    self._ETA_EMA_ALPHA * flow_ml_min
+                    + (1.0 - self._ETA_EMA_ALPHA) * self._flow_ema
+                )
+
             target_known = self._progress_target_ml > 0.01
             below_target = self._progress_current_ml < self._progress_target_ml
             if target_known and below_target and avg_flow > 0.001:
                 remaining = self._progress_target_ml - self._progress_current_ml
                 eta_min = remaining / avg_flow
-                self.lbl_eta.setText(f"ETA: {eta_min:.1f} min")
+
+                # Trend ETA from EMA flow
+                trend_eta_min = (
+                    remaining / self._flow_ema
+                    if self._flow_ema and self._flow_ema > 0.1
+                    else eta_min
+                )
+
+                # Only update linear ETA label when it changes by > 1 min
+                prev_eta = getattr(self, "_disp_eta_min", None)
+                if prev_eta is None or abs(eta_min - prev_eta) >= 1.0:
+                    self._disp_eta_min = eta_min
+                    self.lbl_eta.setText(f"ETA: {eta_min:.0f} min")
+
+                # Trend label: amber if diverges >25 % from linear ETA
+                diverges = (
+                    abs(trend_eta_min - eta_min) / max(eta_min, 0.1) > 0.25
+                )
+                trend_color = "#F59E0B" if diverges else "#64748B"
+                prev_trend = getattr(self, "_disp_eta_trend_min", None)
+                if prev_trend is None or abs(trend_eta_min - prev_trend) >= 1.0:
+                    self._disp_eta_trend_min = trend_eta_min
+                    self.lbl_eta_trend.setText(f"({trend_eta_min:.0f})")
+                    self.lbl_eta_trend.setStyleSheet(
+                        f"color: {trend_color}; font-family: 'Consolas'; "
+                        f"font-size: 9px; border: none;")
             else:
-                self.lbl_eta.setText("")
+                if getattr(self, "_disp_eta_min", None) is not None:
+                    self._disp_eta_min = None
+                    self._disp_eta_trend_min = None
+                    self.lbl_eta.setText("")
+                    self.lbl_eta_trend.setText("")
 
     # -----------------------------------------------------------------
     # FILLING BANNER

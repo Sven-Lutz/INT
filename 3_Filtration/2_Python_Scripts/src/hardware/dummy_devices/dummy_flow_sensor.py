@@ -1,35 +1,28 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class FlowSensor:
-    """
-    def: This class connects to the BFS flow controller.
-    """
+    """Dummy BFS flow sensor for simulation/offline use."""
+
     def __init__(self):
-        print("Staring set_flow controller communication...")
+        logger.debug("Starting dummy flow sensor communication...")
         self.Instr_ID = c_int32()
         self._initialize_device()
-        print("Flow controller communication successfully started")
-        print("")
-        return
+        logger.debug("Dummy flow sensor communication started.")
 
     def _initialize_device(self):
-        """
-        def: This function initializes the BFS set_flow controller and retrieves liquid density for calibration.
-        """
-        error = BFS_Initialization("COM5".encode('ascii'), byref(self.Instr_ID))            # See User Guide to determine regulator types and NIMAX to determine the instrument name
+        error = BFS_Initialization("COM5".encode("ascii"), byref(self.Instr_ID))
         if error != 0:
-            raise ConnectionError(f"ERROR: Unable to establish connection, error code: {error}")
-        print(f"BFS2 initialized with ID: {self.Instr_ID.value}")
-
-        self._retrieve_density()                                                    # Get the density which has to be done in the beginning
-        return
+            raise ConnectionError(f"Unable to establish connection, error code: {error}")
+        logger.debug("BFS2 initialized with ID: %s", self.Instr_ID.value)
+        self._retrieve_density()
 
     def _retrieve_density(self):
-        """
-        def: This function retrieves and prints the liquid density for calibration purposes.
-        """
         density = c_double(-1)
-        error = BFS_Get_Density(self.Instr_ID.value, byref(density))                # Get density
+        error = BFS_Get_Density(self.Instr_ID.value, byref(density))
         if error == 0:
-            print(f"Density retrieved: {round(density.value,3)} kg/m^3")
+            logger.debug("Density retrieved: %.3f kg/m^3", density.value)
         else:
-            print(f"WARNING: Unable to retrieve density, error code: {error}")
-        return
+            logger.warning("Unable to retrieve density, error code: %s", error)

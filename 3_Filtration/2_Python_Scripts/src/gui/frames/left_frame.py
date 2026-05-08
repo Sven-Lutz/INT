@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
-from typing import List, Optional
 
-from PySide6.QtCore import QTimer, QUrl, Signal, Slot, Qt
-from PySide6.QtGui import QCursor, QDesktopServices, QImage, QPixmap
+from PySide6.QtCore import QTimer, Signal, Slot, Qt
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout,
     QLabel, QPushButton, QVBoxLayout, QWidget,
@@ -497,7 +495,7 @@ class LeftFrame(QFrame):
             confirm_between_phases=self.chk_confirm_gates.isChecked(),
         )
 
-    # ── Pill selector helpers ────────────────────────────────────────────────
+    # ── Pill selector helpers ────────────────────────────────────────
 
     def _make_mode_pills(self, modes: list, accent: str) -> tuple:
         frm = QFrame()
@@ -519,7 +517,8 @@ class LeftFrame(QFrame):
             if i == active_idx:
                 btn.setStyleSheet(
                     f"background: {accent}; color: #000; border: none; padding: 2px 6px; "
-                    "font-weight: bold; font-family: 'Consolas'; font-size: 10px; border-radius: 3px;")
+                    "font-weight: bold; font-family: 'Consolas'; "
+                    "font-size: 10px; border-radius: 3px;")
             else:
                 btn.setStyleSheet(
                     "background: #0F172A; color: #94A3B8; border: 1px solid #1E293B; "
@@ -540,7 +539,8 @@ class LeftFrame(QFrame):
             "AUTO": "ETA: — min (at live flow)",
         }
         self.lbl_bw_eta.setText(hints[mode])
-        self._apply_pill_styles(self._p0_btns, ["MANUAL", "CONTINUOUS", "AUTO"].index(mode), "#EC4899")
+        idx = ["MANUAL", "CONTINUOUS", "AUTO"].index(mode)
+        self._apply_pill_styles(self._p0_btns, idx, "#EC4899")
         self._recalc_math()
 
     def _set_pa_mode(self, mode: str):
@@ -554,7 +554,7 @@ class LeftFrame(QFrame):
         self._apply_pill_styles(self._pa_btns, ["SMOOTH", "STEPPED"].index(mode), "#8B5CF6")
         self._recalc_math()
 
-    # ── Confirm gate ─────────────────────────────────────────────────────────
+    # ── Confirm gate ────────────────────────────────────────────────────
 
     def _on_confirm_toggle(self, checked: bool):
         self._apply_confirm_style(checked)
