@@ -50,6 +50,7 @@ class ReactorSphereWidget(QFrame):
         self._wave_phase = 0.0
         self._membrane_ml = 3500.0
         self._max_ml = 7000.0
+        self._flow_ml_min: float = 0.0   # signed: + = filtration/drain, - = backwash/fill
 
         self._bubbles: list = []
         self._bubble_spawn_accum: float = 0.0
@@ -142,6 +143,11 @@ class ReactorSphereWidget(QFrame):
     def set_target_volume(self, target_ml: float):
         """Set the B1 target-fill dashed gold indicator."""
         self._target_vol_ml = max(0.0, float(target_ml))
+
+    def set_flow(self, flow_ml_min: float) -> None:
+        """Pass signed flow for the in-sphere direction indicator."""
+        self._flow_ml_min = float(flow_ml_min)
+        self._dirty = True
 
     @staticmethod
     def _short_phase(phase: str) -> str:
@@ -341,11 +347,24 @@ class ReactorSphereWidget(QFrame):
             p.drawText(QRectF(cx - radius, cy + 5, radius * 2, 14),
                        Qt.AlignmentFlag.AlignCenter, f"{self._fill_pct * 100:.0f}%")
 
-        # 9. Bottom label
-        p.setPen(QColor("#64748B"))
-        p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
-        p.drawText(QRectF(0, cy + radius + 8, w, 18),
-                   Qt.AlignmentFlag.AlignCenter, "CELL STATE")
+        # 9. Flow direction indicator (below sphere, above bottom label)
+        flow = self._flow_ml_min
+        if abs(flow) >= 0.5:
+            if flow < 0:           # negative = backwash = cell filling
+                arrow, flow_color = "▲", QColor("#00E5FF")
+            else:                  # positive = filtration = cell draining
+                arrow, flow_color = "▼", QColor("#F59E0B")
+            flow_color.setAlpha(210)
+            p.setPen(flow_color)
+            p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+            p.drawText(QRectF(0, cy + radius + 2, w, 16),
+                       Qt.AlignmentFlag.AlignCenter, f"{arrow} {abs(flow):.1f} ml/min")
+        else:
+            # Bottom label only when no flow
+            p.setPen(QColor("#64748B"))
+            p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
+            p.drawText(QRectF(0, cy + radius + 2, w, 16),
+                       Qt.AlignmentFlag.AlignCenter, "CELL STATE")
 
 
 # =========================================================================
@@ -360,32 +379,45 @@ class TrapezoidWidget(QFrame):
         self._setpoint_p = 0.0
         self._peak_p = 2000.0
         self._phase = "IDLE"
-        # Dynamische Profil-Fraktionen (Anteil A / B / C an Gesamtbreite)
         self._frac_a = 0.28
         self._frac_b = 0.44
         self._frac_c = 0.28
+        self._time_b_s: float = 600.0          # estimated phase B duration in seconds
+        self._phase_b_start_ts: float = 0.0    # monotonic ts when B began
+        self._last_phase: str = "IDLE"
+        # Pressure history trail (dot_x_frac, p_mbar) — last ~90 updates ≈ 18 s
+        self._trace: collections.deque = collections.deque(maxlen=90)
 
     def update_profile(self, target_mbar: float, rate_a_mbar_min: float, rate_c_mbar_min: float):
-        """Aktualisiert die Rampensteilheit anhand echter Parameter."""
         if target_mbar > 0:
             self._peak_p = float(target_mbar)
         rate_a = max(1.0, float(rate_a_mbar_min))
         rate_c = max(1.0, float(rate_c_mbar_min))
-        time_a = self._peak_p / rate_a        # Minuten für Ramp Up
-        time_c = self._peak_p / rate_c        # Minuten für Ramp Down
-        time_b = max(time_a * 1.5, 10.0)     # Haltephase (geschätzt)
+        time_a = self._peak_p / rate_a
+        time_c = self._peak_p / rate_c
+        time_b = max(time_a * 1.5, 10.0)
+        self._time_b_s = time_b * 60.0
         total = time_a + time_b + time_c
         if total > 0:
             self._frac_a = time_a / total
             self._frac_b = time_b / total
             self._frac_c = time_c / total
+        self._trace.clear()
         self.update()
 
     def set_state(self, current_p: float, setpoint: float, phase: str):
         self._current_p = max(0.0, current_p)
         self._setpoint_p = max(0.0, setpoint)
-        self._phase = phase.upper()
-        # _peak_p is owned exclusively by update_profile(); never grow it here
+        new_phase = phase.upper()
+
+        # Track when phase B starts so we can move the dot in real time
+        if new_phase != self._last_phase:
+            if "PHASE_B" in new_phase:
+                self._phase_b_start_ts = time.monotonic()
+            self._last_phase = new_phase
+            self._trace.clear()
+
+        self._phase = new_phase
         self.update()
 
     def paintEvent(self, event):
@@ -530,13 +562,16 @@ class TrapezoidWidget(QFrame):
                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                        f"{int(self._setpoint_p)}")
 
-        # 7. Live tracker dot with multi-ring glow
+        # 7. Live tracker dot with history trail
         norm_p = min(1.0, max(0.0, self._current_p / disp_max))
 
         if phase_a_active:
             dot_x = orig_x + (norm_p * plot_w * self._frac_a)
         elif phase_b_active:
-            dot_x = orig_x + plot_w * (self._frac_a + self._frac_b * 0.5)
+            # Move dot left→right through B based on elapsed real time
+            elapsed_b = time.monotonic() - self._phase_b_start_ts
+            b_prog = min(1.0, elapsed_b / max(1.0, self._time_b_s))
+            dot_x = x_a_end + b_prog * plot_w * self._frac_b
         elif phase_c_active:
             down_prog = 1.0 - norm_p
             dot_x = x_b_end + (down_prog * plot_w * self._frac_c)
@@ -545,6 +580,21 @@ class TrapezoidWidget(QFrame):
             norm_p = 0.0
 
         dot_y = mbar_to_y(self._current_p if norm_p > 0 else 0)
+
+        # Append to history trail when active
+        if any_active and norm_p > 0:
+            self._trace.append((dot_x, dot_y))
+
+        # 7a. Draw history trail (older = more transparent)
+        n = len(self._trace)
+        if n >= 2:
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            for i in range(1, n):
+                alpha = int(15 + 55 * (i / n))
+                tc = QColor(0, 229, 255, alpha)
+                pen_w = 1.0 + (i / n) * 1.2
+                p.setPen(QPen(tc, pen_w))
+                p.drawLine(QPointF(*self._trace[i - 1]), QPointF(*self._trace[i]))
 
         if any_active:
             # Crosshair
@@ -612,10 +662,15 @@ class RightFrame(QFrame):
         self._ui_phase = "IDLE"
 
         # Calibration anchor: volume [ml] at the 50% fill line (membrane level).
-        # Fallback is half of a 7 L cell; overridden by SET MEMBRANE button.
+        # Fallback is half of a 7 L cell; overridden by SET MEMBRANE button or auto-calibration.
         self._current_vol_ml = 0.0
         self._membrane_vol_ml = 3500.0
         self.MAX_CELL_VOLUME_ML = 7000.0
+
+        # Persistent cell volume — integrated from flow sensor continuously so
+        # the sphere shows the actual physical state even outside of a run.
+        self._cell_volume_ml: float = 0.0
+        self._flow_integrate_ts: Optional[float] = None
 
         # Elapsed-time tracking: monotonic timestamp set on run start, None at rest.
         self._run_start: Optional[float] = None
@@ -939,7 +994,9 @@ class RightFrame(QFrame):
         self._progress_current_ml = 0.0
         self._b1_target_ml = 0.0
         self._b2_target_ml = 0.0
-        self.sandglass.update_state(0.0, "IDLE")
+        # _cell_volume_ml and _flow_integrate_ts are intentionally NOT reset here —
+        # the sphere should continue showing the actual cell fill level after a run.
+        self.sandglass.update_state(self._cell_volume_ml, "IDLE")
         self.trapezoid.set_state(0.0, 0.0, "IDLE")
         self.frm_progress.hide()
         self.bar_progress.setValue(0)
@@ -1100,15 +1157,22 @@ class RightFrame(QFrame):
 
     @Slot()
     def _calibrate_membrane(self):
-        """Pin current volume as the 50% fill anchor; derive max as 2× that."""
-        self._membrane_vol_ml = max(1.0, self._current_vol_ml)
-        self.MAX_CELL_VOLUME_ML = self._membrane_vol_ml * 2.0
+        """Pin the current cell volume as the 50% fill anchor; derive max as 2× that.
+
+        Also re-anchors the persistent cell volume estimate to the current reading
+        so any integration drift is corrected.
+        """
+        anchor = max(1.0, self._cell_volume_ml)
+        self._membrane_vol_ml = anchor
+        self.MAX_CELL_VOLUME_ML = anchor * 2.0
+        # Re-anchor the persistent estimate so any drift is corrected
+        self._cell_volume_ml = anchor
         self.sandglass.configure_calibration(self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
         logger.info("Membrane calibrated: %.1f mL = 50%%, max = %.1f mL",
                     self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
         self.append_log(
-            f"SYS: Membrane → {self._membrane_vol_ml:.1f} mL = 50%  (max {self.MAX_CELL_VOLUME_ML:.1f} mL)", "#00E5FF")
-        self.sandglass.update_state(self._current_vol_ml, self._ui_phase)
+            f"SYS: Membrane → {anchor:.1f} mL = 50%  (max {self.MAX_CELL_VOLUME_ML:.1f} mL)", "#00E5FF")
+        self.sandglass.update_state(self._cell_volume_ml, self._ui_phase)
 
     @Slot(dict)
     def update_telemetry(self, sample: dict):
@@ -1122,6 +1186,19 @@ class RightFrame(QFrame):
         p1_data = pressures.get(1, pressures.get("1", {}))
         if not isinstance(p1_data, dict):
             p1_data = {}
+
+        # --- Persistent cell volume via flow integration (always, running or not) ---
+        flow_raw = _to_float(sample.get("flow", 0.0))
+        now = time.monotonic()
+        if self._flow_integrate_ts is not None:
+            dt = now - self._flow_integrate_ts
+            if 0.0 < dt < 2.0:   # ignore stale gaps > 2 s (app pause, etc.)
+                # Positive flow = filtration = cell draining → subtract
+                # Negative flow = backwash   = cell filling → subtract a negative = add
+                delta = flow_raw * (dt / 60.0)
+                self._cell_volume_ml -= delta
+                self._cell_volume_ml = max(0.0, min(self.MAX_CELL_VOLUME_ML * 1.5, self._cell_volume_ml))
+        self._flow_integrate_ts = now
 
         p1_raw = sample.get("p1_meas") if sample.get(
             "p1_meas") is not None else p1_data.get("meas", 0.0)
@@ -1143,14 +1220,14 @@ class RightFrame(QFrame):
 
         self.trapezoid.set_state(p1, p1_set, self._ui_phase)
 
-        # Sphere: update_state handles fill calculation via _volume_to_fill internally.
+        # Sphere always shows persistent cell volume; pass signed flow for direction indicator
         display_phase = self._ui_phase if self._ui_phase not in ("IDLE", "") else step
-        self.sandglass.update_state(vol, display_phase)
+        self.sandglass.update_state(self._cell_volume_ml, display_phase)
+        self.sandglass.set_flow(flow_raw)
 
         # Live flow rate + ETA display in progress panel
-        flow_raw = sample.get("flow")
         if flow_raw is not None:
-            flow_ml_min = abs(_to_float(flow_raw))
+            flow_ml_min = abs(flow_raw)
             # Dead-band: only update label if flow changed by > 0.2 ml/min
             prev_flow = getattr(self, "_disp_flow_right", None)
             if prev_flow is None or abs(flow_ml_min - prev_flow) >= 0.2:
