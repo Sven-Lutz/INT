@@ -56,5 +56,5 @@ jobs:
         run: |
           pip install flake8==7.1.0
           flake8 src/ --max-line-length=100 --extend-ignore=E203,W503 \
-            --exclude=src/gui/monitor/server.py,src/gui/frames/right_frame.py \
+            --exclude=src/gui/frames/right_frame.py \
             || echo "::warning::Flake8 found issues"
