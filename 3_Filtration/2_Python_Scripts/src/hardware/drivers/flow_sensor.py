@@ -45,20 +45,25 @@ class _ProParSerial:
         self._ser.reset_input_buffer()
         self._ser.write(frame.encode("ascii"))
 
-        resp = self._ser.readline()
-        if not resp or resp[0:1] != b":":
-            return None
+        # RS-485 adapters often echo the transmitted frame before the device answers.
+        # Read up to 3 lines; skip anything that is not an answer frame (cmd=0x02).
+        for _ in range(3):
+            resp = self._ser.readline()
+            if not resp or resp[0:1] != b":":
+                continue
+            hex_body = resp[1:].decode("ascii", errors="ignore").replace(" ", "").strip()
+            try:
+                raw = bytes.fromhex(hex_body)
+            except ValueError:
+                continue
+            # raw layout: [length, node, cmd, proc, type, parm, data...]
+            if len(raw) < 6:
+                continue
+            if raw[2] == 0x02:  # answer frame — not the echo
+                return raw[6:]
+            # cmd=0x04 is the echo of our own request; read next line
 
-        hex_body = resp[1:].decode("ascii", errors="ignore").replace(" ", "").strip()
-        try:
-            raw = bytes.fromhex(hex_body)
-        except ValueError:
-            return None
-
-        # raw layout: [length, node, cmd, proc, type, parm, data...]
-        if len(raw) < 6 or raw[2] != 0x02:
-            return None
-        return raw[6:]
+        return None
 
     def read_float(self, proc: int, parm: int) -> Optional[float]:
         data = self._query(proc, self._FLOAT_TYPE, parm)
