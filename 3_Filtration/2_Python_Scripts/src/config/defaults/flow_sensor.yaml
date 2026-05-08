@@ -9,7 +9,7 @@ scale_mode: engineering
 full_scale_raw: 32000
 full_scale_ml_min: 150.0
 
-meas: [33, 0]
+meas: [33, 6]
 setp: [33, 3]
 
 io_timeout_s: 1.5

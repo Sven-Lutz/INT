@@ -25,8 +25,8 @@ class _ProParSerial:
     format during connect, then reading that format on every poll.
 
     Wire format (no spaces):
-      Request:  :{len:02X}{node:02X}04{proc:02X}{type:02X}{parm:02X}\\r
-      Response: :{len:02X}{node:02X}02{proc:02X}{type:02X}{parm:02X}{data...}\\r
+      Request:  :{len:02X}{node:02X}04{proc:02X}{parm:02X}{type:02X}\\r
+      Response: :{len:02X}{node:02X}02{proc:02X}{parm:02X}{type:02X}{data...}\\r
 
     cmd=0x02 = DATA response (wanted)
     cmd=0x04 = echo of our own request on RS-485 half-duplex bus (skip)
@@ -42,9 +42,14 @@ class _ProParSerial:
         self._lock = threading.Lock()
 
     def _query(self, proc: int, ptype: int, parm: int) -> Optional[bytes]:
-        """Send one ProPar read request; return the data payload of the cmd=0x02 answer."""
+        """Send one ProPar read request; return the data payload of the cmd=0x02 answer.
+
+        Bronkhorst ProPar ASCII frame layout:
+          :{len:02X}{addr:02X}04{proc:02X}{parm:02X}{type:02X}\\r
+        Parm comes before type.  Response mirrors this order with cmd=0x02.
+        """
         with self._lock:
-            payload = bytes([self._addr, 0x04, proc & 0xFF, ptype & 0xFF, parm & 0xFF])
+            payload = bytes([self._addr, 0x04, proc & 0xFF, parm & 0xFF, ptype & 0xFF])
             frame = f":{len(payload):02X}" + payload.hex().upper() + "\r"
             logger.debug(f"ProPar TX: {frame.strip()!r}")
             self._ser.reset_input_buffer()
@@ -265,14 +270,19 @@ class FlowSensor:
         logger.info("FlowSensor: using raw pyserial ProPar fallback.")
         ser = _ProParSerial(self.cfg.port, self.cfg.baudrate, self.cfg.address)
 
-        # Try formats in priority order until one yields a cmd=0x02 DATA response.
-        # type 0x75 = PP_TYPE_FLOAT (parm_type 117 per Bronkhorst docs, some firmware)
-        # type 0x71 = PP_TYPE_FLOAT (older/alternative encoding)
-        # proc=1, type=0x02 = classic integer Measure (0-32000 raw count)
+        # Probe candidates in priority order until one yields a cmd=0x02 DATA response.
+        # PP_TYPE_FLOAT=0x20 per Bronkhorst FlowBus docs (4-byte IEEE 754 big-endian).
+        # parm=6="Volume Flow", parm=5="Normal Flow", parm=0=config default.
+        # Also probe both byte orders for (parm, type) since some sources differ.
+        p = self.cfg.proc_nr  # typically 33
+        n = self.cfg.parm_nr  # config default (may be wrong; will also try 6/5)
         candidates: list[Tuple[int, int, int]] = [
-            (self.cfg.proc_nr, 0x75, self.cfg.parm_nr),  # proc 33, float type 0x75
-            (self.cfg.proc_nr, 0x71, self.cfg.parm_nr),  # proc 33, float type 0x71
-            (1,               0x02, self.cfg.parm_nr),   # proc 1, uint16 Measure
+            (p,  0x20, 6),   # proc 33, PP_TYPE_FLOAT=0x20, parm=6 (Volume Flow)
+            (p,  0x20, 5),   # proc 33, PP_TYPE_FLOAT=0x20, parm=5 (Normal Flow)
+            (p,  0x20, n),   # proc 33, PP_TYPE_FLOAT=0x20, config parm
+            (p,  0x05, 6),   # proc 33, type=0x05 (float alt), parm=6
+            (p,  0x05, 5),   # proc 33, type=0x05 (float alt), parm=5
+            (1,  0x02, 0),   # proc 1, uint16 Measure (0-32000 raw count)
         ]
 
         fmt = ser.probe(candidates)
