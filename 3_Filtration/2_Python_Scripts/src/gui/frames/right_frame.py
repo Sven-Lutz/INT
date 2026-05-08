@@ -61,17 +61,20 @@ class ReactorSphereWidget(QFrame):
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(40)      # ~25 fps
+        self._timer.start(80)      # ~12 fps — smooth enough, low CPU
+        self._dirty = True
 
     def _tick(self):
+        prev_fill = self._fill_pct
         diff = self._fill_target - self._fill_pct
         if abs(diff) > 0.002:
-            self._fill_pct += diff * 0.12
+            self._fill_pct += diff * 0.10
         else:
             self._fill_pct = self._fill_target
-        self._wave_phase += 0.07
 
-        # Smooth phase-color transition (lerp RGB over ~10 frames).
+        self._wave_phase += 0.05
+
+        # Smooth phase-color transition.
         if self._color != self._color_target:
             cr = int(self._color.red() + (self._color_target.red() - self._color.red()) * 0.18)
             cg = int(self._color.green() + (self._color_target.green() - self._color.green()) * 0.18)
@@ -82,30 +85,16 @@ class ReactorSphereWidget(QFrame):
                 self._color = QColor(self._color_target)
             else:
                 self._color = QColor(cr, cg, cb)
+            self._dirty = True
 
-        # Bubble physics + spawn (only during fluid phases with visible liquid).
-        fluid_phase = ("FILL" in self._phase_label or "BACKWASH" in self._phase_label
-                       or "PHASE_B" in self._phase_label or "FILTRATION" in self._phase_label)
-        if fluid_phase and self._fill_pct > 0.05:
-            self._bubble_spawn_accum += 0.04
-            while self._bubble_spawn_accum >= 0.8:
-                self._bubble_spawn_accum -= 0.8
-                self._bubbles.append({
-                    "x": random.uniform(0.15, 0.85),
-                    "y": 0.02,
-                    "r": random.uniform(1.5, 3.5),
-                    "vy": random.uniform(0.010, 0.022),
-                    "alpha": random.randint(60, 130),
-                })
-        survivors = []
-        for b in self._bubbles:
-            b["y"] += b["vy"]
-            if b["y"] < self._fill_pct - 0.02:
-                survivors.append(b)
-        self._bubbles = survivors
+        if abs(self._fill_pct - prev_fill) > 0.0005:
+            self._dirty = True
 
-        self._overflow_pulse = (self._overflow_pulse + 0.12) % (2 * math.pi)
-        self.update()
+        self._overflow_pulse = (self._overflow_pulse + 0.08) % (2 * math.pi)
+
+        if self._dirty:
+            self._dirty = False
+            self.update()
 
     def configure_calibration(self, membrane_ml: float, max_ml: float) -> None:
         self._membrane_ml = max(1.0, float(membrane_ml))
@@ -239,11 +228,11 @@ class ReactorSphereWidget(QFrame):
             liq_path.moveTo(cx - radius, cy + radius)
             liq_path.arcTo(sphere_rect, 180, 180)
             liq_path.lineTo(cx + radius, liquid_top_y)
-            steps = 28
+            steps = 20
             for i in range(steps, -1, -1):
                 t = i / steps
                 wx = (cx - radius) + t * (radius * 2)
-                wy = liquid_top_y + math.sin(self._wave_phase + t * math.pi * 3.5) * wave_amp
+                wy = liquid_top_y + math.sin(self._wave_phase + t * math.pi * 2.5) * wave_amp * 0.4
                 liq_path.lineTo(wx, wy)
             liq_path.closeSubpath()
 
@@ -255,18 +244,8 @@ class ReactorSphereWidget(QFrame):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(liq_grad)
             p.drawPath(liq_path)
-
-            p.setBrush(QColor(255, 255, 255, 28))
-            p.drawRect(QRectF(cx - radius, liquid_top_y - 2, radius * 2, 5))
-
-            if self._bubbles:
-                for b in self._bubbles:
-                    bx = (cx - radius) + b["x"] * (radius * 2)
-                    by = (cy + radius) - (radius * 2) * b["y"]
-                    bc = QColor(255, 255, 255, b["alpha"])
-                    p.setBrush(bc)
-                    p.setPen(Qt.PenStyle.NoPen)
-                    p.drawEllipse(QPointF(bx, by), b["r"], b["r"])
+            p.setBrush(QColor(255, 255, 255, 22))
+            p.drawRect(QRectF(cx - radius, liquid_top_y - 2, radius * 2, 4))
             p.restore()
 
         # 4. Tick marks at 25% / 50% / 75%
@@ -1156,20 +1135,29 @@ class RightFrame(QFrame):
         # Live flow rate + ETA display in progress panel
         flow_raw = sample.get("flow")
         if flow_raw is not None:
-            flow_ml_min = abs(_to_float(flow_raw))  # sensor already returns ml/min
-            self.lbl_flow_rate.setText(f"FLOW: {flow_ml_min:.2f} ml/min")
-            if flow_ml_min > 0.001:
+            flow_ml_min = abs(_to_float(flow_raw))
+            # Dead-band: only update label if flow changed by > 0.2 ml/min
+            prev_flow = getattr(self, "_disp_flow_right", None)
+            if prev_flow is None or abs(flow_ml_min - prev_flow) >= 0.2:
+                self._disp_flow_right = flow_ml_min
+                self.lbl_flow_rate.setText(f"FLOW: {flow_ml_min:.1f} ml/min")
+            if flow_ml_min > 0.1:
                 self._flow_history.append(flow_ml_min)
-            # Use 30-sample rolling average for stable ETA
             avg_flow = sum(self._flow_history) / len(self._flow_history) if self._flow_history else 0.0
             target_known = self._progress_target_ml > 0.01
             below_target = self._progress_current_ml < self._progress_target_ml
-            if target_known and below_target and avg_flow > 0.001:
+            if target_known and below_target and avg_flow > 0.1:
                 remaining = self._progress_target_ml - self._progress_current_ml
                 eta_min = remaining / avg_flow
-                self.lbl_eta.setText(f"ETA: {eta_min:.1f} min")
+                # Only update ETA label when it changes by > 1 min
+                prev_eta = getattr(self, "_disp_eta_min", None)
+                if prev_eta is None or abs(eta_min - prev_eta) >= 1.0:
+                    self._disp_eta_min = eta_min
+                    self.lbl_eta.setText(f"ETA: {eta_min:.0f} min")
             else:
-                self.lbl_eta.setText("")
+                if getattr(self, "_disp_eta_min", None) is not None:
+                    self._disp_eta_min = None
+                    self.lbl_eta.setText("")
 
     # -----------------------------------------------------------------
     # FILLING BANNER

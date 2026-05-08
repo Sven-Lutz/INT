@@ -1624,11 +1624,12 @@ class MainWindow(Qtw.QMainWindow):
             "p1_meas": p1_val,
             "p2_meas": p2_val,
             "flow": f_val,
+            "valves": v_val,
             "step": self._current_step,
             "pressure": {
                 1: {"meas": p1_val, "set": p1_set},
                 2: {"meas": p2_val, "set": p2_set},
-                "1": {"meas": p1_val, "set": p1_set},  # String-Key für RightFrame
+                "1": {"meas": p1_val, "set": p1_set},
                 "2": {"meas": p2_val, "set": p2_set}
             }
         }

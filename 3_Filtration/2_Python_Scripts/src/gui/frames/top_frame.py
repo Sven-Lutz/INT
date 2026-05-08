@@ -52,6 +52,12 @@ class TopFrame(QFrame):
         self._valve_debounce.setSingleShot(True)
         self._valve_debounce.setInterval(400)
         self._valve_debounce.timeout.connect(self._flush_valve_state)
+        # Dead-band tracking: skip label updates when value hasn't changed enough
+        self._disp_p1: Optional[float] = None
+        self._disp_p2: Optional[float] = None
+        self._disp_flow: Optional[float] = None
+        self._disp_p1_set: Optional[float] = None
+        self._disp_p2_set: Optional[float] = None
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(15, 10, 15, 10)
@@ -186,62 +192,82 @@ class TopFrame(QFrame):
         if not isinstance(pressures, dict):
             pressures = {}
 
-        # --- P1 Main: Ist + Soll ---
+        # --- P1 Main ---
         p1_data = pressures.get(1, pressures.get("1", {}))
         if not isinstance(p1_data, dict):
             p1_data = {}
-
         p1_meas = _safe_float(sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas"))
         p1_set = _safe_float(sample.get("p1_set") if sample.get("p1_set") is not None else p1_data.get("set"))
 
         if p1_meas is not None:
-            self.val_p1.setText(f"{p1_meas:.0f} mbar")
-            self.bar_p1.setValue(min(self.bar_p1.maximum(), int(abs(p1_meas))))
+            if self._disp_p1 is None or abs(p1_meas - self._disp_p1) >= 1.0:
+                self._disp_p1 = p1_meas
+                self.val_p1.setText(f"{p1_meas:.0f} mbar")
+                self.bar_p1.setValue(min(self.bar_p1.maximum(), int(abs(p1_meas))))
         else:
-            self.val_p1.setText("---")
-            self.bar_p1.setValue(0)
+            if self._disp_p1 is not None:
+                self._disp_p1 = None
+                self.val_p1.setText("---")
+                self.bar_p1.setValue(0)
 
         if p1_set is not None:
-            self.sub_p1.setText(f"SET: {p1_set:.0f} mbar")
-            # Druck-Drift Indikator: wenn Ist > 10% vom Soll abweicht → rot
-            if p1_meas is not None and p1_set > 10:
-                drift_pct = abs(p1_meas - p1_set) / p1_set * 100
-                if drift_pct > 10:
-                    self.sub_p1.setStyleSheet("color: #FF1744; font-weight: bold; font-size: 10px; font-family: 'Consolas'; border: none; background: transparent;")
+            if self._disp_p1_set is None or abs(p1_set - self._disp_p1_set) >= 1.0:
+                self._disp_p1_set = p1_set
+                self.sub_p1.setText(f"SET: {p1_set:.0f} mbar")
+                if p1_meas is not None and p1_set > 10:
+                    drift_pct = abs(p1_meas - p1_set) / p1_set * 100
+                    style = ("color: #FF1744; font-weight: bold; font-size: 10px; "
+                             "font-family: 'Consolas'; border: none; background: transparent;"
+                             if drift_pct > 10 else _SUB_STYLE)
+                    self.sub_p1.setStyleSheet(style)
                 else:
                     self.sub_p1.setStyleSheet(_SUB_STYLE)
-            else:
-                self.sub_p1.setStyleSheet(_SUB_STYLE)
         else:
-            self.sub_p1.setText("SET: —")
+            if self._disp_p1_set is not None:
+                self._disp_p1_set = None
+                self.sub_p1.setText("SET: —")
 
-        # --- P2 Backwash: Ist + Soll ---
+        # --- P2 Backwash ---
         p2_data = pressures.get(2, pressures.get("2", {}))
         if not isinstance(p2_data, dict):
             p2_data = {}
-
         p2_meas = _safe_float(sample.get("p2_meas") if sample.get("p2_meas") is not None else p2_data.get("meas"))
         p2_set = _safe_float(sample.get("p2_set") if sample.get("p2_set") is not None else p2_data.get("set"))
 
         if p2_meas is not None:
-            self.val_p2.setText(f"{p2_meas:.0f} mbar")
-            self.bar_p2.setValue(min(self.bar_p2.maximum(), int(abs(p2_meas))))
+            if self._disp_p2 is None or abs(p2_meas - self._disp_p2) >= 1.0:
+                self._disp_p2 = p2_meas
+                self.val_p2.setText(f"{p2_meas:.0f} mbar")
+                self.bar_p2.setValue(min(self.bar_p2.maximum(), int(abs(p2_meas))))
         else:
-            self.val_p2.setText("---")
-            self.bar_p2.setValue(0)
+            if self._disp_p2 is not None:
+                self._disp_p2 = None
+                self.val_p2.setText("---")
+                self.bar_p2.setValue(0)
 
-        self.sub_p2.setText(f"SET: {p2_set:.0f} mbar" if p2_set is not None else "SET: —")
+        if p2_set is not None:
+            if self._disp_p2_set is None or abs(p2_set - self._disp_p2_set) >= 1.0:
+                self._disp_p2_set = p2_set
+                self.sub_p2.setText(f"SET: {p2_set:.0f} mbar")
+        else:
+            if self._disp_p2_set is not None:
+                self._disp_p2_set = None
+                self.sub_p2.setText("SET: —")
 
-        # --- Flow ---
+        # --- Flow (dead-band 0.2 ml/min) ---
         flow = _safe_float(sample.get("flow"))
         if flow is not None:
-            self.val_flow.setText(f"{flow:.1f} ml/min")
-            self.bar_flow.setValue(min(self.bar_flow.maximum(), int(abs(flow))))
+            if self._disp_flow is None or abs(flow - self._disp_flow) >= 0.2:
+                self._disp_flow = flow
+                self.val_flow.setText(f"{flow:.1f} ml/min")
+                self.bar_flow.setValue(min(self.bar_flow.maximum(), int(abs(flow))))
         else:
-            self.val_flow.setText("--- ml/min")
-            self.bar_flow.setValue(0)
+            if self._disp_flow is not None:
+                self._disp_flow = None
+                self.val_flow.setText("--- ml/min")
+                self.bar_flow.setValue(0)
 
-        # --- Valve State (debounced 400 ms → verhindert Flackern bei Umschaltvorgängen) ---
+        # --- Valve state (debounced 400 ms) ---
         v_state = str(sample.get("valves", "—"))
         if v_state != self._valve_pending:
             self._valve_pending = v_state

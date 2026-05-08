@@ -131,13 +131,13 @@ class FlowSensorConfig:
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "FlowSensorConfig":
-        logger.info(f"FlowSensorConfig.from_dict received: {d}")
         if "flow" in d and isinstance(d["flow"], dict):
             d = d["flow"]
 
         port = d.get("port", d.get("COM Port", "COM5"))
         baudrate = int(d.get("baudrate", 38400))
         address = int(d.get("address", 3))
+        logger.debug(f"FlowSensorConfig: port={port} baud={baudrate} addr={address}")
 
         meas = d.get("meas", [33, 0])
         proc_nr = int(meas[0])
