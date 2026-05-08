@@ -3,8 +3,9 @@ from __future__ import annotations
 import csv
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import numpy as np
 import yaml
@@ -15,9 +16,137 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.gridspec import GridSpec
 
-from src.gui.frames.analysis_frame import parse_telemetry_csv
-
 logger = logging.getLogger(__name__)
+
+
+# ─── DATA MODEL (moved from analysis_frame) ────────────────────────────────────
+
+@dataclass(slots=True)
+class TelemetryRun:
+    """Immutable container for one loaded CSV run."""
+    filepath: Path
+    time_s: np.ndarray
+    pressure_mbar: np.ndarray
+    volume_ml: np.ndarray
+    skipped_rows: int = 0
+
+    @property
+    def n_points(self) -> int:
+        return len(self.time_s)
+
+    @property
+    def duration_s(self) -> float:
+        return float(self.time_s[-1] - self.time_s[0]) if self.n_points > 1 else 0.0
+
+    @property
+    def summary(self) -> str:
+        return (
+            f"{self.filepath.name}  ·  {self.n_points:,} pts  ·  "
+            f"{self.duration_s:.1f} s  ·  "
+            f"P [{np.min(self.pressure_mbar):.1f} – {np.max(self.pressure_mbar):.1f}] mbar  ·  "
+            f"V [{np.min(self.volume_ml):.1f} – {np.max(self.volume_ml):.1f}] ml"
+            + (f"  ·  ⚠ {self.skipped_rows} rows skipped" if self.skipped_rows else "")
+        )
+
+
+def _parse_float(raw: str | None) -> float | None:
+    if raw is None:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    if "," in s and "." not in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def _pick(row: dict[str, str], keys: Sequence[str]) -> float | None:
+    for k in keys:
+        if k in row:
+            v = _parse_float(row[k])
+            if v is not None:
+                return v
+    return None
+
+
+def parse_telemetry_csv(filepath: str | Path) -> TelemetryRun:
+    """Parse a telemetry CSV (German Excel or standard format) into a TelemetryRun."""
+    path = Path(filepath)
+    with path.open(mode="r", encoding="utf-8-sig") as fh:
+        raw_lines = fh.readlines()
+
+    clean_lines = [ln for ln in raw_lines if not ln.startswith("#") and ln.strip()]
+    if not clean_lines:
+        raise ValueError(f"File {path.name} is empty or only contains comments.")
+
+    header_line = clean_lines[0]
+    delimiter = ";" if ";" in header_line else ","
+    reader = csv.DictReader(clean_lines, delimiter=delimiter)
+    if reader.fieldnames:
+        reader.fieldnames = [f.strip() for f in reader.fieldnames]
+
+    TIME_KEYS     = ["t_s", "dt_s", "t", "time", "Time", "time_s"]
+    PRESSURE_KEYS = ["pressure_meas_mbar", "p1_meas_mbar", "p1_meas",
+                     "pressure", "Pressure", "p_mbar"]
+    VOLUME_KEYS   = ["volume_ml_est", "volume_ml", "vol_ml", "volume", "Volume"]
+
+    has_absolute_time = reader.fieldnames is not None and any(
+        k in reader.fieldnames for k in ("t_s", "t", "time", "Time", "time_s")
+    )
+    has_delta_time = reader.fieldnames is not None and "dt_s" in reader.fieldnames
+
+    times: list[float] = []
+    pressures: list[float] = []
+    volumes: list[float] = []
+    skipped = 0
+    accumulated_t = 0.0
+
+    for row in reader:
+        if has_absolute_time:
+            t = _pick(row, TIME_KEYS)
+        elif has_delta_time:
+            dt = _pick(row, ["dt_s"])
+            if dt is not None:
+                accumulated_t += dt
+            t = accumulated_t
+        else:
+            t = _pick(row, TIME_KEYS)
+
+        if t is None:
+            skipped += 1
+            continue
+
+        p = _pick(row, PRESSURE_KEYS)
+        if p is None:
+            p = 0.0
+        v = _pick(row, VOLUME_KEYS)
+        if v is None:
+            v = 0.0
+
+        times.append(t)
+        pressures.append(p)
+        volumes.append(v)
+
+    if not times:
+        hdrs = ", ".join(reader.fieldnames or ["<none>"])
+        raise ValueError(
+            f"No valid data rows in {path.name}.\n"
+            f"Headers found: [{hdrs}]\n"
+            f"Expected time col:     one of {TIME_KEYS}\n"
+            f"Expected pressure col: one of {PRESSURE_KEYS}\n"
+            f"Expected volume col:   one of {VOLUME_KEYS}"
+        )
+
+    return TelemetryRun(
+        filepath=path,
+        time_s=np.asarray(times, dtype=np.float64),
+        pressure_mbar=np.asarray(pressures, dtype=np.float64),
+        volume_ml=np.asarray(volumes, dtype=np.float64),
+        skipped_rows=skipped,
+    )
 
 
 def generate_report(run_dir: Path) -> Optional[Path]:

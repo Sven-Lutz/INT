@@ -34,8 +34,6 @@ from src.utils.path_utils import ensure_dir, project_root, resolve_under
 from .frames.left_frame import LeftFrame
 from .frames.right_frame import RightFrame
 from .frames.top_frame import TopFrame
-from .frames.analysis_frame import AnalysisFrame
-from .frames.compare_frame import CompareFrame
 
 logger = logging.getLogger(__name__)
 
@@ -765,17 +763,6 @@ class MainWindow(Qtw.QMainWindow):
         layout_live.addWidget(splitter, 1)
         self.tabs.addTab(self.tab_live, "LIVE CONTROL")
 
-        self.tab_analysis = AnalysisFrame()
-        self.tabs.addTab(self.tab_analysis, "RUN ANALYSIS")
-
-        # COMPARE RUNS: overlay multiple telemetry.csv traces
-        try:
-            self.tab_compare = CompareFrame()
-            self.tabs.addTab(self.tab_compare, "COMPARE RUNS")
-        except Exception as exc:
-            logger.warning("Could not create COMPARE RUNS tab: %s", exc)
-            self.tab_compare = None
-
         apply_theme(self, "dark")
 
         self.master_grid.addWidget(self.main_container, 0, 0)
@@ -1020,13 +1007,6 @@ class MainWindow(Qtw.QMainWindow):
                 worker.loss_updated.connect(self.monitor.update_loss)
                 worker.telemetry.connect(self._push_worker_telemetry_to_monitor)
 
-            try:
-                pw = getattr(self.tab_analysis, "plot_widget", None)
-                if pw is not None and hasattr(pw, "plot"):
-                    worker.telemetry.connect(pw.plot)
-            except Exception:
-                pass
-
             worker.finished.connect(self._on_finished)
             worker.failed.connect(self._on_failed)
 
@@ -1197,22 +1177,12 @@ class MainWindow(Qtw.QMainWindow):
             stop_run_log(self._run_log_handler)
             self._run_log_handler = None
         self._spawn_run_report()
-        if self.tab_compare is not None:
-            try:
-                self.tab_compare.refresh()
-            except Exception as exc:
-                logger.warning("Could not refresh compare tab: %s", exc)
 
     def _on_failed(self, err):
         self._stop_deterministic(reason=str(err))
         if self._run_log_handler is not None:
             stop_run_log(self._run_log_handler)
             self._run_log_handler = None
-        if self.tab_compare is not None:
-            try:
-                self.tab_compare.refresh()
-            except Exception as exc:
-                logger.warning("Could not refresh compare tab: %s", exc)
         QMessageBox.critical(self, "Error", str(err))
 
     def _spawn_run_report(self) -> None:
