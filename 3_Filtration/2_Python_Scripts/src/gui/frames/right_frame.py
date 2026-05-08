@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import logging
 import math
 import random
@@ -640,6 +641,9 @@ class RightFrame(QFrame):
         # Elapsed-time tracking: monotonic timestamp set on run start, None at rest.
         self._run_start: Optional[float] = None
         self._clock_timer = QTimer(self)
+
+        # Rolling window (30 samples) for stable ETA calculation.
+        self._flow_history: collections.deque = collections.deque(maxlen=30)
         self._clock_timer.setInterval(1000)  # 1 s resolution is sufficient
         self._clock_timer.timeout.connect(self._tick_elapsed)
 
@@ -962,6 +966,7 @@ class RightFrame(QFrame):
         self.bar_progress.setValue(0)
         self.lbl_flow_rate.setText("FLOW: —")
         self.lbl_eta.setText("")
+        self._flow_history.clear()
         self._run_start = None
         self._clock_timer.stop()
         self.lbl_elapsed.setText("")
@@ -1151,20 +1156,19 @@ class RightFrame(QFrame):
         # Live flow rate + ETA display in progress panel
         flow_raw = sample.get("flow")
         if flow_raw is not None:
-            flow_ml_min = _to_float(flow_raw) * 60.0  # convert ml/s → ml/min
-            if abs(flow_ml_min) > 0.001:
-                self.lbl_flow_rate.setText(f"FLOW: {abs(flow_ml_min):.2f} ml/min")
-                # Compute ETA from remaining progress if available
-                target_known = self._progress_target_ml > 0.01
-                below_target = self._progress_current_ml < self._progress_target_ml
-                if target_known and below_target:
-                    remaining = self._progress_target_ml - self._progress_current_ml
-                    eta_min = remaining / abs(flow_ml_min) if abs(flow_ml_min) > 0 else 0.0
-                    self.lbl_eta.setText(f"ETA: {eta_min:.1f} min")
-                else:
-                    self.lbl_eta.setText("")
+            flow_ml_min = abs(_to_float(flow_raw))  # sensor already returns ml/min
+            self.lbl_flow_rate.setText(f"FLOW: {flow_ml_min:.2f} ml/min")
+            if flow_ml_min > 0.001:
+                self._flow_history.append(flow_ml_min)
+            # Use 30-sample rolling average for stable ETA
+            avg_flow = sum(self._flow_history) / len(self._flow_history) if self._flow_history else 0.0
+            target_known = self._progress_target_ml > 0.01
+            below_target = self._progress_current_ml < self._progress_target_ml
+            if target_known and below_target and avg_flow > 0.001:
+                remaining = self._progress_target_ml - self._progress_current_ml
+                eta_min = remaining / avg_flow
+                self.lbl_eta.setText(f"ETA: {eta_min:.1f} min")
             else:
-                self.lbl_flow_rate.setText("FLOW: 0.00 ml/min")
                 self.lbl_eta.setText("")
 
     # -----------------------------------------------------------------
