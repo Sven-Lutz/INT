@@ -1131,8 +1131,14 @@ class RightFrame(QFrame):
             "p1_set") is not None else p1_data.get("set", 0.0)
         p1_set = _to_float(p1_set_raw)
 
-        vol = _to_float(sample.get("volume_ml", 0.0))
-        self._current_vol_ml = vol
+        # Only accept volume from telemetry while a run is active. Stale queued
+        # signals from a just-stopped worker would otherwise toggle the sphere
+        # back after reset_state() has already zeroed it.
+        if self._running:
+            vol = _to_float(sample.get("volume_ml", 0.0))
+            self._current_vol_ml = vol
+        else:
+            vol = self._current_vol_ml
         step = str(sample.get("step", "IDLE")).upper()
 
         self.trapezoid.set_state(p1, p1_set, self._ui_phase)

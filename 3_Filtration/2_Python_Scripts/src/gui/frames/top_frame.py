@@ -86,7 +86,7 @@ class TopFrame(QFrame):
         self.val_p2, self.sub_p2, self.bar_p2 = self._add_pressure_card(lay, "P2 BACKWASH", "#8B5CF6", 400)
 
         # 3. Flow
-        self.val_flow, self.bar_flow = self._add_simple_card(lay, "FLOW RATE", "0.000 ml/min", "#00FF66", 500)
+        self.val_flow, self.bar_flow = self._add_simple_card(lay, "FLOW RATE", "0.0 ml/min", "#00FF66", 50)
 
         # 4. Valve State
         self.val_valves = self._add_text_card(lay, "VALVES", "—", "#94A3B8")
