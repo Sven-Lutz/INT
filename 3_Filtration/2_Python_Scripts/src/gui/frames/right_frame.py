@@ -91,8 +91,6 @@ class ReactorSphereWidget(QFrame):
         if abs(self._fill_pct - prev_fill) > 0.0005:
             self._dirty = True
 
-        self._overflow_pulse = (self._overflow_pulse + 0.08) % (2 * math.pi)
-
         if self._dirty:
             self._dirty = False
             self.update()
@@ -287,15 +285,10 @@ class ReactorSphereWidget(QFrame):
                 p.drawText(QRectF(cx + radius + 7, ty - 8, 55, 16),
                            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "TGT")
 
-        # 6. Sphere outline (pulsing red on overflow, phase-colored otherwise)
-        overflow = self._volume_ml > self._max_ml > 0
-        if overflow:
-            pulse_a = 150 + int(90 * math.sin(self._overflow_pulse))
-            p.setPen(QPen(QColor(255, 23, 68, max(80, min(255, pulse_a))), 2.5))
-        else:
-            out_c = QColor(self._color)
-            out_c.setAlpha(100)
-            p.setPen(QPen(out_c, 1.5))
+        # 6. Sphere outline — phase-colored always
+        out_c = QColor(self._color)
+        out_c.setAlpha(100)
+        p.setPen(QPen(out_c, 1.5))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawEllipse(sphere_rect)
 
@@ -335,18 +328,10 @@ class ReactorSphereWidget(QFrame):
         p.drawText(QRectF(cx - radius, cy - 20, radius * 2, 24),
                    Qt.AlignmentFlag.AlignCenter, f"{vol_text} mL")
 
-        if overflow:
-            p.setPen(QColor("#FF1744"))
-            p.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
-            p.drawText(QRectF(cx - radius, cy + 5, radius * 2, 14),
-                       Qt.AlignmentFlag.AlignCenter, "OVERFILL")
-        elif self._membrane_ml > 0:
-            # 100% = membrane level (backwash target); can legitimately exceed it
+        if self._membrane_ml > 0:
+            # 100% = membrane level (backwash target). Going above is normal.
             mem_pct = self._volume_ml / self._membrane_ml * 100.0
-            if mem_pct > 100.0:
-                pct_color = QColor("#00FF66")   # bright green — above membrane
-            else:
-                pct_color = QColor(self._color).lighter(140)
+            pct_color = QColor("#00FF66") if mem_pct > 100.0 else QColor(self._color).lighter(140)
             p.setPen(pct_color)
             p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
             p.drawText(QRectF(cx - radius, cy + 5, radius * 2, 14),
