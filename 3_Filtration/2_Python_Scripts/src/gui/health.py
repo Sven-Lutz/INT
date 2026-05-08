@@ -58,8 +58,6 @@ class HealthRules:
     # Absolute alarm threshold (ERROR)
     pressure_alarm_mbar: float = 8000.0
 
-    # Flow warning (optional)
-    flow_low_warn: Optional[float] = 0.05
 
     # comm staleness timeout (seconds since last_good_comm_ts)
     comm_timeout_s: float = 2.0
@@ -328,27 +326,6 @@ class HealthEvaluator:
             except Exception:
                 pass
 
-        if run and self.rules.flow_low_warn is not None and q is not None:
-            try:
-                f_thr = float(self.rules.flow_low_warn)
-                if q < f_thr:
-                    return HealthSnapshot(
-                        health=SystemHealth.WARNING,
-                        title="LOW FLOW",
-                        detail=f"Flow below threshold (< {f_thr:g})",
-                        action=_two_lines("Check feed, tubing, and sensor.\nVerify valve positions."),
-                        device_ok=True,
-                        worker_running=True,
-                        manual_hold=hold,
-                        p1_mbar=p1,
-                        p2_mbar=p2,
-                        flow=q,
-                        valves=vstate,
-                        comm_ok=True,
-                        last_good_comm_age_s=age_s,
-                    )
-            except Exception:
-                pass
 
         # 4b) WARNING: Druck-Drift (Ist weicht stark vom Soll ab)
         if run and p1 is not None and p1_set_mbar is not None:

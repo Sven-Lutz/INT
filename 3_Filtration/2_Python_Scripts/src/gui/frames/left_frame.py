@@ -1034,7 +1034,6 @@ class LeftFrame(QFrame):
             return
         try:
             self.get_run_params().save_yaml(self._params_path())
-            logger.debug("Run params saved to %s", self._params_path())
         except Exception as exc:
             logger.warning("Could not save run params: %s", exc)
 

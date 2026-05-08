@@ -124,10 +124,17 @@ class ReactorSphereWidget(QFrame):
         upper = max_ml - membrane_ml
         return min(1.0, 0.5 + 0.5 * (v - membrane_ml) / upper)
 
-    def update_state(self, vol_ml: float, phase: str) -> None:
+    def update_state(self, vol_ml: float, phase: str, *,
+                     membrane_ml: float | None = None,
+                     max_ml: float | None = None) -> None:
         """Single authoritative entry point — volume drives both text and fill graphic."""
-        self._volume_ml = float(vol_ml)
-        fill = self._volume_to_fill(vol_ml, self._membrane_ml, self._max_ml)
+        if membrane_ml is not None:
+            self._membrane_ml = max(1.0, float(membrane_ml))
+        if max_ml is not None:
+            self._max_ml = max(self._membrane_ml + 1.0, float(max_ml))
+        v = max(0.0, float(vol_ml))
+        self._volume_ml = v
+        fill = self._volume_to_fill(v, self._membrane_ml, self._max_ml)
         self.set_state(fill, phase)
 
     def set_state(self, target_fill: float, phase: str):
@@ -895,7 +902,7 @@ class RightFrame(QFrame):
         self.btn_start = self._action_btn("START SEQUENCE", "#10B981")
         self.btn_start.clicked.connect(self.start_clicked.emit)
 
-        self.btn_stop = self._action_btn("EMERGENCY ABORT", "#FF1744")
+        self.btn_stop = self._action_btn("STOP", "#FF1744")
         self.btn_stop.clicked.connect(self.stop_clicked.emit)
         self.btn_stop.setEnabled(False)
 
