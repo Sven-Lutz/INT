@@ -795,8 +795,6 @@ class MainWindow(Qtw.QMainWindow):
         self.right.start_clicked.connect(self._start_experiment)
         self.right.ok_clicked.connect(self._send_ok)
         self.right.stop_clicked.connect(self._abort_run)
-        self.left.btn_hold.hold_started.connect(lambda: self._hold_source_set("mouse", True))
-        self.left.btn_hold.hold_ended.connect(lambda: self._hold_source_set("mouse", False))
 
         try:
             self.left.sp_hold_p.valueChanged.connect(self._schedule_hold_setpoint_push)
@@ -887,7 +885,7 @@ class MainWindow(Qtw.QMainWindow):
         self._rt_timer.start(self.REALTIME_POLL_MS)
 
     def _on_space_pressed(self):
-        if self.left.btn_hold.isEnabled():
+        if self.left.isEnabled():
             self._hold_source_set("space", True)
 
     def _on_space_released(self):

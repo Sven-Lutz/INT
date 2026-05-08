@@ -247,14 +247,14 @@ class TopFrame(QFrame):
             self._valve_pending = v_state
             self._valve_debounce.start()
 
+        # --- Progress ---
+        if "loss_ml" in sample:
+            self._update_progress(sample["loss_ml"])
+
     def _flush_valve_state(self):
         if self._valve_pending != self._last_valve_state:
             self._last_valve_state = self._valve_pending
             self.val_valves.setText(self._valve_pending[:12])
-
-        # --- Progress ---
-        if "loss_ml" in sample:
-            self._update_progress(sample["loss_ml"])
 
     # -----------------------------------------------------------------
     # PROGRESS & LOSS
