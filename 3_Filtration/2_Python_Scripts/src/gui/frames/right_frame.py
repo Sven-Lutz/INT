@@ -45,6 +45,7 @@ class ReactorSphereWidget(QFrame):
         self._fill_target = 0.0
         self._color = QColor("#00E5FF")
         self._color_target = QColor("#00E5FF")
+        self._calibrated: bool = False   # True once calibration is set from a run or SET MEMBRANE
         self._volume_ml = 0.0
         self._phase_label = "IDLE"
         self._wave_phase = 0.0
@@ -98,6 +99,7 @@ class ReactorSphereWidget(QFrame):
     def configure_calibration(self, membrane_ml: float, max_ml: float) -> None:
         self._membrane_ml = max(1.0, float(membrane_ml))
         self._max_ml = max(self._membrane_ml + 1.0, float(max_ml))
+        self._calibrated = True
 
     @staticmethod
     def _volume_to_fill(vol_ml: float, membrane_ml: float, max_ml: float) -> float:
@@ -328,7 +330,7 @@ class ReactorSphereWidget(QFrame):
         p.drawText(QRectF(cx - radius, cy - 20, radius * 2, 24),
                    Qt.AlignmentFlag.AlignCenter, f"{vol_text} mL")
 
-        if self._membrane_ml > 0:
+        if self._calibrated and self._membrane_ml > 0:
             # 100% = membrane level (backwash target). Going above is normal.
             mem_pct = self._volume_ml / self._membrane_ml * 100.0
             pct_color = QColor("#00FF66") if mem_pct > 100.0 else QColor(self._color).lighter(140)
