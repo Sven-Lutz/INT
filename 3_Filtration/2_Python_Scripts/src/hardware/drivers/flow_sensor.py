@@ -71,15 +71,34 @@ class FlowSensor:
         self._last_good_flow: float = 0.0
         self._error_count: int = 0
 
+    @staticmethod
+    def _make_instrument(port: str, baudrate: int, address: int) -> Any:
+        # propar 1.x exposes propar.instrument() directly
+        if hasattr(propar, "instrument"):
+            return propar.instrument(port, baudrate=baudrate, address=address)
+        # propar 0.x uses a master/node pattern
+        if hasattr(propar, "master"):
+            master = propar.master(port, baudrate=baudrate)
+            nodes = master.get_nodes()
+            for node in nodes:
+                if getattr(node, "address", None) == address:
+                    return node
+            if nodes:
+                return nodes[0]
+        raise RuntimeError(
+            f"Unsupported propar API (version installed: {getattr(propar, '__version__', 'unknown')}). "
+            "Expected 'propar.instrument' (v1.x) or 'propar.master' (v0.x)."
+        )
+
     def connect(self) -> None:
         if self.flow_sensor is not None: return
         logger.info(f"FlowSensor: connecting to {self.cfg.port} (Baud: {self.cfg.baudrate}, Node: {self.cfg.address})")
-        
+
         try:
-            self.flow_sensor = propar.instrument(
-                self.cfg.port, 
-                baudrate=self.cfg.baudrate, 
-                address=self.cfg.address,
+            self.flow_sensor = self._make_instrument(
+                self.cfg.port,
+                self.cfg.baudrate,
+                self.cfg.address,
             )
 
             # Hardware-Ping
