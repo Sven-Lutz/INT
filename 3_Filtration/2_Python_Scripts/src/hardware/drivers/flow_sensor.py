@@ -42,19 +42,22 @@ class _ProParSerial:
     def _query(self, proc: int, ptype: int, parm: int) -> Optional[bytes]:
         payload = bytes([self._addr, 0x04, proc & 0xFF, ptype & 0xFF, parm & 0xFF])
         frame = f":{len(payload):02X}" + payload.hex().upper() + "\r"
+        logger.debug(f"ProPar TX: {frame.strip()!r}")
         self._ser.reset_input_buffer()
         self._ser.write(frame.encode("ascii"))
 
         # RS-485 adapters often echo the transmitted frame before the device answers.
         # Read up to 3 lines; skip anything that is not an answer frame (cmd=0x02).
-        for _ in range(3):
+        for attempt in range(3):
             resp = self._ser.readline()
+            logger.debug(f"ProPar RX[{attempt}]: {resp!r}")
             if not resp or resp[0:1] != b":":
                 continue
             hex_body = resp[1:].decode("ascii", errors="ignore").replace(" ", "").strip()
             try:
                 raw = bytes.fromhex(hex_body)
             except ValueError:
+                logger.debug(f"ProPar RX[{attempt}]: hex decode failed on {hex_body!r}")
                 continue
             # raw layout: [length, node, cmd, proc, type, parm, data...]
             if len(raw) < 6:
