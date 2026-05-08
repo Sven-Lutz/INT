@@ -696,14 +696,6 @@ class MainWindow(Qtw.QMainWindow):
             health_cfg.get("idle_pressure_warn_mbar"),
             self.config.get("idle_pressure_warn_mbar"),
             default=200.0)
-        val_flow = _first_present(
-            health_cfg.get("flow_low_warn"),
-            self.config.get("flow_low_warn"),
-            default=0.05)
-        val_flow_neg = _first_present(
-            health_cfg.get("flow_neg_warn"),
-            self.config.get("flow_neg_warn"),
-            default=None)
         val_comm = _first_present(
             health_cfg.get("comm_timeout_s"),
             self.config.get("comm_timeout_s"),
@@ -713,8 +705,6 @@ class MainWindow(Qtw.QMainWindow):
             HealthRules(
                 idle_pressure_warn_mbar=float(val_idle) if val_idle is not None else 200.0,
                 pressure_alarm_mbar=alarm_default,
-                flow_low_warn=float(val_flow) if val_flow is not None else 0.05,
-                flow_neg_warn=float(val_flow_neg) if val_flow_neg is not None else None,
                 comm_timeout_s=float(val_comm) if val_comm is not None else 2.0,
             )
         )
