@@ -73,21 +73,41 @@ class FlowSensor:
 
     @staticmethod
     def _make_instrument(port: str, baudrate: int, address: int) -> Any:
-        # propar 1.x exposes propar.instrument() directly
-        if hasattr(propar, "instrument"):
+        # propar 1.x: propar.instrument() is a top-level factory function
+        if callable(getattr(propar, "instrument", None)):
             return propar.instrument(port, baudrate=baudrate, address=address)
-        # propar 0.x uses a master/node pattern
-        if hasattr(propar, "master"):
-            master = propar.master(port, baudrate=baudrate)
-            nodes = master.get_nodes()
+
+        # propar 0.x: propar.master() creates a bus master, then get_nodes()
+        if callable(getattr(propar, "master", None)):
+            m = propar.master(port, baudrate=baudrate)
+            nodes = m.get_nodes()
             for node in nodes:
                 if getattr(node, "address", None) == address:
                     return node
             if nodes:
                 return nodes[0]
+
+        # Some distributions expose a class called Master (capital M)
+        if callable(getattr(propar, "Master", None)):
+            m = propar.Master(port, baudrate=baudrate)
+            nodes = m.get_nodes() if hasattr(m, "get_nodes") else []
+            for node in nodes:
+                if getattr(node, "address", None) == address:
+                    return node
+            if nodes:
+                return nodes[0]
+
+        # Log the full public API so we can add the right branch next time
+        public_api = [a for a in dir(propar) if not a.startswith("_")]
+        logger.error(
+            f"propar module has none of the expected entry points. "
+            f"Public API: {public_api}. "
+            f"Version: {getattr(propar, '__version__', 'unknown')}. "
+            f"File: {getattr(propar, '__file__', 'unknown')}"
+        )
         raise RuntimeError(
-            f"Unsupported propar API (version installed: {getattr(propar, '__version__', 'unknown')}). "
-            "Expected 'propar.instrument' (v1.x) or 'propar.master' (v0.x)."
+            f"Unsupported propar API — public symbols: {public_api}. "
+            "Run: python -c \"import propar; print(dir(propar))\" and report the output."
         )
 
     def connect(self) -> None:
