@@ -681,7 +681,6 @@ class MainWindow(Qtw.QMainWindow):
         self._current_step: str = "IDLE"
         self._bg_threads: list = []  # tracked daemon threads, joined on close
         self._run_log_handler: Optional[logging.Handler] = None
-        self._last_run_dir: Optional[Path] = None
         self._hold_active: bool = False
         self._hold_sources: Set[str] = set()
         self._last_good_comm_ts: Optional[float] = None
@@ -973,9 +972,6 @@ class MainWindow(Qtw.QMainWindow):
             # Annotation: MARK button → worker → live chart
             self.right.annotation_requested.connect(worker.make_annotation)
 
-            # Track run dir for PDF report and compare-tab refresh
-            worker.run_started.connect(
-                lambda p: setattr(self, "_last_run_dir", Path(p)))
 
             # Filling-Banner Verbindungen
             worker.filling_requested.connect(self.right.show_filling_banner)
@@ -1176,7 +1172,6 @@ class MainWindow(Qtw.QMainWindow):
         if self._run_log_handler is not None:
             stop_run_log(self._run_log_handler)
             self._run_log_handler = None
-        self._spawn_run_report()
 
     def _on_failed(self, err):
         self._stop_deterministic(reason=str(err))
@@ -1184,25 +1179,6 @@ class MainWindow(Qtw.QMainWindow):
             stop_run_log(self._run_log_handler)
             self._run_log_handler = None
         QMessageBox.critical(self, "Error", str(err))
-
-    def _spawn_run_report(self) -> None:
-        """Generate a PDF run report in a background thread (non-blocking)."""
-        run_dir = self._last_run_dir
-        if run_dir is None or not run_dir.is_dir():
-            return
-
-        def _bg():
-            try:
-                from src.gui.data.report import generate_report
-                pdf = generate_report(run_dir)
-                if pdf:
-                    logger.info("PDF report ready: %s", pdf)
-            except Exception as exc:
-                logger.warning("PDF report generation failed: %s", exc)
-
-        t = threading.Thread(target=_bg, daemon=True, name="pdf-report")
-        t.start()
-        self._bg_threads.append(t)
 
     @Slot()
     def _on_thread_finished(self):
