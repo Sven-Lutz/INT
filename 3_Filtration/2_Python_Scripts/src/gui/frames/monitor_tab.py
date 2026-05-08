@@ -54,6 +54,7 @@ class EliteMonitorTab(Qtw.QFrame):
         self._p2_set = deque(maxlen=max_points)
         self._flow = deque(maxlen=max_points)
         self._loss = deque(maxlen=max_points)
+        self._annotation_items: list = []
 
         root = Qtw.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -148,15 +149,23 @@ class EliteMonitorTab(Qtw.QFrame):
         self._phase_start_t = 0.0
         self._t.clear(); self._p1.clear(); self._p1_set.clear()
         self._p2.clear(); self._p2_set.clear(); self._flow.clear(); self._loss.clear()
-        
+
         self.curve_p1.setData([], []); self.curve_p1_set.setData([], [])
         self.curve_p2.setData([], []); self.curve_p2_set.setData([], [])
         self.curve_flow.setData([], []); self.curve_loss.setData([], [])
-        
+
         for item in self._phase_regions:
             try: self.plot_p.removeItem(item)
             except Exception: pass
         self._phase_regions.clear()
+
+        for item in self._annotation_items:
+            for pw in (self.plot_p, self.plot_flow, self.plot_loss):
+                try:
+                    pw.removeItem(item)
+                except Exception:
+                    pass
+        self._annotation_items.clear()
         
         # Start-Limits in Stein meißeln
         self.plot_p.setXRange(0, 60, padding=0)       # type: ignore
@@ -230,6 +239,20 @@ class EliteMonitorTab(Qtw.QFrame):
         mins = int(current_ts // 60)
         secs = int(current_ts % 60)
         self.lbl_samples.setText(f"{self._sample_count} samples | {mins:02d}:{secs:02d}")
+
+    @Slot(float, str)
+    def add_annotation(self, t_s: float, text: str) -> None:
+        """Add a vertical annotation marker on all three live plots."""
+        pen = pg.mkPen("#EC4899", width=1, style=Qt.PenStyle.DashLine)
+        for pw in (self.plot_p, self.plot_flow, self.plot_loss):
+            line = pg.InfiniteLine(pos=t_s, angle=90, movable=False, pen=pen)
+            pw.addItem(line)
+            self._annotation_items.append(line)
+        label = pg.TextItem(text=str(text)[:30], color="#EC4899", anchor=(0, 1))
+        label.setFont(QFont("Consolas", 6, QFont.Weight.Bold))
+        label.setPos(t_s, 0)
+        self.plot_p.addItem(label)
+        self._annotation_items.append(label)
 
     def _add_phase_region(self, phase: str, t_start: float, t_end: float):
         if phase == "IDLE" or t_end - t_start < 0.5: return
