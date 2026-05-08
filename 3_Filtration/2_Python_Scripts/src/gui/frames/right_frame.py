@@ -340,12 +340,17 @@ class ReactorSphereWidget(QFrame):
             p.setFont(QFont("Consolas", 9, QFont.Weight.Bold))
             p.drawText(QRectF(cx - radius, cy + 5, radius * 2, 14),
                        Qt.AlignmentFlag.AlignCenter, "OVERFILL")
-        else:
-            pct_c = QColor(self._color).lighter(140)
-            p.setPen(pct_c)
+        elif self._membrane_ml > 0:
+            # 100% = membrane level (backwash target); can legitimately exceed it
+            mem_pct = self._volume_ml / self._membrane_ml * 100.0
+            if mem_pct > 100.0:
+                pct_color = QColor("#00FF66")   # bright green — above membrane
+            else:
+                pct_color = QColor(self._color).lighter(140)
+            p.setPen(pct_color)
             p.setFont(QFont("Consolas", 8, QFont.Weight.Bold))
             p.drawText(QRectF(cx - radius, cy + 5, radius * 2, 14),
-                       Qt.AlignmentFlag.AlignCenter, f"{self._fill_pct * 100:.0f}%")
+                       Qt.AlignmentFlag.AlignCenter, f"{mem_pct:.0f}%")
 
         # 9. Flow direction indicator (below sphere, above bottom label)
         flow = self._flow_ml_min
