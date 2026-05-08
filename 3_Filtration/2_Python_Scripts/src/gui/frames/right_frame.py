@@ -13,9 +13,10 @@ from PySide6.QtGui import (
     QPainter, QColor, QPen, QBrush, QPainterPath,
     QLinearGradient, QRadialGradient, QFont,
 )
+from PySide6.QtCore import QSize
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTextBrowser, QWidget, QProgressBar, QInputDialog,
+    QPushButton, QTextBrowser, QWidget, QProgressBar, QInputDialog, QSizePolicy,
 )
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
 from src.gui.widgets.nudge_spinbox import NudgeSpinBox
@@ -61,10 +62,23 @@ class ReactorSphereWidget(QFrame):
         self._p_meas: float = 0.0
         self._target_vol_ml: float = 0.0
 
+        sp = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        sp.setHeightForWidth(True)
+        self.setSizePolicy(sp)
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(80)      # ~12 fps — smooth enough, low CPU
         self._dirty = True
+
+    def sizeHint(self) -> QSize:
+        return QSize(210, 240)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return int(width * 1.15)
 
     def _tick(self):
         prev_fill = self._fill_pct
