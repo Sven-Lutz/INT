@@ -38,6 +38,9 @@ class _ProParSerial:
             bytesize=8, parity="N", stopbits=1,
         )
         self._addr = address & 0xFF
+        self.raw_mode: bool = False   # set True when device answers with uint16 status frames
+        self.full_scale_raw: float = 32000.0
+        self.full_scale_ml_min: float = 150.0
 
     def _query(self, proc: int, ptype: int, parm: int) -> Optional[bytes]:
         payload = bytes([self._addr, 0x04, proc & 0xFF, ptype & 0xFF, parm & 0xFF])
@@ -46,8 +49,6 @@ class _ProParSerial:
         self._ser.reset_input_buffer()
         self._ser.write(frame.encode("ascii"))
 
-        # RS-485 adapters often echo the transmitted frame before the device answers.
-        # Read up to 3 lines; skip anything that is not an answer frame (cmd=0x02).
         for attempt in range(3):
             resp = self._ser.readline()
             logger.debug(f"ProPar RX[{attempt}]: {resp!r}")
@@ -59,20 +60,41 @@ class _ProParSerial:
             except ValueError:
                 logger.debug(f"ProPar RX[{attempt}]: hex decode failed on {hex_body!r}")
                 continue
-            # raw layout: [length, node, cmd, proc, type, parm, data...]
-            if len(raw) < 6:
+
+            if len(raw) < 3:
                 continue
-            if raw[2] == 0x02:  # answer frame — not the echo
+
+            cmd = raw[2]
+            if cmd == 0x02 and len(raw) >= 6:
+                # Standard answer: [len, node, 0x02, proc, type, parm, data...]
                 return raw[6:]
-            # cmd=0x04 is the echo of our own request; read next line
+            if cmd == 0x00 and len(raw) >= 4:
+                # Status/raw-integer answer: [len, node, 0x00, data...]
+                # Observed on some ES-FLOW firmware: device returns a 2-byte
+                # big-endian uint16 (0-32000 raw count) rather than a float.
+                logger.debug(f"ProPar: cmd=0x00 status frame, data={raw[3:]!r}")
+                return raw[3:]
+            # cmd=0x04 is the echo of our own request — skip
 
         return None
 
     def read_float(self, proc: int, parm: int) -> Optional[float]:
         data = self._query(proc, self._FLOAT_TYPE, parm)
-        if data is None or len(data) < 4:
+        if data is None:
             return None
-        return struct.unpack(">f", data[:4])[0]
+        if len(data) >= 4:
+            return struct.unpack(">f", data[:4])[0]
+        if len(data) >= 2:
+            # Device answered with a 2-byte uint16 raw count (0x00 status frame).
+            # Convert to ml/min using the configured full-scale.
+            raw_count = struct.unpack(">H", data[:2])[0]
+            self.raw_mode = True
+            logger.info(
+                f"ProPar: device uses raw uint16 encoding "
+                f"(count={raw_count}, scale={self.full_scale_raw}→{self.full_scale_ml_min} ml/min)"
+            )
+            return (raw_count / self.full_scale_raw) * self.full_scale_ml_min
+        return None
 
     def ping(self, proc: int, parm: int) -> bool:
         return self._query(proc, self._FLOAT_TYPE, parm) is not None
@@ -237,6 +259,8 @@ class FlowSensor:
     def _connect_via_serial(self) -> None:
         logger.info("FlowSensor: using raw pyserial ProPar fallback.")
         ser = _ProParSerial(self.cfg.port, self.cfg.baudrate, self.cfg.address)
+        ser.full_scale_raw = self.cfg.full_scale_raw
+        ser.full_scale_ml_min = self.cfg.full_scale_ml_min
 
         if not ser.ping(self.cfg.proc_nr, self.cfg.parm_nr):
             logger.error(
