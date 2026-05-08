@@ -967,10 +967,17 @@ class RightFrame(QFrame):
         self._update_progress_bar()
 
     def set_progress_target(self, target_ml: float):
-        """Wird vom MainWindow beim Run-Start aufgerufen."""
+        """Called by MainWindow when a run starts with the B1 volume target."""
         self._progress_target_ml = max(0.01, float(target_ml))
         self.frm_progress.show()
         self._update_progress_bar()
+        # Auto-calibrate sphere: target = 100% fill, half = membrane (50%) line.
+        if target_ml > 10.0:
+            self._membrane_vol_ml = target_ml / 2.0
+            self.MAX_CELL_VOLUME_ML = target_ml
+            self.sandglass.configure_calibration(self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
+            logger.debug("Sphere auto-calibrated: membrane=%.0f mL, max=%.0f mL",
+                         self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
 
     def _update_progress_phase(self, phase: str):
         """Aktualisiert Phase-Label und Farbe des Fortschrittsbalkens."""
@@ -1093,12 +1100,14 @@ class RightFrame(QFrame):
 
     @Slot()
     def _calibrate_membrane(self):
-        """Pin current volume reading as the 50% fill anchor (membrane level)."""
-        self._membrane_vol_ml = self._current_vol_ml
+        """Pin current volume as the 50% fill anchor; derive max as 2× that."""
+        self._membrane_vol_ml = max(1.0, self._current_vol_ml)
+        self.MAX_CELL_VOLUME_ML = self._membrane_vol_ml * 2.0
         self.sandglass.configure_calibration(self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
-        logger.info("Membrane calibration set to %.2f mL", self._membrane_vol_ml)
+        logger.info("Membrane calibrated: %.1f mL = 50%%, max = %.1f mL",
+                    self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
         self.append_log(
-            f"SYS: Membrane calibrated → {self._membrane_vol_ml:.2f} mL = 50%", "#00E5FF")
+            f"SYS: Membrane → {self._membrane_vol_ml:.1f} mL = 50%  (max {self.MAX_CELL_VOLUME_ML:.1f} mL)", "#00E5FF")
         self.sandglass.update_state(self._current_vol_ml, self._ui_phase)
 
     @Slot(dict)
