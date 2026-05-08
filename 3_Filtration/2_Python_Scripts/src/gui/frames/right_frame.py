@@ -278,7 +278,7 @@ class ReactorSphereWidget(QFrame):
             p.setFont(QFont("Consolas", 6))
             p.drawText(QRectF(cx - radius - 30, ty - 6, 24, 12),
                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                       f"{int(tick_pct * 100)}%")
+                       f"{int(tick_pct * 200)}%")
 
         # 5. Membrane line (dashed, at 50%)
         p.setPen(QPen(QColor(248, 250, 252, 110), 1.5, Qt.PenStyle.DashLine))
@@ -286,7 +286,7 @@ class ReactorSphereWidget(QFrame):
         p.setPen(QColor(71, 85, 105, 150))
         p.setFont(QFont("Consolas", 6, QFont.Weight.Bold))
         p.drawText(QRectF(cx + radius + 7, cy - 8, 55, 16),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "MEM")
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "100%")
 
         # 5b. B1 target-fill indicator (dashed gold, only if target is set)
         if self._target_vol_ml > 0.0:
