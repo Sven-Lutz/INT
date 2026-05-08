@@ -8,9 +8,19 @@ import traceback
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QtMsgType, qInstallMessageHandler
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
+
+
+def _qt_msg_handler(msg_type, context, message):
+    """Suppress Qt's internal stylesheet warnings (EliteModule class-selector quirk)."""
+    if "Could not parse stylesheet" in message:
+        return
+    if msg_type == QtMsgType.QtWarningMsg:
+        logger.warning("Qt: %s", message)
+    elif msg_type in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+        logger.error("Qt: %s", message)
 
 from src.utils.config_manager import ConfigManager
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
@@ -191,6 +201,7 @@ def main() -> int:
 
     _configure_qt_highdpi()
 
+    qInstallMessageHandler(_qt_msg_handler)
     app = QApplication(sys.argv)
     app.setApplicationName("Little Chonker")
     app.setOrganizationName("PelliKAn")

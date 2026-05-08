@@ -1,5 +1,5 @@
 from typing import Optional
-from PySide6.QtCore import Slot, Qt
+from PySide6.QtCore import Slot, Qt, QTimer
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QProgressBar
 
 
@@ -47,6 +47,11 @@ class TopFrame(QFrame):
         self._progress_target_ml = 0.0
         self._progress_current_ml = 0.0
         self._last_valve_state: str = ""
+        self._valve_pending: str = ""
+        self._valve_debounce = QTimer(self)
+        self._valve_debounce.setSingleShot(True)
+        self._valve_debounce.setInterval(400)
+        self._valve_debounce.timeout.connect(self._flush_valve_state)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(15, 10, 15, 10)
@@ -71,11 +76,11 @@ class TopFrame(QFrame):
         lay.addStretch()
 
         # 2. Pressure cards: Soll/Ist nebeneinander
-        self.val_p1, self.sub_p1, self.bar_p1 = self._add_pressure_card(lay, "P1 MAIN", "#00E5FF", 3000)
-        self.val_p2, self.sub_p2, self.bar_p2 = self._add_pressure_card(lay, "P2 BACKWASH", "#8B5CF6", 1000)
+        self.val_p1, self.sub_p1, self.bar_p1 = self._add_pressure_card(lay, "P1 MAIN", "#00E5FF", 2000)
+        self.val_p2, self.sub_p2, self.bar_p2 = self._add_pressure_card(lay, "P2 BACKWASH", "#8B5CF6", 400)
 
         # 3. Flow
-        self.val_flow, self.bar_flow = self._add_simple_card(lay, "FLOW RATE", "0.000", "#00FF66", 50)
+        self.val_flow, self.bar_flow = self._add_simple_card(lay, "FLOW RATE", "0.000 ml/min", "#00FF66", 500)
 
         # 4. Valve State
         self.val_valves = self._add_text_card(lay, "VALVES", "—", "#94A3B8")
@@ -230,17 +235,22 @@ class TopFrame(QFrame):
         # --- Flow ---
         flow = _safe_float(sample.get("flow"))
         if flow is not None:
-            self.val_flow.setText(f"{flow:.3f}")
+            self.val_flow.setText(f"{flow:.1f} ml/min")
             self.bar_flow.setValue(min(self.bar_flow.maximum(), int(abs(flow))))
         else:
-            self.val_flow.setText("---")
+            self.val_flow.setText("--- ml/min")
             self.bar_flow.setValue(0)
 
-        # --- Valve State (nur updaten wenn geändert → verhindert Flackern) ---
+        # --- Valve State (debounced 400 ms → verhindert Flackern bei Umschaltvorgängen) ---
         v_state = str(sample.get("valves", "—"))
-        if v_state != self._last_valve_state:
-            self._last_valve_state = v_state
-            self.val_valves.setText(v_state[:12])
+        if v_state != self._valve_pending:
+            self._valve_pending = v_state
+            self._valve_debounce.start()
+
+    def _flush_valve_state(self):
+        if self._valve_pending != self._last_valve_state:
+            self._last_valve_state = self._valve_pending
+            self.val_valves.setText(self._valve_pending[:12])
 
         # --- Progress ---
         if "loss_ml" in sample:

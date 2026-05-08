@@ -25,7 +25,6 @@ from PySide6.QtWidgets import QMessageBox, QGraphicsOpacityEffect
 from src.gui.data.worker import ExperimentConfig
 from src.gui.data import ExperimentWorker, RunParams, worker
 from src.gui.data.logger import start_run_log, stop_run_log
-from src.gui.monitor.server import MonitorServer
 from src.gui.health import HealthEvaluator, HealthRules, SystemHealth
 from src.gui.style.theme import apply_theme
 from src.utils.config_manager import ConfigManager
@@ -791,9 +790,6 @@ class MainWindow(Qtw.QMainWindow):
         self._hold_setpoint_timer.setSingleShot(True)
         self._hold_setpoint_timer.timeout.connect(self._push_hold_setpoint_now)
 
-        self.monitor: Optional[MonitorServer] = None
-        self._start_monitor()
-
         self._global_filter = _GlobalInputFilter(self)
         app = Qtw.QApplication.instance()
         if app is not None:
@@ -837,24 +833,23 @@ class MainWindow(Qtw.QMainWindow):
         self._update_health_banner()
 
         QTimer.singleShot(100, self.hud.play_intro)
-        QTimer.singleShot(1000, self._play_boot_sequence)
+        QTimer.singleShot(200, self._play_boot_sequence)
 
     def _play_boot_sequence(self):
-        duration = 4000
+        duration = 1200
         self.hud.start_smooth_fill(duration)
 
         steps = [
-            ("Initializing Quantum Core", 0, "#64748B"),
-            ("Energizing Containment", 800, "#EC4899"),
-            ("Calibrating Flow", 1600, "#8B5CF6"),
-            (f"Sim-Link: {'ACTIVE' if self._simulation_mode else 'OFF'}", 2400, "#00E5FF"),
-            ("System Online", 3200, "#00E676")
+            ("Initializing", 0, "#64748B"),
+            ("Connecting Hardware", 400, "#EC4899"),
+            (f"Sim: {'ON' if self._simulation_mode else 'OFF'}", 800, "#00E5FF"),
+            ("System Online", 1100, "#00E676"),
         ]
 
         for text, delay, col in steps:
             QTimer.singleShot(delay, lambda t=text, c=col: self._boot_step_text(t, c))
 
-        QTimer.singleShot(duration + 800, self._finish_boot)
+        QTimer.singleShot(duration + 300, self._finish_boot)
 
     def _boot_step_text(self, text, col):
         self.hud.update_text(text)
@@ -983,7 +978,6 @@ class MainWindow(Qtw.QMainWindow):
                     # Update progress targets to match actual filling amount
                     self.top.set_progress_target(ml),
                     self.right.set_progress_target(ml),
-                    setattr(self, '_monitor_target_ml', ml),
                 )
             )
 
@@ -995,13 +989,6 @@ class MainWindow(Qtw.QMainWindow):
             target_vol = float(run_p.v_bnnt_ml) + float(run_p.phase_b1_target_ml)
             self.top.set_progress_target(target_vol)
             self.right.set_progress_target(target_vol)
-            self._monitor_target_ml = target_vol
-
-            if self.monitor is not None:
-                worker.status.connect(self.monitor.update_status)
-                worker.step_changed.connect(self.monitor.update_step)
-                worker.loss_updated.connect(self.monitor.update_loss)
-                worker.telemetry.connect(self._push_worker_telemetry_to_monitor)
 
             worker.finished.connect(self._on_finished)
             worker.failed.connect(self._on_failed)
@@ -1024,53 +1011,6 @@ class MainWindow(Qtw.QMainWindow):
 
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
-
-    @Slot(dict)
-    def _push_worker_telemetry_to_monitor(self, sample: dict):
-        if not self.monitor:
-            return
-        pressures = sample.get("pressure", {})
-        p1_data = pressures.get(1, pressures.get("1", {}))
-        p2_data = pressures.get(2, pressures.get("2", {}))
-
-        p1_meas = _safe_float(sample.get("p1_meas") if sample.get(
-            "p1_meas") is not None else p1_data.get("meas"))
-        p1_set = _safe_float(sample.get("p1_set") if sample.get(
-            "p1_set") is not None else p1_data.get("set"))
-        p2_meas = _safe_float(sample.get("p2_meas") if sample.get(
-            "p2_meas") is not None else p2_data.get("meas"))
-        p2_set = _safe_float(sample.get("p2_set") if sample.get(
-            "p2_set") is not None else p2_data.get("set"))
-        flow = _safe_float(sample.get("flow"))
-        vol_ml = _safe_float(sample.get("volume_ml"))
-        loss_ml = abs(_safe_float(sample.get("loss_ml")))
-        t_s = _safe_float(sample.get("t", 0.0))
-
-        self.monitor.update_metrics(
-            flow=flow,
-            p1_meas=p1_meas, p1_set=p1_set,
-            p2_meas=p2_meas, p2_set=p2_set,
-            valves=str(sample.get("valves", "—")),
-            volume_ml=vol_ml,
-            loss_ml=loss_ml,
-            run_elapsed_s=t_s,
-        )
-
-        # History ring buffer for full-run chart
-        self.monitor.write_sample({
-            "t": t_s,
-            "p1_meas": p1_meas, "p1_set": p1_set,
-            "p2_meas": p2_meas,
-            "flow": flow,
-            "volume_ml": vol_ml,
-            "loss_ml": loss_ml,
-            "step": str(sample.get("step", "IDLE")),
-        })
-
-        # Progress an Monitor pushen
-        if hasattr(self, '_monitor_target_ml') and self._monitor_target_ml > 0.01:
-            pct = min(100.0, loss_ml / self._monitor_target_ml * 100.0)
-            self.monitor.update_progress(pct, f"{loss_ml:.1f}/{self._monitor_target_ml:.1f} mL")
 
     def _on_request_ok(self, step, reason):
         # FILLING step is handled by the dedicated filling banner; skip generic banner
@@ -1667,72 +1607,6 @@ class MainWindow(Qtw.QMainWindow):
         if callable(fn):
             fn(float(p))
 
-    def _start_monitor(self) -> None:
-        if not bool(self.config.get("monitor_enabled", True)):
-            return
-        try:
-            self.monitor = MonitorServer(
-                host=str(
-                    self.config.get(
-                        "monitor_host", "0.0.0.0")), port=int(
-                    self.config.get(
-                        "monitor_port", 8765)))
-            self.monitor.start()
-            QTimer.singleShot(2000, self._print_monitor_url)
-        except Exception:
-            self.monitor = None
-
-    def _print_monitor_url(self):
-        mon = self.monitor
-        if mon is not None and hasattr(mon, "url"):
-            link = mon.url()
-            short = f"http://{mon.lan_ip}:{mon.port}/"
-            try:
-                self.right.append_log("TELEMETRY SERVER ONLINE:", "#10B981")
-                self.right.append_log(f"-> {link}", "#00E5FF")
-                if hasattr(self, "left") and hasattr(self.left, "update_server_url"):
-                    self.left.update_server_url(link)
-            except Exception:
-                pass
-            # Permanent clickable WEB button in status bar — copies full URL on click.
-            try:
-                sb = self.statusBar()
-                if sb is not None:
-                    btn = getattr(self, "_monitor_url_btn", None)
-                    if btn is None:
-                        btn = Qtw.QPushButton("WEB", sb)
-                        btn.setCursor(Qt.PointingHandCursor)
-                        btn.setFlat(True)
-                        btn.setStyleSheet(
-                            "QPushButton { background: #0B3B2E; color: #10B981; "
-                            "border: 1px solid #10B981; border-radius: 3px; "
-                            "padding: 2px 8px; font-family: \'Consolas\'; "
-                            "font-weight: bold; font-size: 11px; } "
-                            "QPushButton:hover { background: #10B981; color: #0B1120; }"
-                        )
-                        btn.clicked.connect(self._copy_monitor_url)
-                        sb.addPermanentWidget(btn)
-                        self._monitor_url_btn = btn
-                    btn.setToolTip(f"Click to copy: {link}")
-                    sb.showMessage(
-                        f"  MONITOR: {short}  |  Token: {mon.token_short()}\u2026"
-                    )
-            except Exception as exc:
-                logger.warning("Could not install monitor URL button: %s", exc)
-
-    def _copy_monitor_url(self) -> None:
-        mon = getattr(self, "monitor", None)
-        if mon is None or not hasattr(mon, "url"):
-            return
-        try:
-            link = mon.url()
-            app = Qtw.QApplication.instance()
-            if app is not None:
-                app.clipboard().setText(link)
-            self._toast(f"Monitor URL copied ({mon.lan_ip}:{mon.port})")
-        except Exception as exc:
-            logger.warning("Could not copy monitor URL: %s", exc)
-
     def _poll_realtime(self) -> None:
         now = time.monotonic()
         if self._rt_t0 is None:
@@ -1772,9 +1646,6 @@ class MainWindow(Qtw.QMainWindow):
         # kommt die Telemetrie über worker.telemetry → right.update_telemetry
         if hasattr(self, "right") and not self._experiment_running():
             self.right.update_telemetry(sample)
-
-        if self.monitor:
-            self.monitor.update_metrics(flow=f_val, p1_meas=p1_val, p2_meas=p2_val, valves=v_val)
 
         if getattr(self, '_is_booting', False) and hasattr(self, 'hud'):
             self.hud.update_real_diagnostics(p1_val, f_val, latency)
@@ -1857,8 +1728,6 @@ class MainWindow(Qtw.QMainWindow):
         self._force_release_all("close")
         if getattr(self, '_thread', None):
             self._stop_deterministic(reason="close")
-        if getattr(self, 'monitor', None) and self.monitor:
-            self.monitor.stop()
         if getattr(self, 'dev', None) and self.dev:
             self.dev.disconnect()
         super().closeEvent(event)

@@ -895,7 +895,7 @@ class RightFrame(QFrame):
         self.btn_start = self._action_btn("START SEQUENCE", "#10B981")
         self.btn_start.clicked.connect(self.start_clicked.emit)
 
-        self.btn_stop = self._action_btn("EMERGENCY ABORT", "#FF1744")
+        self.btn_stop = self._action_btn("STOP", "#FF1744")
         self.btn_stop.clicked.connect(self.stop_clicked.emit)
         self.btn_stop.setEnabled(False)
 

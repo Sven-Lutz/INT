@@ -331,7 +331,7 @@ class HealthEvaluator:
         if run and self.rules.flow_low_warn is not None and q is not None:
             try:
                 f_thr = float(self.rules.flow_low_warn)
-                if q < f_thr:
+                if abs(q) < f_thr:
                     return HealthSnapshot(
                         health=SystemHealth.WARNING,
                         title="LOW FLOW",
