@@ -1138,8 +1138,8 @@ class MainWindow(Qtw.QMainWindow):
 
         self._toast("STOP: aborting + SAFE_STATE")
         self._stop_deterministic(reason="User abort")
-        # Show the aborted state — keep terminal + progress bar visible so the operator
-        # can see how far the run got. reset_state() will fire on the next run start.
+        # Keep terminal + progress visible so operator can see how far the run got.
+        # reset_state() fires at the start of the next run.
         self._current_step = "ABORTED"
         self.right.set_step("ABORTED")
         self._render_manual_state()

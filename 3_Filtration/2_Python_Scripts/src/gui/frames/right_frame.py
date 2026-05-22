@@ -281,13 +281,22 @@ class ReactorSphereWidget(QFrame):
                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                        f"{int(tick_pct * 200)}%")
 
-        # 5. Membrane line (dashed, at 50%)
-        p.setPen(QPen(QColor(248, 250, 252, 110), 1.5, Qt.PenStyle.DashLine))
+        # 5. Membrane line (dashed, at 50%) — glows when near membrane level
+        near_membrane = abs(self._fill_pct - 0.5) < 0.06
+        if near_membrane:
+            mem_alpha = int(180 + 75 * math.sin(self._wave_phase * 3.0))
+            mem_color = QColor(0, 229, 255, max(100, min(255, mem_alpha)))
+            p.setPen(QPen(mem_color, 2.0, Qt.PenStyle.DashLine))
+        else:
+            p.setPen(QPen(QColor(248, 250, 252, 110), 1.5, Qt.PenStyle.DashLine))
         p.drawLine(QPointF(cx - radius - 5, cy), QPointF(cx + radius + 5, cy))
-        p.setPen(QColor(71, 85, 105, 150))
+        if near_membrane:
+            p.setPen(QColor(0, 229, 255, 220))
+        else:
+            p.setPen(QColor(71, 85, 105, 150))
         p.setFont(QFont("Consolas", 6, QFont.Weight.Bold))
         p.drawText(QRectF(cx + radius + 7, cy - 8, 55, 16),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "100%")
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "MEM")
 
         # 5b. B1 target-fill indicator (dashed gold, only if target is set)
         if self._target_vol_ml > 0.0:
@@ -928,6 +937,43 @@ class RightFrame(QFrame):
         self.bar_b1.hide()
         prog_lay.addWidget(self.bar_b1)
 
+        # B2-Bar (Drying phase — shown when v_extra_ml > 0)
+        self.bar_b2 = QProgressBar()
+        self.bar_b2.setRange(0, 1000)
+        self.bar_b2.setValue(0)
+        self.bar_b2.setTextVisible(False)
+        self.bar_b2.setFixedHeight(4)
+        self.bar_b2.setStyleSheet("""
+            QProgressBar { background: #0F172A; border: none; border-radius: 2px; }
+            QProgressBar::chunk { background: #FBBF24; border-radius: 2px; }
+        """)
+        self.bar_b2.hide()
+        prog_lay.addWidget(self.bar_b2)
+
+        # Phase C row (ramp-down loss — tracked for completeness, not counted in target)
+        c_detail_lay = QHBoxLayout()
+        c_detail_lay.setSpacing(12)
+        self.lbl_c_detail = QLabel("")
+        self.lbl_c_detail.setStyleSheet(
+            "color: #EC4899; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; border: none;")
+        self.lbl_c_detail.hide()
+        c_detail_lay.addWidget(self.lbl_c_detail)
+        c_detail_lay.addStretch()
+        prog_lay.addLayout(c_detail_lay)
+
+        self.bar_c = QProgressBar()
+        self.bar_c.setRange(0, 1000)
+        self.bar_c.setValue(0)
+        self.bar_c.setTextVisible(False)
+        self.bar_c.setFixedHeight(4)
+        self.bar_c.setStyleSheet("""
+            QProgressBar { background: #0F172A; border: none; border-radius: 2px; }
+            QProgressBar::chunk { background: #EC4899; border-radius: 2px; }
+        """)
+        self.bar_c.hide()
+        prog_lay.addWidget(self.bar_c)
+
         # Flow / ETA row
         flow_eta_lay = QHBoxLayout()
         flow_eta_lay.setSpacing(12)
@@ -1090,16 +1136,25 @@ class RightFrame(QFrame):
         self._progress_current_ml = 0.0
         self._b1_target_ml = 0.0
         self._b2_target_ml = 0.0
-        self._snap_a_end_ml = 0.0
-        self._snap_b_end_ml = 0.0
-        self.seg_bar.reset()
-        self.sandglass.update_state(0.0, "IDLE")
+        # _cell_volume_ml and _flow_integrate_ts intentionally NOT reset —
+        # the sphere shows actual cell fill level between runs.
+        self.sandglass.update_state(self._cell_volume_ml, "IDLE")
         self.trapezoid.set_state(0.0, 0.0, "IDLE")
         self.trapezoid.set_b_progress(0.0)
         self.frm_progress.hide()
         self.bar_progress.hide()
         self.bar_progress.setValue(0)
+        self.bar_b1.setValue(0)
+        self.bar_b1.hide()
+        self.bar_b2.setValue(0)
+        self.bar_b2.hide()
+        self.bar_c.setValue(0)
+        self.bar_c.hide()
+        self.lbl_c_detail.hide()
         self.lbl_flow_rate.setText("FLOW: —")
+        self.lbl_flow_rate.setStyleSheet(
+            "color: #00FF66; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; border: none;")
         self.lbl_eta.setText("")
         self.lbl_eta_trend.setText("")
         self._flow_history.clear()
@@ -1171,13 +1226,6 @@ class RightFrame(QFrame):
         self.seg_bar.set_target(self._progress_target_ml)
         self.frm_progress.show()
         self._update_progress_bar()
-        # Auto-calibrate sphere: target = 100% fill, half = membrane (50%) line.
-        if target_ml > 10.0:
-            self._membrane_vol_ml = target_ml / 2.0
-            self.MAX_CELL_VOLUME_ML = target_ml
-            self.sandglass.configure_calibration(self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
-            logger.debug("Sphere auto-calibrated: membrane=%.0f mL, max=%.0f mL",
-                         self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
 
     def _update_progress_phase(self, phase: str):
         """Updates the phase label and handles terminal states (FINISHED / ABORTED)."""
@@ -1201,21 +1249,29 @@ class RightFrame(QFrame):
             f"color: {color}; font-family: 'Consolas'; font-size: 10px; "
             f"font-weight: bold; letter-spacing: 1px; border: none;")
 
-        if phase == "FINISHED":
-            self.lbl_prog_values.setText(
-                f"DONE  {self._progress_current_ml:.1f} mL"
-            )
-        elif phase == "ABORTED":
-            if self._progress_target_ml > 0.01:
-                pct = min(100.0, self._progress_current_ml / self._progress_target_ml * 100.0)
+        # Gradient-Farbe des Balkens an die Phase anpassen
+        self.bar_progress.setStyleSheet(f"""
+            QProgressBar {{ background: #0F172A; border: none; border-radius: 4px; }}
+            QProgressBar::chunk {{ background: {color}; border-radius: 4px; }}
+        """)
+
+        if phase in ("FINISHED", "ABORTED", "IDLE"):
+            if phase == "FINISHED":
+                self.bar_progress.setValue(1000)
                 self.lbl_prog_values.setText(
-                    f"STOPPED  {self._progress_current_ml:.1f} / "
-                    f"{self._progress_target_ml:.1f} mL ({pct:.0f}%)"
+                    f"DONE  {self._progress_current_ml:.1f} mL"
                 )
-            else:
-                self.lbl_prog_values.setText(
-                    f"STOPPED  {self._progress_current_ml:.1f} mL"
-                )
+            elif phase == "ABORTED":
+                if self._progress_target_ml > 0.01:
+                    pct = min(100.0, self._progress_current_ml / self._progress_target_ml * 100.0)
+                    self.lbl_prog_values.setText(
+                        f"STOPPED  {self._progress_current_ml:.1f} / "
+                        f"{self._progress_target_ml:.1f} mL ({pct:.0f}%)"
+                    )
+                else:
+                    self.lbl_prog_values.setText(
+                        f"STOPPED  {self._progress_current_ml:.1f} mL"
+                    )
 
     def _update_progress_bar(self):
         """Updates the value label; seg_bar handles the visual fill."""
@@ -1373,27 +1429,21 @@ class RightFrame(QFrame):
 
         # Live flow rate + ETA display in progress panel
         if flow_raw is not None:
-            flow_ml_min = abs(flow_raw)
+            flow_signed = float(flow_raw)         # keep sign for direction
+            flow_abs = abs(flow_signed)
+            # Red for negative (reverse/backwash), green for forward filtration
+            flow_color = "#FF1744" if flow_signed < -0.1 else "#00FF66"
             # Dead-band: only update label if flow changed by > 0.2 ml/min
             prev_flow = getattr(self, "_disp_flow_right", None)
-            if prev_flow is None or abs(flow_ml_min - prev_flow) >= 0.2:
-                self._disp_flow_right = flow_ml_min
-                self.lbl_flow_rate.setText(f"FLOW: {flow_ml_min:.1f} ml/min")
-            if flow_ml_min > 0.1:
-                self._flow_history.append(flow_ml_min)
-            avg_flow = (
-                sum(self._flow_history) / len(self._flow_history)
-                if self._flow_history else 0.0
-            )
-            # Update EMA flow for trend ETA
-            if self._flow_ema is None:
-                self._flow_ema = flow_ml_min
-            else:
-                self._flow_ema = (
-                    self._ETA_EMA_ALPHA * flow_ml_min
-                    + (1.0 - self._ETA_EMA_ALPHA) * self._flow_ema
-                )
-
+            if prev_flow is None or abs(flow_abs - abs(prev_flow if prev_flow else 0)) >= 0.2:
+                self._disp_flow_right = flow_signed
+                self.lbl_flow_rate.setText(f"FLOW: {flow_signed:.1f} ml/min")
+                self.lbl_flow_rate.setStyleSheet(
+                    f"color: {flow_color}; font-family: 'Consolas'; font-size: 10px; "
+                    f"font-weight: bold; border: none;")
+            if flow_abs > 0.1:
+                self._flow_history.append(flow_abs)
+            avg_flow = sum(self._flow_history) / len(self._flow_history) if self._flow_history else 0.0
             target_known = self._progress_target_ml > 0.01
             below_target = self._progress_current_ml < self._progress_target_ml
             if target_known and below_target and avg_flow > 0.1:
@@ -1411,20 +1461,9 @@ class RightFrame(QFrame):
                 prev_eta = getattr(self, "_disp_eta_min", None)
                 if prev_eta is None or abs(eta_min - prev_eta) >= 1.0:
                     self._disp_eta_min = eta_min
-                    self.lbl_eta.setText(f"ETA: {eta_min:.0f} min")
-
-                # Trend label: amber if diverges >25 % from linear ETA
-                diverges = (
-                    abs(trend_eta_min - eta_min) / max(eta_min, 0.1) > 0.25
-                )
-                trend_color = "#F59E0B" if diverges else "#64748B"
-                prev_trend = getattr(self, "_disp_eta_trend_min", None)
-                if prev_trend is None or abs(trend_eta_min - prev_trend) >= 1.0:
-                    self._disp_eta_trend_min = trend_eta_min
-                    self.lbl_eta_trend.setText(f"({trend_eta_min:.0f})")
-                    self.lbl_eta_trend.setStyleSheet(
-                        f"color: {trend_color}; font-family: 'Consolas'; "
-                        f"font-size: 9px; border: none;")
+                    eta_m = int(eta_min)
+                    eta_s = int((eta_min - eta_m) * 60)
+                    self.lbl_eta.setText(f"ETA: {eta_m} min {eta_s:02d} s")
             else:
                 if getattr(self, "_disp_eta_min", None) is not None:
                     self._disp_eta_min = None
@@ -1456,6 +1495,19 @@ class RightFrame(QFrame):
         """Bediener hat Filling bestätigt — emittiert Signal mit eingegebener Menge."""
         ml = float(self.sp_fill_amount.value())
         self.append_log(f"FILLING CONFIRMED: {ml:.1f} ml added", "#10B981")
+
+        # Anchor membrane at current backwash-residual volume.
+        # After Phase B1 drains exactly ml mL, _cell_volume_ml returns to bw_vol = membrane level.
+        bw_vol = max(10.0, self._cell_volume_ml)
+        self._membrane_vol_ml = bw_vol
+        self._cell_volume_ml = bw_vol + ml
+        self.MAX_CELL_VOLUME_ML = self._cell_volume_ml
+        self.sandglass.configure_calibration(self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
+        self.sandglass.update_state(self._cell_volume_ml, "FILLING")
+        self.append_log(
+            f"SYS: Sphere → membrane={bw_vol:.0f} mL (50%) full={self._cell_volume_ml:.0f} mL",
+            "#00E5FF",
+        )
         self.filling_confirmed.emit(ml)
 
     def set_ok_banner(self, step: str, reason: str, show: bool):
@@ -1507,7 +1559,17 @@ class RightFrame(QFrame):
                 self.lbl_b2_detail.setText(
                     f"B2: {current:.1f} / {target:.1f} ml ({pct:.0f}%)"
                 )
+                self.bar_b2.setValue(int(pct * 10))
             else:
                 self.lbl_b2_detail.setText(f"B2: {current:.1f} ml")
+                self.bar_b2.setValue(0)
             self.lbl_b2_detail.show()
-            self.seg_bar.set_segment(b2=self._b2_current_ml)
+            self.bar_b2.show()
+        elif pid == "C":
+            c_ml = float(current)
+            if c_ml > 0.0:
+                self.lbl_c_detail.setText(f"C ramp-dn: {c_ml:.1f} ml")
+                self.lbl_c_detail.show()
+                self.bar_c.show()
+                # bar_c is decorative — set proportional to 500 mL ceiling so it grows visibly
+                self.bar_c.setValue(min(1000, int(c_ml / 500.0 * 1000)))
