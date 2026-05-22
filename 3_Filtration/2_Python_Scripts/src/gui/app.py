@@ -14,8 +14,12 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 
 def _qt_msg_handler(msg_type, context, message):
-    """Suppress Qt's internal stylesheet warnings (EliteModule class-selector quirk)."""
+    """Suppress known-harmless Qt internal warnings."""
     if "Could not parse stylesheet" in message:
+        return
+    if "Unable to set geometry" in message:
+        # Qt restores saved geometry that doesn't fit the current screen — harmless,
+        # Qt automatically falls back to a valid size.
         return
     if msg_type == QtMsgType.QtWarningMsg:
         logger.warning("Qt: %s", message)

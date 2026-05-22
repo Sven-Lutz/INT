@@ -146,7 +146,7 @@ class Experimentator:
         self._flush(force=True)
 
         logger.info("Experimentator initialized (log=%s)", self.log_path)
-        logger.info("Initial volume: %.6f mL | cfg=%s", self.volume_ml, asdict(self.cfg))
+        logger.debug("Experimentator cfg: %s", asdict(self.cfg))
 
     def close(self) -> None:
         try:

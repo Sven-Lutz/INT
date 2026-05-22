@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import logging
 import struct
+import threading
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import serial  # pyserial — always available
 
@@ -18,19 +19,28 @@ logger = logging.getLogger(__name__)
 
 class _ProParSerial:
     """
-    Minimal Bronkhorst ProPar ASCII protocol over raw pyserial.
+    Bronkhorst ProPar ASCII protocol over raw pyserial.
 
-    Implements only what FlowSensor needs: float reads and a connectivity
-    ping.  Used when the propar library is absent or broken.
+    Frame format matches the bronkhorst-propar 1.3 library (ASCII mode):
 
-    Wire format (no spaces):
-      Request:  :{len:02X}{node:02X}04{proc:02X}{type:02X}{parm:02X}\\r
-      Response: :{len:02X}{node:02X}02{proc:02X}{type:02X}{parm:02X}{data...}\\r
-    Floats are transmitted big-endian IEEE 754.
+      TX: :{(len(data)+1):02X}{addr:02X}04{proc:02X}{pb:02X}{proc:02X}{pb:02X}\\r\\n
+      RX: :{(len(data)+1):02X}{node:02X}02{proc:02X}{pb:02X}{value_bytes}\\r\\n
+
+    Where pb = (parm_nr & 0x1F) | wire_type_bits:
+      wire_type 0x40 = INT32 on wire (= PP_TYPE_FLOAT, 4 bytes, big-endian IEEE 754)
+      wire_type 0x20 = INT16 on wire (= PP_TYPE_INT16, 2 bytes, big-endian uint16)
+
+    Length byte in frame = len(data_bytes_excl_node) + 1.
+
+    cmd=0x02 = DATA response (wanted)
+    cmd=0x04 = RS-485 half-duplex echo of own request (skip)
+    cmd=0x00 = STATUS/ERROR response — data[1] is Bronkhorst status code
+               (e.g. 34=PP_STATUS_PROTOCOL_ERROR, 4=PP_STATUS_PARM_NUMBER)
     """
 
-    _FLOAT_TYPE = 0x71  # PP_TYPE_FLOAT (4-byte IEEE 754)
-    _UINT16_TYPE = 0x02  # PP_TYPE_INT (2-byte unsigned)
+    # Wire type bits ORed into the parm byte
+    WIRE_TYPE_FLOAT = 0x40   # INT32 on wire, reinterpreted as IEEE 754 float
+    WIRE_TYPE_INT16 = 0x20   # unsigned 16-bit integer (0-32000 raw count)
 
     def __init__(self, port: str, baudrate: int, address: int, timeout: float = 1.5):
         self._ser = serial.Serial(
@@ -38,44 +48,68 @@ class _ProParSerial:
             bytesize=8, parity="N", stopbits=1,
         )
         self._addr = address & 0xFF
+        self._lock = threading.Lock()
 
-    def _query(self, proc: int, ptype: int, parm: int) -> Optional[bytes]:
-        payload = bytes([self._addr, 0x04, proc & 0xFF, ptype & 0xFF, parm & 0xFF])
-        frame = f":{len(payload):02X}" + payload.hex().upper() + "\r"
-        logger.debug(f"ProPar TX: {frame.strip()!r}")
-        self._ser.reset_input_buffer()
-        self._ser.write(frame.encode("ascii"))
+    def _query(self, proc: int, parm: int, wire_type: int) -> Optional[bytes]:
+        """Send one ProPar read request; return value bytes from the cmd=0x02 answer."""
+        with self._lock:
+            pb = (parm & 0x1F) | (wire_type & 0x60)
+            # data = [cmd, proc_index, parm_byte, proc_nr, parm_byte]  (5 bytes)
+            data = bytes([0x04, proc & 0xFF, pb, proc & 0xFF, pb])
+            # length byte in frame = len(data) + 1  (bronkhorst-propar convention)
+            frame = f":{(len(data) + 1):02X}{self._addr:02X}" + data.hex().upper() + "\r\n"
+            logger.debug(f"ProPar TX: {frame.strip()!r}")
+            self._ser.reset_input_buffer()
+            self._ser.write(frame.encode("ascii"))
 
-        # RS-485 adapters often echo the transmitted frame before the device answers.
-        # Read up to 3 lines; skip anything that is not an answer frame (cmd=0x02).
-        for attempt in range(3):
-            resp = self._ser.readline()
-            logger.debug(f"ProPar RX[{attempt}]: {resp!r}")
-            if not resp or resp[0:1] != b":":
-                continue
-            hex_body = resp[1:].decode("ascii", errors="ignore").replace(" ", "").strip()
-            try:
-                raw = bytes.fromhex(hex_body)
-            except ValueError:
-                logger.debug(f"ProPar RX[{attempt}]: hex decode failed on {hex_body!r}")
-                continue
-            # raw layout: [length, node, cmd, proc, type, parm, data...]
-            if len(raw) < 6:
-                continue
-            if raw[2] == 0x02:  # answer frame — not the echo
-                return raw[6:]
-            # cmd=0x04 is the echo of our own request; read next line
+            for attempt in range(4):
+                resp = self._ser.readline()
+                logger.debug(f"ProPar RX[{attempt}]: {resp!r}")
+                if not resp or resp[0:1] != b":":
+                    continue
+                hex_body = resp[1:].decode("ascii", errors="ignore").strip()
+                try:
+                    raw = bytes.fromhex(hex_body)
+                except ValueError:
+                    logger.debug(f"ProPar RX[{attempt}]: hex decode failed on {hex_body!r}")
+                    continue
+                if len(raw) < 3:
+                    continue
+
+                cmd = raw[2]
+                if cmd == 0x02 and len(raw) >= 5:
+                    # raw = [len_byte, node, 0x02, proc_nr, parm_byte, value_bytes...]
+                    return raw[5:]
+                if cmd == 0x04:
+                    continue  # RS-485 echo of own TX, keep reading
+                if cmd == 0x00:
+                    err = raw[3] if len(raw) > 3 else 0xFF
+                    logger.debug(
+                        f"ProPar: STATUS/ERROR (code={err}) for "
+                        f"proc={proc:#04x} parm={parm} wire_type={wire_type:#04x}"
+                    )
+                    return None
 
         return None
 
-    def read_float(self, proc: int, parm: int) -> Optional[float]:
-        data = self._query(proc, self._FLOAT_TYPE, parm)
-        if data is None or len(data) < 4:
-            return None
-        return struct.unpack(">f", data[:4])[0]
+    def probe(self, candidates: list[Tuple[int, int, int]]) -> Optional[Tuple[int, int, int]]:
+        """Try each (proc, parm, wire_type) candidate; return first that gets a DATA response."""
+        for proc, parm, wire_type in candidates:
+            logger.info(
+                f"ProPar probe: trying proc={proc:#04x} parm={parm} wire_type={wire_type:#04x}"
+            )
+            data = self._query(proc, parm, wire_type)
+            if data is not None:
+                logger.info(
+                    f"ProPar probe: SUCCESS proc={proc:#04x} parm={parm} "
+                    f"wire_type={wire_type:#04x} — data={data.hex()}"
+                )
+                return (proc, parm, wire_type)
+        return None
 
-    def ping(self, proc: int, parm: int) -> bool:
-        return self._query(proc, self._FLOAT_TYPE, parm) is not None
+    def read(self, proc: int, parm: int, wire_type: int) -> Optional[bytes]:
+        """Return raw value bytes using a confirmed (proc, parm, wire_type)."""
+        return self._query(proc, parm, wire_type)
 
     def close(self) -> None:
         if self._ser and self._ser.is_open:
@@ -90,35 +124,32 @@ class FlowSensorConfig:
 
     proc_nr: int = 33
     parm_nr: int = 0
-    parm_type: int = 117
 
     scale_mode: str = "engineering"
-    full_scale_raw: float = 32767.0
+    full_scale_raw: float = 32000.0
     full_scale_ml_min: float = 150.0
 
     @staticmethod
     def from_dict(d: Dict[str, Any]) -> "FlowSensorConfig":
-        logger.info(f"FlowSensorConfig.from_dict received: {d}")
         if "flow" in d and isinstance(d["flow"], dict):
             d = d["flow"]
 
         port = d.get("port", d.get("COM Port", "COM5"))
         baudrate = int(d.get("baudrate", 38400))
         address = int(d.get("address", 3))
+        logger.debug(f"FlowSensorConfig: port={port} baud={baudrate} addr={address}")
 
         meas = d.get("meas", [33, 0])
         proc_nr = int(meas[0])
         parm_nr = int(meas[1])
 
-        parm_type = 117 if proc_nr == 33 else 114
-
         scale_mode = str(d.get("scale_mode", "engineering")).strip().lower()
         fs_raw = float(d.get("full_scale_raw", 32000.0))
-        fs_ml = float(d.get("full_scale_ml_min", 20.0))
+        fs_ml = float(d.get("full_scale_ml_min", 150.0))
 
         return FlowSensorConfig(
             port=port, baudrate=baudrate, address=address,
-            proc_nr=proc_nr, parm_nr=parm_nr, parm_type=parm_type,
+            proc_nr=proc_nr, parm_nr=parm_nr,
             scale_mode=scale_mode, full_scale_raw=fs_raw, full_scale_ml_min=fs_ml,
         )
 
@@ -140,7 +171,8 @@ class FlowSensor:
             self.cfg = cfg
 
         self.flow_sensor: Any = None
-        self._cached_parameter_id: int = 0  # 205=fMeasure(float), 8=Measure(raw)
+        self._cached_parameter_id: int = 0  # propar path: 205=fMeasure(float), 8=Measure(raw)
+        self._serial_fmt: Optional[Tuple[int, int, int]] = None  # pyserial path: (proc, parm, wire_type)
         self._last_good_flow: float = 0.0
         self._error_count: int = 0
 
@@ -238,16 +270,37 @@ class FlowSensor:
         logger.info("FlowSensor: using raw pyserial ProPar fallback.")
         ser = _ProParSerial(self.cfg.port, self.cfg.baudrate, self.cfg.address)
 
-        if not ser.ping(self.cfg.proc_nr, self.cfg.parm_nr):
+        # Probe candidates: (proc_nr, parm_nr, wire_type)
+        # wire_type 0x40 = FLOAT (INT32 on wire, 4 bytes, big-endian IEEE 754)
+        # wire_type 0x20 = INT16 (2 bytes, big-endian uint16, 0-32000 raw count)
+        # parm=6 = "Volume Flow" (ml/min float), parm=5 = "Normal Flow"
+        # proc=1, parm=0, INT16 = classic integer Measure (0-32000 raw)
+        p = self.cfg.proc_nr  # typically 33
+        n = self.cfg.parm_nr  # from config (default 6 = Volume Flow)
+        F = _ProParSerial.WIRE_TYPE_FLOAT
+        I = _ProParSerial.WIRE_TYPE_INT16
+        candidates: list[Tuple[int, int, int]] = [
+            (p, 6, F),   # proc 33, parm 6 = Volume Flow, float
+            (p, 5, F),   # proc 33, parm 5 = Normal Flow, float
+            (p, n, F),   # proc 33, config parm, float
+            (1, 0, I),   # proc 1, parm 0 = Measure, uint16 (0-32000)
+        ]
+
+        fmt = ser.probe(candidates)
+        if fmt is None:
             logger.error(
-                f"FlowSensor: no ProPar response on {self.cfg.port} "
-                f"(proc={self.cfg.proc_nr}, parm={self.cfg.parm_nr})"
+                f"FlowSensor: no valid ProPar response on {self.cfg.port} "
+                f"— tried all candidate formats"
             )
             ser.close()
             return
 
+        self._serial_fmt = fmt
         self.flow_sensor = ser
-        logger.info("FlowSensor: connected via raw pyserial ProPar.")
+        logger.info(
+            f"FlowSensor: connected via raw pyserial ProPar "
+            f"(proc={fmt[0]:#04x}, parm={fmt[1]}, wire_type={fmt[2]:#04x})."
+        )
         self._error_count = 0
         self._last_good_flow = 0.0
 
@@ -257,8 +310,20 @@ class FlowSensor:
 
         try:
             if isinstance(self.flow_sensor, _ProParSerial):
-                val = self.flow_sensor.read_float(self.cfg.proc_nr, self.cfg.parm_nr)
-                if val is None:
+                if self._serial_fmt is None:
+                    return 0.0
+                proc, parm, wire_type = self._serial_fmt
+                data = self.flow_sensor.read(proc, parm, wire_type)
+                if data is None:
+                    return self._last_good_flow
+                if wire_type == _ProParSerial.WIRE_TYPE_FLOAT and len(data) >= 4:
+                    # 4-byte big-endian IEEE 754 float (engineering units, ml/min)
+                    val = struct.unpack(">f", data[:4])[0]
+                elif wire_type == _ProParSerial.WIRE_TYPE_INT16 and len(data) >= 2:
+                    # 2-byte uint16 raw count (0-32000), scale to ml/min
+                    raw_count = struct.unpack(">H", data[:2])[0]
+                    val = (raw_count / self.cfg.full_scale_raw) * self.cfg.full_scale_ml_min
+                else:
                     return self._last_good_flow
                 self._error_count = 0
                 self._last_good_flow = val
