@@ -1063,7 +1063,17 @@ class RightFrame(QFrame):
                 self.bar_progress.setValue(1000)
                 self.lbl_prog_values.setText("DONE")
             elif phase == "ABORTED":
-                self.lbl_prog_values.setText("STOPPED")
+                # Keep bar at last value; show partial progress with STOPPED indicator
+                if self._progress_target_ml > 0.01:
+                    pct = min(100.0, self._progress_current_ml / self._progress_target_ml * 100.0)
+                    self.lbl_prog_values.setText(
+                        f"STOPPED  {self._progress_current_ml:.1f} / "
+                        f"{self._progress_target_ml:.1f} mL ({pct:.0f}%)"
+                    )
+                else:
+                    self.lbl_prog_values.setText(
+                        f"STOPPED  {self._progress_current_ml:.1f} mL"
+                    )
 
     def _update_progress_bar(self):
         """Aktualisiert Balken und Zahlenwerte."""
