@@ -844,6 +844,43 @@ class RightFrame(QFrame):
         self.bar_b1.hide()
         prog_lay.addWidget(self.bar_b1)
 
+        # B2-Bar (Drying phase — shown when v_extra_ml > 0)
+        self.bar_b2 = QProgressBar()
+        self.bar_b2.setRange(0, 1000)
+        self.bar_b2.setValue(0)
+        self.bar_b2.setTextVisible(False)
+        self.bar_b2.setFixedHeight(4)
+        self.bar_b2.setStyleSheet("""
+            QProgressBar { background: #0F172A; border: none; border-radius: 2px; }
+            QProgressBar::chunk { background: #FBBF24; border-radius: 2px; }
+        """)
+        self.bar_b2.hide()
+        prog_lay.addWidget(self.bar_b2)
+
+        # Phase C row (ramp-down loss — tracked for completeness, not counted in target)
+        c_detail_lay = QHBoxLayout()
+        c_detail_lay.setSpacing(12)
+        self.lbl_c_detail = QLabel("")
+        self.lbl_c_detail.setStyleSheet(
+            "color: #EC4899; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; border: none;")
+        self.lbl_c_detail.hide()
+        c_detail_lay.addWidget(self.lbl_c_detail)
+        c_detail_lay.addStretch()
+        prog_lay.addLayout(c_detail_lay)
+
+        self.bar_c = QProgressBar()
+        self.bar_c.setRange(0, 1000)
+        self.bar_c.setValue(0)
+        self.bar_c.setTextVisible(False)
+        self.bar_c.setFixedHeight(4)
+        self.bar_c.setStyleSheet("""
+            QProgressBar { background: #0F172A; border: none; border-radius: 2px; }
+            QProgressBar::chunk { background: #EC4899; border-radius: 2px; }
+        """)
+        self.bar_c.hide()
+        prog_lay.addWidget(self.bar_c)
+
         # Flow / ETA row
         flow_eta_lay = QHBoxLayout()
         flow_eta_lay.setSpacing(12)
@@ -1000,13 +1037,23 @@ class RightFrame(QFrame):
         self._progress_current_ml = 0.0
         self._b1_target_ml = 0.0
         self._b2_target_ml = 0.0
-        # _cell_volume_ml and _flow_integrate_ts are intentionally NOT reset here —
-        # the sphere should continue showing the actual cell fill level after a run.
+        # _cell_volume_ml and _flow_integrate_ts intentionally NOT reset —
+        # the sphere shows actual cell fill level between runs.
         self.sandglass.update_state(self._cell_volume_ml, "IDLE")
         self.trapezoid.set_state(0.0, 0.0, "IDLE")
         self.frm_progress.hide()
         self.bar_progress.setValue(0)
+        self.bar_b1.setValue(0)
+        self.bar_b1.hide()
+        self.bar_b2.setValue(0)
+        self.bar_b2.hide()
+        self.bar_c.setValue(0)
+        self.bar_c.hide()
+        self.lbl_c_detail.hide()
         self.lbl_flow_rate.setText("FLOW: —")
+        self.lbl_flow_rate.setStyleSheet(
+            "color: #00FF66; font-family: 'Consolas'; font-size: 10px; "
+            "font-weight: bold; border: none;")
         self.lbl_eta.setText("")
         self._flow_history.clear()
         self._run_start = None
@@ -1073,9 +1120,20 @@ class RightFrame(QFrame):
         if phase in ("FINISHED", "ABORTED", "IDLE"):
             if phase == "FINISHED":
                 self.bar_progress.setValue(1000)
-                self.lbl_prog_values.setText("DONE")
+                self.lbl_prog_values.setText(
+                    f"DONE  {self._progress_current_ml:.1f} mL"
+                )
             elif phase == "ABORTED":
-                self.lbl_prog_values.setText("STOPPED")
+                if self._progress_target_ml > 0.01:
+                    pct = min(100.0, self._progress_current_ml / self._progress_target_ml * 100.0)
+                    self.lbl_prog_values.setText(
+                        f"STOPPED  {self._progress_current_ml:.1f} / "
+                        f"{self._progress_target_ml:.1f} mL ({pct:.0f}%)"
+                    )
+                else:
+                    self.lbl_prog_values.setText(
+                        f"STOPPED  {self._progress_current_ml:.1f} mL"
+                    )
 
     def _update_progress_bar(self):
         """Aktualisiert Balken und Zahlenwerte."""
@@ -1233,14 +1291,20 @@ class RightFrame(QFrame):
 
         # Live flow rate + ETA display in progress panel
         if flow_raw is not None:
-            flow_ml_min = abs(flow_raw)
+            flow_signed = float(flow_raw)         # keep sign for direction
+            flow_abs = abs(flow_signed)
+            # Red for negative (reverse/backwash), green for forward filtration
+            flow_color = "#FF1744" if flow_signed < -0.1 else "#00FF66"
             # Dead-band: only update label if flow changed by > 0.2 ml/min
             prev_flow = getattr(self, "_disp_flow_right", None)
-            if prev_flow is None or abs(flow_ml_min - prev_flow) >= 0.2:
-                self._disp_flow_right = flow_ml_min
-                self.lbl_flow_rate.setText(f"FLOW: {flow_ml_min:.1f} ml/min")
-            if flow_ml_min > 0.1:
-                self._flow_history.append(flow_ml_min)
+            if prev_flow is None or abs(flow_abs - abs(prev_flow if prev_flow else 0)) >= 0.2:
+                self._disp_flow_right = flow_signed
+                self.lbl_flow_rate.setText(f"FLOW: {flow_signed:.1f} ml/min")
+                self.lbl_flow_rate.setStyleSheet(
+                    f"color: {flow_color}; font-family: 'Consolas'; font-size: 10px; "
+                    f"font-weight: bold; border: none;")
+            if flow_abs > 0.1:
+                self._flow_history.append(flow_abs)
             avg_flow = sum(self._flow_history) / len(self._flow_history) if self._flow_history else 0.0
             target_known = self._progress_target_ml > 0.01
             below_target = self._progress_current_ml < self._progress_target_ml
@@ -1251,7 +1315,9 @@ class RightFrame(QFrame):
                 prev_eta = getattr(self, "_disp_eta_min", None)
                 if prev_eta is None or abs(eta_min - prev_eta) >= 1.0:
                     self._disp_eta_min = eta_min
-                    self.lbl_eta.setText(f"ETA: {eta_min:.0f} min")
+                    eta_m = int(eta_min)
+                    eta_s = int((eta_min - eta_m) * 60)
+                    self.lbl_eta.setText(f"ETA: {eta_m} min {eta_s:02d} s")
             else:
                 if getattr(self, "_disp_eta_min", None) is not None:
                     self._disp_eta_min = None
@@ -1331,6 +1397,17 @@ class RightFrame(QFrame):
                 self.lbl_b2_detail.setText(
                     f"B2: {current:.1f} / {target:.1f} ml ({pct:.0f}%)"
                 )
+                self.bar_b2.setValue(int(pct * 10))
             else:
                 self.lbl_b2_detail.setText(f"B2: {current:.1f} ml")
+                self.bar_b2.setValue(0)
             self.lbl_b2_detail.show()
+            self.bar_b2.show()
+        elif pid == "C":
+            c_ml = float(current)
+            if c_ml > 0.0:
+                self.lbl_c_detail.setText(f"C ramp-dn: {c_ml:.1f} ml")
+                self.lbl_c_detail.show()
+                self.bar_c.show()
+                # bar_c is decorative — set proportional to 500 mL ceiling so it grows visibly
+                self.bar_c.setValue(min(1000, int(c_ml / 500.0 * 1000)))

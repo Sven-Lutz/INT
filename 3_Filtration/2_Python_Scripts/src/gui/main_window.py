@@ -1142,14 +1142,14 @@ class MainWindow(Qtw.QMainWindow):
 
         self._toast("STOP: aborting + SAFE_STATE")
         self._stop_deterministic(reason="User abort")
-        self.right.reset_state()
-        self._current_step = "IDLE"
-        self.right.set_step("IDLE")
+        # Keep terminal + progress visible so operator can see how far the run got.
+        # reset_state() fires at the start of the next run.
+        self._current_step = "ABORTED"
+        self.right.set_step("ABORTED")
         self._render_manual_state()
 
         try:
-            self.top.set_loss_ml(0.0)
-            status_text = "SIMULATION: IDLE" if self._simulation_mode else "SYSTEM: IDLE / READY"
+            status_text = "SIMULATION: STOPPED" if self._simulation_mode else "SYSTEM: STOPPED"
             self.top.update_status(status_text)
         except Exception:
             pass

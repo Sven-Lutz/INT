@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 # =========================================================================
 
 
+def _fmt_s(seconds: float) -> str:
+    """Format a duration in seconds as 'X min Y s' (no decimal minutes)."""
+    total = max(0, int(round(seconds)))
+    m, s = divmod(total, 60)
+    return f"{m} min {s:02d} s" if m else f"{s} s"
+
+
 def robust_switch_valves(dev: Any, mode: str, log_signal: Optional[Any] = None) -> None:
     """Kugelsicherer Ventil-Schalter mit 'Break before Make' Logik."""
     if dev is None:
@@ -598,7 +605,7 @@ class ExperimentWorker(QObject):
                                 f"BW: {bw_vol_filled:.1f}"
                                 + (f"/{bw_target_ml:.0f}" if _p0_mode == "AUTO" else "")
                                 + f" ml | Flow: {abs(flow_ml_s)*60:.1f} ml/min"
-                                + (f" | ETA: {_bw_eta_s/60:.1f} min" if _p0_mode == "AUTO" else ""))
+                                + (f" | ETA: {_fmt_s(_bw_eta_s)}" if _p0_mode == "AUTO" else ""))
                         else:
                             self.status.emit(f"BW: {bw_vol_filled:.1f} ml | Flow: waiting...")
 
@@ -690,8 +697,8 @@ class ExperimentWorker(QObject):
                     self.log_msg.emit(
                         f"PHASE A [STEPPED]: {current_mbar:.0f} → {p.phase_a_target_mbar:.0f} mbar"
                         f"  {n_steps} steps × {step_mbar:.0f} mbar"
-                        f"  @ {time_per_step_s/60:.1f} min/step"
-                        f"  (ETA {total_eta_min:.1f} min)", "#8B5CF6")
+                        f"  @ {_fmt_s(time_per_step_s)}/step"
+                        f"  (ETA {_fmt_s(total_eta_min * 60)})", "#8B5CF6")
 
                     vol_a_start = float(self._exp.volume_ml)
                     for i in range(1, n_steps + 1):
@@ -701,10 +708,10 @@ class ExperimentWorker(QObject):
                             self._safe_set_pressure_mbar(channel=ch, mbar=next_p)
                         self.log_msg.emit(
                             f"Phase A step {i}/{n_steps}: {next_p:.0f} mbar — "
-                            f"holding {time_per_step_s/60:.1f} min", "#8B5CF6")
+                            f"holding {_fmt_s(time_per_step_s)}", "#8B5CF6")
                         self.status.emit(
                             f"Phase A [{i}/{n_steps}]: {next_p:.0f} mbar — "
-                            f"ETA {(n_steps - i) * time_per_step_s / 60:.1f} min remaining")
+                            f"ETA {_fmt_s((n_steps - i) * time_per_step_s)} remaining")
                         self._emit_sample(event=f"PHASE_A_STEP_{i}_of_{n_steps}")
                         self._sleep_abortable(time_per_step_s)
 
@@ -717,7 +724,7 @@ class ExperimentWorker(QObject):
                     self.log_msg.emit(
                         f"PHASE A [SMOOTH]: {current_mbar:.0f} → {p.phase_a_target_mbar:.0f} mbar"
                         f"  ({p.phase_a_rate_mbar_min:.0f} mbar/min"
-                        f"  ETA {total_duration_s/60:.1f} min)", "#8B5CF6")
+                        f"  ETA {_fmt_s(total_duration_s)})", "#8B5CF6")
                     self.status.emit(
                         f"Phase A: ramp {current_mbar:.0f} → {p.phase_a_target_mbar:.0f} mbar")
                     loss_a = self._exp.step_continuous_ramp(
@@ -846,7 +853,7 @@ class ExperimentWorker(QObject):
                         _flow_ml_min = self._flow_ema_ml_s * 60.0
                         self.status.emit(
                             f"B1: {loss_b1:.1f}/{remaining_b1:.1f} ml | "
-                            f"Flow: {_flow_ml_min:.1f} ml/min | ETA: {_eta_s/60:.1f} min")
+                            f"Flow: {_flow_ml_min:.1f} ml/min | ETA: {_fmt_s(_eta_s)}")
                     else:
                         self.status.emit(
                             f"B1: {loss_b1:.1f}/{remaining_b1:.1f} ml | Flow: waiting...")
@@ -922,7 +929,7 @@ class ExperimentWorker(QObject):
                             self.status.emit(
                                 f"B2: {loss_b2:.1f}/{p.v_extra_ml:.1f} ml | "
                                 f"Flow: {_flow_ml_min_b2:.1f} ml/min | "
-                                f"ETA: {_eta_s/60:.1f} min")
+                                f"ETA: {_fmt_s(_eta_s)}")
                         else:
                             self.status.emit(
                                 f"B2: {loss_b2:.1f}/{p.v_extra_ml:.1f} ml | Flow: waiting...")
@@ -966,8 +973,8 @@ class ExperimentWorker(QObject):
                     self.log_msg.emit(
                         f"PHASE C [STEPPED]: {start_mbar:.0f} → 0 mbar"
                         f"  {n_steps} steps × {step_mbar:.0f} mbar"
-                        f"  @ {time_per_step_s/60:.1f} min/step"
-                        f"  (ETA {total_eta_min:.1f} min)", "#EC4899")
+                        f"  @ {_fmt_s(time_per_step_s)}/step"
+                        f"  (ETA {_fmt_s(total_eta_min * 60)})", "#EC4899")
                     self.log_msg.emit("═" * 52, "#EC4899")
 
                     vol_c_start = float(self._exp.volume_ml)
@@ -976,12 +983,13 @@ class ExperimentWorker(QObject):
                         next_p = max(0.0, start_mbar - i * step_mbar)
                         if getattr(dev, "pressure_controller", None) is not None:
                             self._safe_set_pressure_mbar(channel=ch, mbar=next_p)
+                        eta_remaining_s = (n_steps - i) * time_per_step_s
                         self.log_msg.emit(
                             f"Phase C step {i}/{n_steps}: {next_p:.0f} mbar — "
-                            f"holding {time_per_step_s/60:.1f} min", "#EC4899")
+                            f"holding {_fmt_s(time_per_step_s)}", "#EC4899")
                         self.status.emit(
                             f"Phase C [{i}/{n_steps}]: {next_p:.0f} mbar — "
-                            f"ETA {(n_steps - i) * time_per_step_s / 60:.1f} min remaining")
+                            f"ETA {_fmt_s(eta_remaining_s)} remaining")
                         self._emit_sample(event=f"PHASE_C_STEP_{i}_of_{n_steps}")
                         self._sleep_abortable(time_per_step_s)
 
@@ -992,7 +1000,7 @@ class ExperimentWorker(QObject):
                                   ) if rate_mbar_min > 0 and start_mbar > 0 else 30.0
                     self.log_msg.emit(
                         f"PHASE C [SMOOTH]: {start_mbar:.0f} → 0 mbar"
-                        f"  ({rate_mbar_min:.0f} mbar/min, ETA {duration_s/60:.1f} min)",
+                        f"  ({rate_mbar_min:.0f} mbar/min, ETA {_fmt_s(duration_s)})",
                         "#EC4899")
                     self.log_msg.emit("═" * 52, "#EC4899")
                     self.status.emit(f"Phase C: pressure release {start_mbar:.0f} → 0 mbar")
@@ -1007,8 +1015,9 @@ class ExperimentWorker(QObject):
                 robust_switch_valves(dev, "SHUT", self.log_msg)
 
                 _loss_c = loss_c
+                self.phase_detail_updated.emit("C", loss_c, 0.0)
                 self._emit_sample(event=f"PHASE_C_END loss={loss_c:.4f}")
-                self.log_msg.emit(f"Phase C complete. Loss: {loss_c:.4f} ml", "#EC4899")
+                self.log_msg.emit(f"Phase C complete. Loss: {loss_c:.1f} ml", "#EC4899")
                 total_loss += loss_c
                 self._total_loss_so_far += loss_c
                 self._phase_vol_start = None
