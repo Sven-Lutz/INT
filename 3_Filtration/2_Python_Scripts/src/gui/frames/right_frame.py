@@ -280,13 +280,22 @@ class ReactorSphereWidget(QFrame):
                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                        f"{int(tick_pct * 200)}%")
 
-        # 5. Membrane line (dashed, at 50%)
-        p.setPen(QPen(QColor(248, 250, 252, 110), 1.5, Qt.PenStyle.DashLine))
+        # 5. Membrane line (dashed, at 50%) — glows when near membrane level
+        near_membrane = abs(self._fill_pct - 0.5) < 0.06
+        if near_membrane:
+            mem_alpha = int(180 + 75 * math.sin(self._wave_phase * 3.0))
+            mem_color = QColor(0, 229, 255, max(100, min(255, mem_alpha)))
+            p.setPen(QPen(mem_color, 2.0, Qt.PenStyle.DashLine))
+        else:
+            p.setPen(QPen(QColor(248, 250, 252, 110), 1.5, Qt.PenStyle.DashLine))
         p.drawLine(QPointF(cx - radius - 5, cy), QPointF(cx + radius + 5, cy))
-        p.setPen(QColor(71, 85, 105, 150))
+        if near_membrane:
+            p.setPen(QColor(0, 229, 255, 220))
+        else:
+            p.setPen(QColor(71, 85, 105, 150))
         p.setFont(QFont("Consolas", 6, QFont.Weight.Bold))
         p.drawText(QRectF(cx + radius + 7, cy - 8, 55, 16),
-                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "100%")
+                   Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "MEM")
 
         # 5b. B1 target-fill indicator (dashed gold, only if target is set)
         if self._target_vol_ml > 0.0:
@@ -1081,13 +1090,6 @@ class RightFrame(QFrame):
         self._progress_target_ml = max(0.01, float(target_ml))
         self.frm_progress.show()
         self._update_progress_bar()
-        # Auto-calibrate sphere: target = 100% fill, half = membrane (50%) line.
-        if target_ml > 10.0:
-            self._membrane_vol_ml = target_ml / 2.0
-            self.MAX_CELL_VOLUME_ML = target_ml
-            self.sandglass.configure_calibration(self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
-            logger.debug("Sphere auto-calibrated: membrane=%.0f mL, max=%.0f mL",
-                         self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
 
     def _update_progress_phase(self, phase: str):
         """Aktualisiert Phase-Label und Farbe des Fortschrittsbalkens."""
@@ -1347,6 +1349,19 @@ class RightFrame(QFrame):
         """Bediener hat Filling bestätigt — emittiert Signal mit eingegebener Menge."""
         ml = float(self.sp_fill_amount.value())
         self.append_log(f"FILLING CONFIRMED: {ml:.1f} ml added", "#10B981")
+
+        # Anchor membrane at current backwash-residual volume.
+        # After Phase B1 drains exactly ml mL, _cell_volume_ml returns to bw_vol = membrane level.
+        bw_vol = max(10.0, self._cell_volume_ml)
+        self._membrane_vol_ml = bw_vol
+        self._cell_volume_ml = bw_vol + ml
+        self.MAX_CELL_VOLUME_ML = self._cell_volume_ml
+        self.sandglass.configure_calibration(self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
+        self.sandglass.update_state(self._cell_volume_ml, "FILLING")
+        self.append_log(
+            f"SYS: Sphere → membrane={bw_vol:.0f} mL (50%) full={self._cell_volume_ml:.0f} mL",
+            "#00E5FF",
+        )
         self.filling_confirmed.emit(ml)
 
     def set_ok_banner(self, step: str, reason: str, show: bool):
