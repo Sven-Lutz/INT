@@ -14,7 +14,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QTextBrowser, QWidget, QProgressBar, QInputDialog, QSizePolicy,
+    QPushButton, QTextBrowser, QWidget, QProgressBar, QInputDialog,
 )
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
 from src.gui.widgets.nudge_spinbox import NudgeSpinBox
@@ -616,70 +616,6 @@ def _to_float(x) -> float:
         return 0.0
 
 
-# =========================================================================
-# WIDGET 3: FLOW SPARKLINE — 60-sample miniature trend chart
-# =========================================================================
-class FlowSparklineWidget(QWidget):
-    """200 × 32 px amber sparkline showing the last N flow samples."""
-
-    _AMBER = QColor("#F59E0B")
-    _BG = QColor("#050914")
-    _MAXSAMPLES = 60
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._samples: collections.deque = collections.deque(maxlen=self._MAXSAMPLES)
-        self.setFixedHeight(32)
-        self.setMinimumWidth(100)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setToolTip("Flow rate trend (last 60 samples)")
-
-    def push(self, value: float) -> None:
-        self._samples.append(float(value))
-        self.update()
-
-    def clear(self) -> None:
-        self._samples.clear()
-        self.update()
-
-    def paintEvent(self, _event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, self._BG)
-
-        data = list(self._samples)
-        if len(data) < 2:
-            return
-
-        lo, hi = min(data), max(data)
-        span = hi - lo if hi != lo else 1.0
-        pad = 3
-
-        def _x(i: int) -> float:
-            return pad + (i / (len(data) - 1)) * (w - 2 * pad)
-
-        def _y(v: float) -> float:
-            return (h - pad) - ((v - lo) / span) * (h - 2 * pad)
-
-        path = QPainterPath()
-        path.moveTo(_x(0), _y(data[0]))
-        for i, v in enumerate(data[1:], 1):
-            path.lineTo(_x(i), _y(v))
-
-        pen = QPen(self._AMBER, 1.5)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        p.setPen(pen)
-        p.drawPath(path)
-
-        # Highlight the latest sample
-        last_x = _x(len(data) - 1)
-        last_y = _y(data[-1])
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(self._AMBER)
-        p.drawEllipse(QPointF(last_x, last_y), 2.5, 2.5)
-        p.end()
 
 
 # =========================================================================
@@ -743,9 +679,6 @@ class RightFrame(QFrame):
         self.sandglass = ReactorSphereWidget()
         self.sandglass.configure_calibration(self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
         left_viz_lay.addWidget(self.sandglass)
-
-        self.sparkline = FlowSparklineWidget()
-        left_viz_lay.addWidget(self.sparkline)
 
         self.btn_calib = QPushButton("⌖ SET MEMBRANE")
         self.btn_calib.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1051,7 +984,6 @@ class RightFrame(QFrame):
         self.lbl_eta_trend.setText("")
         self._flow_history.clear()
         self._flow_ema = None
-        self.sparkline.clear()
         self._run_start = None
         self._clock_timer.stop()
         self.lbl_elapsed.setText("")
@@ -1280,7 +1212,6 @@ class RightFrame(QFrame):
             self.lbl_flow_rate.setText(f"FLOW: {flow_ml_min:.2f} ml/min")
             if flow_ml_min > 0.001:
                 self._flow_history.append(flow_ml_min)
-                self.sparkline.push(flow_ml_min)
             avg_flow = (
                 sum(self._flow_history) / len(self._flow_history)
                 if self._flow_history else 0.0
