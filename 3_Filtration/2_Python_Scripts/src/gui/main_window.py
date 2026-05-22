@@ -8,8 +8,6 @@ import math
 from collections import deque
 from typing import Deque, Optional, Set, Tuple, Any
 
-from pathlib import Path
-
 import PySide6.QtWidgets as Qtw
 from PySide6.QtCore import (
     QObject, QEvent, Qt, QThread, QTimer, Signal,
@@ -23,7 +21,7 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QMessageBox, QGraphicsOpacityEffect
 
 from src.gui.data.worker import ExperimentConfig
-from src.gui.data import ExperimentWorker, RunParams, worker
+from src.gui.data import ExperimentWorker
 from src.gui.data.logger import start_run_log, stop_run_log
 from src.gui.health import HealthEvaluator, HealthRules, SystemHealth
 from src.gui.style.theme import apply_theme
@@ -977,11 +975,9 @@ class MainWindow(Qtw.QMainWindow):
             # B1/B2 Phasen-Detail
             worker.phase_detail_updated.connect(self.right.update_phase_detail)
 
-            # Progress-Target für die TopFrame-Anzeige setzen
-            run_p = self.left.get_run_params()
-            target_vol = float(run_p.v_bnnt_ml) + float(run_p.phase_b1_target_ml)
-            self.top.set_progress_target(target_vol)
-            self.right.set_progress_target(target_vol)
+            # Exact target comes from worker once it resolves filling_amount_ml vs config
+            worker.progress_target_updated.connect(self.top.set_progress_target)
+            worker.progress_target_updated.connect(self.right.set_progress_target)
 
             worker.finished.connect(self._on_finished)
             worker.failed.connect(self._on_failed)
@@ -1142,14 +1138,14 @@ class MainWindow(Qtw.QMainWindow):
 
         self._toast("STOP: aborting + SAFE_STATE")
         self._stop_deterministic(reason="User abort")
-        self.right.reset_state()
-        self._current_step = "IDLE"
-        self.right.set_step("IDLE")
+        # Show the aborted state — keep terminal + progress bar visible so the operator
+        # can see how far the run got. reset_state() will fire on the next run start.
+        self._current_step = "ABORTED"
+        self.right.set_step("ABORTED")
         self._render_manual_state()
 
         try:
-            self.top.set_loss_ml(0.0)
-            status_text = "SIMULATION: IDLE" if self._simulation_mode else "SYSTEM: IDLE / READY"
+            status_text = "SIMULATION: STOPPED" if self._simulation_mode else "SYSTEM: STOPPED"
             self.top.update_status(status_text)
         except Exception:
             pass

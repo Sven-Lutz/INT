@@ -5,12 +5,11 @@ import logging
 import math
 import random
 import time
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Signal, Slot, Qt, QRectF, QPointF, QTimer
 from PySide6.QtGui import (
-    QPainter, QColor, QPen, QBrush, QPainterPath,
+    QPainter, QColor, QPen, QPainterPath,
     QLinearGradient, QRadialGradient, QFont,
 )
 from PySide6.QtCore import QSize
@@ -93,7 +92,9 @@ class ReactorSphereWidget(QFrame):
         # Smooth phase-color transition.
         if self._color != self._color_target:
             cr = int(self._color.red() + (self._color_target.red() - self._color.red()) * 0.18)
-            cg = int(self._color.green() + (self._color_target.green() - self._color.green()) * 0.18)
+            cg = int(
+                self._color.green()
+                + (self._color_target.green() - self._color.green()) * 0.18)
             cb = int(self._color.blue() + (self._color_target.blue() - self._color.blue()) * 0.18)
             if (abs(cr - self._color_target.red()) < 3 and
                     abs(cg - self._color_target.green()) < 3 and
@@ -385,6 +386,8 @@ class TrapezoidWidget(QFrame):
         self._setpoint_p = 0.0
         self._peak_p = 2000.0
         self._phase = "IDLE"
+        self._b_progress_frac = 0.0   # 0→1 across Phase B (tracks B1 volume fraction)
+        # Dynamische Profil-Fraktionen (Anteil A / B / C an Gesamtbreite)
         self._frac_a = 0.28
         self._frac_b = 0.44
         self._frac_c = 0.28
@@ -424,6 +427,11 @@ class TrapezoidWidget(QFrame):
             self._trace.clear()
 
         self._phase = new_phase
+        self.update()
+
+    def set_b_progress(self, frac: float):
+        """Update Phase B dot position; frac = B1_current / B1_target (0→1)."""
+        self._b_progress_frac = max(0.0, min(1.0, frac))
         self.update()
 
     def paintEvent(self, event):
@@ -574,10 +582,7 @@ class TrapezoidWidget(QFrame):
         if phase_a_active:
             dot_x = orig_x + (norm_p * plot_w * self._frac_a)
         elif phase_b_active:
-            # Move dot left→right through B based on elapsed real time
-            elapsed_b = time.monotonic() - self._phase_b_start_ts
-            b_prog = min(1.0, elapsed_b / max(1.0, self._time_b_s))
-            dot_x = x_a_end + b_prog * plot_w * self._frac_b
+            dot_x = orig_x + plot_w * (self._frac_a + self._frac_b * self._b_progress_frac)
         elif phase_c_active:
             down_prog = 1.0 - norm_p
             dot_x = x_b_end + (down_prog * plot_w * self._frac_c)
@@ -650,6 +655,74 @@ def _to_float(x) -> float:
         return 0.0
 
 
+
+
+# =========================================================================
+# PHASE SEGMENT BAR — shows A / B1 / B2 / C as coloured segments in one bar
+# =========================================================================
+class PhaseSegmentBar(QWidget):
+    """Horizontal progress bar that splits into phase-coloured segments.
+
+    Segments grow independently as each phase accumulates filtrate.
+    All measurements in mL; the bar renders proportionally against _target.
+    """
+    _SEG_COLORS = (
+        ("a",  QColor(139, 92, 246)),   # Phase A — purple
+        ("b1", QColor(245, 158, 11)),   # Phase B1 — amber
+        ("b2", QColor(251, 191, 36)),   # Phase B2 — lighter amber
+        ("c",  QColor(236, 72, 153)),   # Phase C — pink
+    )
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(8)
+        self._target = 1.0
+        self._segs: dict[str, float] = {k: 0.0 for k, _ in self._SEG_COLORS}
+
+    def set_target(self, ml: float):
+        self._target = max(1.0, ml)
+        self.update()
+
+    def set_segment(self, **kwargs: float):
+        for k, v in kwargs.items():
+            if k in self._segs:
+                self._segs[k] = max(0.0, v)
+        self.update()
+
+    def reset(self):
+        for k in self._segs:
+            self._segs[k] = 0.0
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+
+        # Clip to rounded rect so all segments get rounded ends automatically
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(0, 0, w, h), 4, 4)
+        painter.setClipPath(clip)
+
+        # Background track
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(15, 23, 42))
+        painter.drawRect(0, 0, w, h)
+
+        x = 0.0
+        for key, color in self._SEG_COLORS:
+            ml = self._segs[key]
+            if ml <= 0:
+                continue
+            seg_w = min(ml / self._target * w, w - x)
+            if seg_w < 0.5:
+                continue
+            painter.setBrush(color)
+            painter.drawRect(QRectF(x, 0, seg_w, h))
+            x += seg_w
+        painter.end()
+
+
 # =========================================================================
 # RIGHT FRAME MAIN
 # =========================================================================
@@ -661,6 +734,8 @@ class RightFrame(QFrame):
     filling_confirmed = Signal(float)  # Bediener hat Filling bestätigt: Menge in ml
     annotation_requested = Signal(str)  # operator mark: (text,)
 
+    _ETA_EMA_ALPHA = 0.12  # α ≈ 6 s smoothing at 5 Hz telemetry rate
+
     def __init__(self, config=None, parent=None):
         super().__init__(parent)
         self.setProperty("surface", "panel")
@@ -670,6 +745,8 @@ class RightFrame(QFrame):
         # Calibration anchor: volume [ml] at the 50% fill line (membrane level).
         # Fallback is half of a 7 L cell; overridden by SET MEMBRANE button or auto-calibration.
         self._current_vol_ml = 0.0
+        self._cell_volume_ml = 0.0        # flow-integrated persistent cell volume
+        self._flow_integrate_ts: Optional[float] = None  # last integration timestamp
         self._membrane_vol_ml = 3500.0
         self.MAX_CELL_VOLUME_ML = 7000.0
 
@@ -684,6 +761,8 @@ class RightFrame(QFrame):
 
         # Rolling window (30 samples) for stable ETA calculation.
         self._flow_history: collections.deque = collections.deque(maxlen=30)
+        # EMA flow for trend ETA
+        self._flow_ema: Optional[float] = None
         self._clock_timer.setInterval(1000)  # 1 s resolution is sufficient
         self._clock_timer.timeout.connect(self._tick_elapsed)
 
@@ -768,6 +847,9 @@ class RightFrame(QFrame):
         self._b1_current_ml = 0.0
         self._b2_target_ml = 0.0
         self._b2_current_ml = 0.0
+        # Phase snapshots: running total at phase boundaries (for segment colouring)
+        self._snap_a_end_ml = 0.0   # total loss when Phase B starts
+        self._snap_b_end_ml = 0.0   # total loss when Phase C starts
 
         self.frm_progress = QFrame()
         self.frm_progress.setStyleSheet(
@@ -799,19 +881,21 @@ class RightFrame(QFrame):
             "color: #475569; font-family: 'Consolas'; font-size: 9px; border: none;")
         prog_lay.addWidget(self.lbl_elapsed)
 
-        # Haupt-Progressbar
+        # Phase-segmented progress bar (A=purple / B1=amber / B2=light-amber / C=pink)
+        self.seg_bar = PhaseSegmentBar()
+        prog_lay.addWidget(self.seg_bar)
+
+        # Thin fallback bar used only for ABORTED/FINISHED state flash
         self.bar_progress = QProgressBar()
         self.bar_progress.setRange(0, 1000)
         self.bar_progress.setValue(0)
         self.bar_progress.setTextVisible(False)
-        self.bar_progress.setFixedHeight(6)
+        self.bar_progress.setFixedHeight(3)
         self.bar_progress.setStyleSheet("""
-            QProgressBar { background: #0F172A; border: none; border-radius: 3px; }
-            QProgressBar::chunk { background: qlineargradient(
-                x1:0, y1:0, x2:1, y2:0,
-                stop:0 #8B5CF6, stop:0.5 #00E5FF, stop:1 #10B981
-            ); border-radius: 3px; }
+            QProgressBar { background: transparent; border: none; border-radius: 2px; }
+            QProgressBar::chunk { background: #64748B; border-radius: 2px; }
         """)
+        self.bar_progress.hide()
         prog_lay.addWidget(self.bar_progress)
 
         # B1/B2 Detail-Reihe
@@ -856,9 +940,14 @@ class RightFrame(QFrame):
         self.lbl_eta.setStyleSheet(
             "color: #64748B; font-family: 'Consolas'; font-size: 10px; "
             "font-weight: bold; border: none;")
+        self.lbl_eta_trend = QLabel("")
+        self.lbl_eta_trend.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.lbl_eta_trend.setStyleSheet(
+            "color: #64748B; font-family: 'Consolas'; font-size: 9px; border: none;")
         flow_eta_lay.addWidget(self.lbl_flow_rate)
         flow_eta_lay.addStretch()
         flow_eta_lay.addWidget(self.lbl_eta)
+        flow_eta_lay.addWidget(self.lbl_eta_trend)
         prog_lay.addLayout(flow_eta_lay)
 
         self.frm_progress.hide()
@@ -996,27 +1085,67 @@ class RightFrame(QFrame):
         self.banner_filling.hide()
         self._ui_phase = "IDLE"
         self._current_vol_ml = 0.0
+        self._flow_integrate_ts = None
         self._progress_target_ml = 0.0
         self._progress_current_ml = 0.0
         self._b1_target_ml = 0.0
         self._b2_target_ml = 0.0
-        # _cell_volume_ml and _flow_integrate_ts are intentionally NOT reset here —
-        # the sphere should continue showing the actual cell fill level after a run.
-        self.sandglass.update_state(self._cell_volume_ml, "IDLE")
+        self._snap_a_end_ml = 0.0
+        self._snap_b_end_ml = 0.0
+        self.seg_bar.reset()
+        self.sandglass.update_state(0.0, "IDLE")
         self.trapezoid.set_state(0.0, 0.0, "IDLE")
+        self.trapezoid.set_b_progress(0.0)
         self.frm_progress.hide()
+        self.bar_progress.hide()
         self.bar_progress.setValue(0)
         self.lbl_flow_rate.setText("FLOW: —")
         self.lbl_eta.setText("")
+        self.lbl_eta_trend.setText("")
         self._flow_history.clear()
+        self._flow_ema = None
         self._run_start = None
         self._clock_timer.stop()
         self.lbl_elapsed.setText("")
 
+    _PHASE_BANNER: dict = {
+        "FILLING": ("#00E5FF", "PHASE 0 ❄  FILLING"),
+        "PHASE_A": ("#8B5CF6", "PHASE A ▲  RAMP UP"),
+        "PHASE_B": ("#F59E0B", "PHASE B ◆  STEADY STATE"),
+        "PHASE_C": ("#EC4899", "PHASE C ▼  RAMP DOWN"),
+        "FINISHED": ("#10B981", "✔  RUN COMPLETE"),
+        "ABORTED":  ("#FF1744", "✖  RUN ABORTED"),
+    }
+    _BANNER_WIDTH = 46
+
     @Slot(str)
     def set_step(self, step: str):
+        prev_phase = self._ui_phase
         self._ui_phase = step.upper()
-        self.append_log(f"--- STEP TRANSITION: {self._ui_phase} ---", "#8B5CF6")
+        color, label = "#64748B", self._ui_phase
+        for key, (c, lbl) in self._PHASE_BANNER.items():
+            if key in self._ui_phase:
+                color, label = c, lbl
+                break
+
+        pad = max(0, self._BANNER_WIDTH - len(label) - 4)
+        left = "═" * (pad // 2 + pad % 2)
+        right = "═" * (pad // 2)
+        banner = f"{left}  {label}  {right}"
+        self.append_log(banner, color)
+
+        # Phase boundary snapshots for segment bar colouring
+        if "PHASE_B" in self._ui_phase and "PHASE_A" in prev_phase:
+            self._snap_a_end_ml = self._progress_current_ml
+            self.seg_bar.set_segment(a=self._snap_a_end_ml)
+        elif "PHASE_C" in self._ui_phase and "PHASE_B" in prev_phase:
+            self._snap_b_end_ml = self._progress_current_ml
+            b_total = self._snap_b_end_ml - self._snap_a_end_ml
+            self.seg_bar.set_segment(
+                b1=self._b1_current_ml,
+                b2=max(0.0, b_total - self._b1_current_ml),
+            )
+
         self._update_progress_phase(self._ui_phase)
 
     @Slot(str)
@@ -1028,10 +1157,18 @@ class RightFrame(QFrame):
         self._loss_ml = loss_ml
         self._progress_current_ml = abs(float(loss_ml))
         self._update_progress_bar()
+        # Drive segment bar live — only for phases that are the "accumulating" phase
+        phase = self._ui_phase
+        if "PHASE_A" in phase:
+            self.seg_bar.set_segment(a=self._progress_current_ml)
+        elif "PHASE_C" in phase:
+            c_ml = max(0.0, self._progress_current_ml - self._snap_b_end_ml)
+            self.seg_bar.set_segment(c=c_ml)
 
     def set_progress_target(self, target_ml: float):
         """Called by MainWindow when a run starts with the B1 volume target."""
         self._progress_target_ml = max(0.01, float(target_ml))
+        self.seg_bar.set_target(self._progress_target_ml)
         self.frm_progress.show()
         self._update_progress_bar()
         # Auto-calibrate sphere: target = 100% fill, half = membrane (50%) line.
@@ -1043,14 +1180,14 @@ class RightFrame(QFrame):
                          self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
 
     def _update_progress_phase(self, phase: str):
-        """Aktualisiert Phase-Label und Farbe des Fortschrittsbalkens."""
+        """Updates the phase label and handles terminal states (FINISHED / ABORTED)."""
         phase_colors = {
             "FILLING": ("#00E5FF", "PHASE 0: FILLING"),
             "PHASE_A": ("#8B5CF6", "PHASE A: RAMP UP"),
             "PHASE_B": ("#F59E0B", "PHASE B: STEADY STATE"),
             "PHASE_C": ("#EC4899", "PHASE C: RAMP DOWN"),
             "FINISHED": ("#10B981", "COMPLETE"),
-            "ABORTED": ("#FF1744", "ABORTED"),
+            "ABORTED":  ("#FF1744", "ABORTED"),
         }
 
         color, label = "#64748B", phase
@@ -1064,28 +1201,29 @@ class RightFrame(QFrame):
             f"color: {color}; font-family: 'Consolas'; font-size: 10px; "
             f"font-weight: bold; letter-spacing: 1px; border: none;")
 
-        # Gradient-Farbe des Balkens an die Phase anpassen
-        self.bar_progress.setStyleSheet(f"""
-            QProgressBar {{ background: #0F172A; border: none; border-radius: 4px; }}
-            QProgressBar::chunk {{ background: {color}; border-radius: 4px; }}
-        """)
-
-        if phase in ("FINISHED", "ABORTED", "IDLE"):
-            if phase == "FINISHED":
-                self.bar_progress.setValue(1000)
-                self.lbl_prog_values.setText("DONE")
-            elif phase == "ABORTED":
-                self.lbl_prog_values.setText("STOPPED")
+        if phase == "FINISHED":
+            self.lbl_prog_values.setText(
+                f"DONE  {self._progress_current_ml:.1f} mL"
+            )
+        elif phase == "ABORTED":
+            if self._progress_target_ml > 0.01:
+                pct = min(100.0, self._progress_current_ml / self._progress_target_ml * 100.0)
+                self.lbl_prog_values.setText(
+                    f"STOPPED  {self._progress_current_ml:.1f} / "
+                    f"{self._progress_target_ml:.1f} mL ({pct:.0f}%)"
+                )
+            else:
+                self.lbl_prog_values.setText(
+                    f"STOPPED  {self._progress_current_ml:.1f} mL"
+                )
 
     def _update_progress_bar(self):
-        """Aktualisiert Balken und Zahlenwerte."""
+        """Updates the value label; seg_bar handles the visual fill."""
         if self._progress_target_ml < 0.01:
             self.lbl_prog_values.setText(f"{self._progress_current_ml:.2f} mL")
-            self.bar_progress.setValue(0)
             return
 
         pct = min(100.0, self._progress_current_ml / self._progress_target_ml * 100.0)
-        self.bar_progress.setValue(int(pct * 10))  # 0-1000 Range für Smoothness
         self.lbl_prog_values.setText(
             f"{self._progress_current_ml:.1f} / {self._progress_target_ml:.1f} mL ({pct:.0f}%)"
         )
@@ -1177,7 +1315,8 @@ class RightFrame(QFrame):
         logger.info("Membrane calibrated: %.1f mL = 50%%, max = %.1f mL",
                     self._membrane_vol_ml, self.MAX_CELL_VOLUME_ML)
         self.append_log(
-            f"SYS: Membrane → {anchor:.1f} mL = 50%  (max {self.MAX_CELL_VOLUME_ML:.1f} mL)", "#00E5FF")
+            f"SYS: Membrane → {self._membrane_vol_ml:.1f} mL = 50%  "
+            f"(max {self.MAX_CELL_VOLUME_ML:.1f} mL)", "#00E5FF")
         self.sandglass.update_state(self._cell_volume_ml, self._ui_phase)
 
     @Slot(dict)
@@ -1203,7 +1342,8 @@ class RightFrame(QFrame):
                 # Negative flow = backwash   = cell filling → subtract a negative = add
                 delta = flow_raw * (dt / 60.0)
                 self._cell_volume_ml -= delta
-                self._cell_volume_ml = max(0.0, min(self.MAX_CELL_VOLUME_ML * 1.5, self._cell_volume_ml))
+                self._cell_volume_ml = max(
+                    0.0, min(self.MAX_CELL_VOLUME_ML * 1.5, self._cell_volume_ml))
         self._flow_integrate_ts = now
 
         p1_raw = sample.get("p1_meas") if sample.get(
@@ -1241,21 +1381,56 @@ class RightFrame(QFrame):
                 self.lbl_flow_rate.setText(f"FLOW: {flow_ml_min:.1f} ml/min")
             if flow_ml_min > 0.1:
                 self._flow_history.append(flow_ml_min)
-            avg_flow = sum(self._flow_history) / len(self._flow_history) if self._flow_history else 0.0
+            avg_flow = (
+                sum(self._flow_history) / len(self._flow_history)
+                if self._flow_history else 0.0
+            )
+            # Update EMA flow for trend ETA
+            if self._flow_ema is None:
+                self._flow_ema = flow_ml_min
+            else:
+                self._flow_ema = (
+                    self._ETA_EMA_ALPHA * flow_ml_min
+                    + (1.0 - self._ETA_EMA_ALPHA) * self._flow_ema
+                )
+
             target_known = self._progress_target_ml > 0.01
             below_target = self._progress_current_ml < self._progress_target_ml
             if target_known and below_target and avg_flow > 0.1:
                 remaining = self._progress_target_ml - self._progress_current_ml
                 eta_min = remaining / avg_flow
-                # Only update ETA label when it changes by > 1 min
+
+                # Trend ETA from EMA flow
+                trend_eta_min = (
+                    remaining / self._flow_ema
+                    if self._flow_ema and self._flow_ema > 0.1
+                    else eta_min
+                )
+
+                # Only update linear ETA label when it changes by > 1 min
                 prev_eta = getattr(self, "_disp_eta_min", None)
                 if prev_eta is None or abs(eta_min - prev_eta) >= 1.0:
                     self._disp_eta_min = eta_min
                     self.lbl_eta.setText(f"ETA: {eta_min:.0f} min")
+
+                # Trend label: amber if diverges >25 % from linear ETA
+                diverges = (
+                    abs(trend_eta_min - eta_min) / max(eta_min, 0.1) > 0.25
+                )
+                trend_color = "#F59E0B" if diverges else "#64748B"
+                prev_trend = getattr(self, "_disp_eta_trend_min", None)
+                if prev_trend is None or abs(trend_eta_min - prev_trend) >= 1.0:
+                    self._disp_eta_trend_min = trend_eta_min
+                    self.lbl_eta_trend.setText(f"({trend_eta_min:.0f})")
+                    self.lbl_eta_trend.setStyleSheet(
+                        f"color: {trend_color}; font-family: 'Consolas'; "
+                        f"font-size: 9px; border: none;")
             else:
                 if getattr(self, "_disp_eta_min", None) is not None:
                     self._disp_eta_min = None
+                    self._disp_eta_trend_min = None
                     self.lbl_eta.setText("")
+                    self.lbl_eta_trend.setText("")
 
     # -----------------------------------------------------------------
     # FILLING BANNER
@@ -1306,7 +1481,6 @@ class RightFrame(QFrame):
                 self.lbl_b1_detail.setText(f"FILL: {current:.1f} / {target:.1f} ml ({pct:.0f}%)")
                 self.bar_b1.setValue(int(pct * 10))
                 self.lbl_prog_values.setText(f"{current:.1f} / {target:.1f} mL ({pct:.0f}%)")
-                self.bar_progress.setValue(int(pct * 10))
             else:
                 self.lbl_b1_detail.setText(f"FILL: {current:.1f} ml")
             self.bar_b1.show()
@@ -1319,6 +1493,8 @@ class RightFrame(QFrame):
                     f"B1: {current:.1f} / {target:.1f} ml ({pct:.0f}%)"
                 )
                 self.bar_b1.setValue(int(pct * 10))
+                self.trapezoid.set_b_progress(current / target)
+                self.seg_bar.set_segment(b1=float(current))
             else:
                 self.lbl_b1_detail.setText(f"B1: {current:.1f} ml")
                 self.bar_b1.setValue(0)
@@ -1334,3 +1510,4 @@ class RightFrame(QFrame):
             else:
                 self.lbl_b2_detail.setText(f"B2: {current:.1f} ml")
             self.lbl_b2_detail.show()
+            self.seg_bar.set_segment(b2=self._b2_current_ml)
