@@ -851,7 +851,10 @@ class ExperimentWorker(QObject):
         self.log_msg.emit("═" * 52, "#F59E0B")
         self._emit_sample(event="STEP_START_PHASE_B1")
 
-        robust_switch_valves(dev, "FILTRATION", self.log_msg)
+        # If Phase A already set FILTRATION valves, skip the redundant switch that
+        # would cause a momentary valve transient at the A→B boundary.
+        if loss_a == 0.0:
+            robust_switch_valves(dev, "FILTRATION", self.log_msg)
         if getattr(dev, "pressure_controller", None) is not None:
             self._safe_set_pressure_mbar(channel=ch, mbar=float(p.phase_a_target_mbar))
 
