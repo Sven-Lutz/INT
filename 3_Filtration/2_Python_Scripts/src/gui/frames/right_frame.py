@@ -704,6 +704,8 @@ class RightFrame(QFrame):
         # Calibration anchor: volume [ml] at the 50% fill line (membrane level).
         # Fallback is half of a 7 L cell; overridden by SET MEMBRANE button.
         self._current_vol_ml = 0.0
+        self._cell_volume_ml = 0.0        # flow-integrated persistent cell volume
+        self._flow_integrate_ts: Optional[float] = None  # last integration timestamp
         self._membrane_vol_ml = 3500.0
         self.MAX_CELL_VOLUME_ML = 7000.0
 
@@ -1035,6 +1037,7 @@ class RightFrame(QFrame):
         self.banner_filling.hide()
         self._ui_phase = "IDLE"
         self._current_vol_ml = 0.0
+        self._flow_integrate_ts = None
         self._progress_target_ml = 0.0
         self._progress_current_ml = 0.0
         self._b1_target_ml = 0.0
