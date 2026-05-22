@@ -89,8 +89,9 @@ class PressureController:
         OB1_Calib(self.Instr_ID.value, self.Calib, 1000)
 
         logger.info("Calibration completed. Saving to file...")
-        error = Elveflow_Calibration_Save(self.Calib_path.encode('ascii'), byref(self.Calib), 1000)     # This creates a new calib file, make sure to conduct the calibration properly
-        print("Saving finished")
+        error = Elveflow_Calibration_Save(
+            self.Calib_path.encode("ascii"), byref(self.Calib), 1000
+        )
         if error == 0:
             logger.info(f"Calibration saved to {self.Calib_path}")
         else:

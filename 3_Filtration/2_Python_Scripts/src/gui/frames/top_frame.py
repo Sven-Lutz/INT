@@ -16,9 +16,18 @@ _CARD_STYLE = """
         border-radius: 6px;
     }}
 """
-_TITLE_STYLE = "color: #94A3B8; font-weight: bold; font-size: 10px; letter-spacing: 1.5px; border: none; background: transparent;"
-_VAL_STYLE = "color: {color}; font-weight: bold; font-size: 18px; font-family: 'Consolas'; border: none; background: transparent;"
-_SUB_STYLE = "color: #64748B; font-weight: bold; font-size: 10px; font-family: 'Consolas'; border: none; background: transparent;"
+_TITLE_STYLE = (
+    "color: #94A3B8; font-weight: bold; font-size: 10px; "
+    "letter-spacing: 1.5px; border: none; background: transparent;"
+)
+_VAL_STYLE = (
+    "color: {color}; font-weight: bold; font-size: 18px; "
+    "font-family: 'Consolas'; border: none; background: transparent;"
+)
+_SUB_STYLE = (
+    "color: #64748B; font-weight: bold; font-size: 10px; "
+    "font-family: 'Consolas'; border: none; background: transparent;"
+)
 _BAR_STYLE = """
     QProgressBar {{ background: #0F172A; border: none; border-radius: 2px; }}
     QProgressBar::chunk {{ background-color: {color}; border-radius: 2px; }}
@@ -65,13 +74,15 @@ class TopFrame(QFrame):
 
         # 1. Branding / Status / Phase
         self.lbl_title = QLabel("PELLIKAN OS")
-        self.lbl_title.setStyleSheet("color: #F8FAFC; font-weight: 900; font-size: 14px; letter-spacing: 2px;")
+        self.lbl_title.setStyleSheet(
+            "color: #F8FAFC; font-weight: 900; font-size: 14px; letter-spacing: 2px;")
 
         self.lbl_status = QLabel("● IDLE")
         self.lbl_status.setStyleSheet(f"color: #00E5FF; {_STATUS_BASE}")
 
         self.lbl_phase = QLabel("")
-        self.lbl_phase.setStyleSheet("color: #64748B; font-weight: bold; font-size: 10px; font-family: 'Consolas';")
+        self.lbl_phase.setStyleSheet(
+            "color: #64748B; font-weight: bold; font-size: 10px; font-family: 'Consolas';")
 
         box_brand = QVBoxLayout()
         box_brand.setSpacing(1)
@@ -82,17 +93,21 @@ class TopFrame(QFrame):
         lay.addStretch()
 
         # 2. Pressure cards: Soll/Ist nebeneinander
-        self.val_p1, self.sub_p1, self.bar_p1 = self._add_pressure_card(lay, "P1 MAIN", "#00E5FF", 2000)
-        self.val_p2, self.sub_p2, self.bar_p2 = self._add_pressure_card(lay, "P2 BACKWASH", "#8B5CF6", 400)
+        self.val_p1, self.sub_p1, self.bar_p1 = self._add_pressure_card(
+            lay, "P1 MAIN", "#00E5FF", 2000)
+        self.val_p2, self.sub_p2, self.bar_p2 = self._add_pressure_card(
+            lay, "P2 BACKWASH", "#8B5CF6", 400)
 
         # 3. Flow
-        self.val_flow, self.bar_flow = self._add_simple_card(lay, "FLOW RATE", "0.0 ml/min", "#00FF66", 50)
+        self.val_flow, self.bar_flow = self._add_simple_card(
+            lay, "FLOW RATE", "0.0 ml/min", "#00FF66", 50)
 
         # 4. Valve State
         self.val_valves = self._add_text_card(lay, "VALVES", "—", "#94A3B8")
 
         # 5. Progress (Loss / Target)
-        self.val_progress, self.bar_progress = self._add_simple_card(lay, "PROGRESS", "—", "#F59E0B", 100)
+        self.val_progress, self.bar_progress = self._add_simple_card(
+            lay, "PROGRESS", "—", "#F59E0B", 100)
 
     # -----------------------------------------------------------------
     # CARD BUILDERS
@@ -156,7 +171,9 @@ class TopFrame(QFrame):
         lbl_v = QLabel(initial)
         lbl_v.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_v.setMinimumWidth(90)
-        lbl_v.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 13px; font-family: 'Consolas'; border: none; background: transparent;")
+        lbl_v.setStyleSheet(
+            f"color: {color}; font-weight: bold; font-size: 13px; "
+            "font-family: 'Consolas'; border: none; background: transparent;")
         card_lay.addWidget(lbl_v)
 
         parent_layout.addWidget(card)
@@ -196,8 +213,12 @@ class TopFrame(QFrame):
         p1_data = pressures.get(1, pressures.get("1", {}))
         if not isinstance(p1_data, dict):
             p1_data = {}
-        p1_meas = _safe_float(sample.get("p1_meas") if sample.get("p1_meas") is not None else p1_data.get("meas"))
-        p1_set = _safe_float(sample.get("p1_set") if sample.get("p1_set") is not None else p1_data.get("set"))
+        p1_meas = _safe_float(
+            sample.get("p1_meas") if sample.get("p1_meas") is not None
+            else p1_data.get("meas"))
+        p1_set = _safe_float(
+            sample.get("p1_set") if sample.get("p1_set") is not None
+            else p1_data.get("set"))
 
         if p1_meas is not None:
             if self._disp_p1 is None or abs(p1_meas - self._disp_p1) >= 1.0:
@@ -231,8 +252,12 @@ class TopFrame(QFrame):
         p2_data = pressures.get(2, pressures.get("2", {}))
         if not isinstance(p2_data, dict):
             p2_data = {}
-        p2_meas = _safe_float(sample.get("p2_meas") if sample.get("p2_meas") is not None else p2_data.get("meas"))
-        p2_set = _safe_float(sample.get("p2_set") if sample.get("p2_set") is not None else p2_data.get("set"))
+        p2_meas = _safe_float(
+            sample.get("p2_meas") if sample.get("p2_meas") is not None
+            else p2_data.get("meas"))
+        p2_set = _safe_float(
+            sample.get("p2_set") if sample.get("p2_set") is not None
+            else p2_data.get("set"))
 
         if p2_meas is not None:
             if self._disp_p2 is None or abs(p2_meas - self._disp_p2) >= 1.0:
@@ -330,6 +355,8 @@ class TopFrame(QFrame):
         self._current_phase = str(phase_str)
         if phase_str and phase_str not in ("IDLE", "FINISHED", "ABORTED"):
             self.lbl_phase.setText(f"PHASE: {phase_str}")
-            self.lbl_phase.setStyleSheet("color: #8B5CF6; font-weight: bold; font-size: 10px; font-family: 'Consolas';")
+            self.lbl_phase.setStyleSheet(
+                "color: #8B5CF6; font-weight: bold; font-size: 10px; "
+                "font-family: 'Consolas';")
         else:
             self.lbl_phase.setText("")

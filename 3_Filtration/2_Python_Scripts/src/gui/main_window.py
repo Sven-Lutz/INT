@@ -8,8 +8,6 @@ import math
 from collections import deque
 from typing import Deque, Optional, Set, Tuple, Any
 
-from pathlib import Path
-
 import PySide6.QtWidgets as Qtw
 from PySide6.QtCore import (
     QObject, QEvent, Qt, QThread, QTimer, Signal,
@@ -23,7 +21,7 @@ from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QMessageBox, QGraphicsOpacityEffect
 
 from src.gui.data.worker import ExperimentConfig
-from src.gui.data import ExperimentWorker, RunParams, worker
+from src.gui.data import ExperimentWorker
 from src.gui.data.logger import start_run_log, stop_run_log
 from src.gui.health import HealthEvaluator, HealthRules, SystemHealth
 from src.gui.style.theme import apply_theme
@@ -977,11 +975,9 @@ class MainWindow(Qtw.QMainWindow):
             # B1/B2 Phasen-Detail
             worker.phase_detail_updated.connect(self.right.update_phase_detail)
 
-            # Progress-Target für die TopFrame-Anzeige setzen
-            run_p = self.left.get_run_params()
-            target_vol = float(run_p.v_bnnt_ml) + float(run_p.phase_b1_target_ml)
-            self.top.set_progress_target(target_vol)
-            self.right.set_progress_target(target_vol)
+            # Exact target comes from worker once it resolves filling_amount_ml vs config
+            worker.progress_target_updated.connect(self.top.set_progress_target)
+            worker.progress_target_updated.connect(self.right.set_progress_target)
 
             worker.finished.connect(self._on_finished)
             worker.failed.connect(self._on_failed)

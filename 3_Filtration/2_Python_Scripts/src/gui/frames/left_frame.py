@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import logging
-import math
-from dataclasses import dataclass
-from typing import List, Optional
 
-from PySide6.QtCore import QTimer, QUrl, Signal, Slot, Qt
-from PySide6.QtGui import QCursor, QDesktopServices, QImage, QPixmap
+from PySide6.QtCore import QTimer, Signal, Slot, Qt
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout,
     QLabel, QPushButton, QVBoxLayout, QWidget,
@@ -307,49 +304,23 @@ class LeftFrame(QFrame):
         self._p0_btns[1].clicked.connect(lambda: self._set_p0_mode("CONTINUOUS"))
         self._p0_btns[2].clicked.connect(lambda: self._set_p0_mode("AUTO"))
 
-        # PHASE A: RAMP UP
+        # PHASE A: RAMP UP (smooth only)
         self.mod_pa = EliteModule("PHASE A: RAMP UP", "#8B5CF6", checkable=True)
         self._pa_mode = "SMOOTH"
 
-        _pa_pill_frm, self._pa_btns = self._make_mode_pills(
-            ["SMOOTH", "STEPPED"], "#8B5CF6")
-        self._pa_btns[0].setChecked(True)
-        self.mod_pa.content_lay.addWidget(_pa_pill_frm, 0, 0, 1, 2)
-
         self.sp_target_p = NudgeSpinBox(0.0, 8000.0, 0, 100.0, " mbar", 2000.0)
-        self.mod_pa.addRow(1, "Target Pressure:", self.sp_target_p)
+        self.mod_pa.addRow(0, "Target Pressure:", self.sp_target_p)
 
-        self._lbl_a_rate = QLabel("Ramp Rate:")
-        self._lbl_a_rate.setStyleSheet(
-            "color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
         self.sp_a_rate = NudgeSpinBox(1.0, 5000.0, 0, 10.0, " mbar/min", 125.0)
-        self.mod_pa.content_lay.addWidget(self._lbl_a_rate, 2, 0)
-        self.mod_pa.content_lay.addWidget(self.sp_a_rate, 2, 1)
-
-        self._lbl_a_step = QLabel("Step Size:")
-        self._lbl_a_step.setStyleSheet(
-            "color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
-        self.sp_a_step_mbar = NudgeSpinBox(50.0, 2000.0, 0, 50.0, " mbar", 250.0)
-        self.mod_pa.content_lay.addWidget(self._lbl_a_step, 3, 0)
-        self.mod_pa.content_lay.addWidget(self.sp_a_step_mbar, 3, 1)
-
-        self._lbl_a_time_step = QLabel("Time/Step:")
-        self._lbl_a_time_step.setStyleSheet(
-            "color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
-        self.sp_a_time_per_step = NudgeSpinBox(0.1, 120.0, 1, 0.5, " min", 2.0)
-        self.mod_pa.content_lay.addWidget(self._lbl_a_time_step, 4, 0)
-        self.mod_pa.content_lay.addWidget(self.sp_a_time_per_step, 4, 1)
+        self.mod_pa.addRow(1, "Ramp Rate:", self.sp_a_rate)
 
         self.lbl_pa_info = QLabel("ETA: — min")
         self.lbl_pa_info.setProperty("is_dynamic_result", True)
         self.lbl_pa_info.setStyleSheet(
             "color: #8B5CF6; font-weight: bold; font-family: 'Consolas'; "
             "font-size: 11px; border: none; padding-top: 4px;")
-        self.mod_pa.content_lay.addWidget(self.lbl_pa_info, 5, 0, 1, 2)
+        self.mod_pa.content_lay.addWidget(self.lbl_pa_info, 2, 0, 1, 2)
         root.addWidget(self.mod_pa)
-
-        self._pa_btns[0].clicked.connect(lambda: self._set_pa_mode("SMOOTH"))
-        self._pa_btns[1].clicked.connect(lambda: self._set_pa_mode("STEPPED"))
 
         # PHASE B: STEADY STATE
         self.mod_pb = EliteModule("PHASE B: STEADY STATE", "#F59E0B", checkable=True)
@@ -423,7 +394,6 @@ class LeftFrame(QFrame):
             self.sp_area, self.sp_calib, self.sp_thick,
             self.sp_fill_p, self.sp_bw_target_ml,
             self.sp_target_p, self.sp_a_rate,
-            self.sp_a_step_mbar, self.sp_a_time_per_step,
             self.sp_h2o, self.sp_v_extra, self.sp_b_timeout,
             self.sp_dn_rate,
         ]
@@ -445,16 +415,10 @@ class LeftFrame(QFrame):
                                      (self.sp_area.value() / 1134.0) / 1000.0)
             self.lbl_bnnt.setText(f"Req. BNNT: {self._current_bnnt_ml:.4f} ml")
 
-        # Phase A ETA
-        if self._pa_mode == "SMOOTH":
-            rate_a = self.sp_a_rate.value()
-            eta_a = (self.sp_target_p.value() / rate_a) if rate_a > 0 else 0
-            self.lbl_pa_info.setText(f"ETA: {eta_a:.1f} min @ {rate_a:.0f} mbar/min")
-        else:  # STEPPED
-            step = self.sp_a_step_mbar.value()
-            t = self.sp_a_time_per_step.value()
-            n = max(1, math.ceil(self.sp_target_p.value() / step)) if step > 0 else 0
-            self.lbl_pa_info.setText(f"{n} steps · ~{n * t:.1f} min total")
+        # Phase A ETA (smooth only)
+        rate_a = self.sp_a_rate.value()
+        eta_a = (self.sp_target_p.value() / rate_a) if rate_a > 0 else 0
+        self.lbl_pa_info.setText(f"ETA: {eta_a:.1f} min @ {rate_a:.0f} mbar/min")
 
         # Phase C ETA (Smooth only)
         rate_c = self.sp_dn_rate.value()
@@ -485,9 +449,6 @@ class LeftFrame(QFrame):
             run_phase_a=self.mod_pa.isChecked(),
             phase_a_target_mbar=self.sp_target_p.value(),
             phase_a_rate_mbar_min=self.sp_a_rate.value(),
-            phase_a_mode=self._pa_mode,
-            phase_a_step_mbar=self.sp_a_step_mbar.value(),
-            phase_a_time_per_step_min=self.sp_a_time_per_step.value(),
             run_phase_b=self.mod_pb.isChecked(),
             v_extra_ml=self.sp_v_extra.value(),
             phase_b_no_flow_timeout_min=self.sp_b_timeout.value(),
@@ -497,7 +458,7 @@ class LeftFrame(QFrame):
             confirm_between_phases=self.chk_confirm_gates.isChecked(),
         )
 
-    # ── Pill selector helpers ────────────────────────────────────────────────
+    # ── Pill selector helpers ────────────────────────────────────────
 
     def _make_mode_pills(self, modes: list, accent: str) -> tuple:
         frm = QFrame()
@@ -519,7 +480,8 @@ class LeftFrame(QFrame):
             if i == active_idx:
                 btn.setStyleSheet(
                     f"background: {accent}; color: #000; border: none; padding: 2px 6px; "
-                    "font-weight: bold; font-family: 'Consolas'; font-size: 10px; border-radius: 3px;")
+                    "font-weight: bold; font-family: 'Consolas'; "
+                    "font-size: 10px; border-radius: 3px;")
             else:
                 btn.setStyleSheet(
                     "background: #0F172A; color: #94A3B8; border: 1px solid #1E293B; "
@@ -540,21 +502,15 @@ class LeftFrame(QFrame):
             "AUTO": "ETA: — min (at live flow)",
         }
         self.lbl_bw_eta.setText(hints[mode])
-        self._apply_pill_styles(self._p0_btns, ["MANUAL", "CONTINUOUS", "AUTO"].index(mode), "#EC4899")
+        idx = ["MANUAL", "CONTINUOUS", "AUTO"].index(mode)
+        self._apply_pill_styles(self._p0_btns, idx, "#EC4899")
         self._recalc_math()
 
     def _set_pa_mode(self, mode: str):
-        self._pa_mode = mode
-        smooth = mode == "SMOOTH"
-        for w in (self._lbl_a_rate, self.sp_a_rate):
-            w.setVisible(smooth)
-        for w in (self._lbl_a_step, self.sp_a_step_mbar,
-                  self._lbl_a_time_step, self.sp_a_time_per_step):
-            w.setVisible(not smooth)
-        self._apply_pill_styles(self._pa_btns, ["SMOOTH", "STEPPED"].index(mode), "#8B5CF6")
+        self._pa_mode = "SMOOTH"
         self._recalc_math()
 
-    # ── Confirm gate ─────────────────────────────────────────────────────────
+    # ── Confirm gate ────────────────────────────────────────────────────
 
     def _on_confirm_toggle(self, checked: bool):
         self._apply_confirm_style(checked)
