@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
-from typing import List, Optional
 
-from PySide6.QtCore import QTimer, QUrl, Signal, Slot, Qt
-from PySide6.QtGui import QCursor, QDesktopServices, QImage, QPixmap
+from PySide6.QtCore import QTimer, Signal, Slot, Qt
+from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QGridLayout, QHBoxLayout, QInputDialog,
-    QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout,
+    QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
 from src.gui.data.worker import RunParams
@@ -142,7 +140,6 @@ class EliteModule(QFrame):
 
 class LeftFrame(QFrame):
     params_changed = Signal(RunParams)
-    server_toggle_requested = Signal(bool)
     valve_command_requested = Signal(str)  # "FILLING", "FILTRATION", "BACKWASH", "ALL_SHUT"
     relay_toggle_requested = Signal(int, bool)  # (relay_number, target_on)
 
@@ -163,80 +160,10 @@ class LeftFrame(QFrame):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(6)
 
-        # ── RECIPE PICKER ──────────────────────────────────────────────────
-        recipe_frm = QFrame()
-        recipe_frm.setStyleSheet(
-            "QFrame { background: #0B1120; border-radius: 4px; "
-            "border: 1px solid #1E293B; border-top: 2px solid #F59E0B; "
-            "margin-bottom: 4px; }")
-        recipe_lay = QHBoxLayout(recipe_frm)
-        recipe_lay.setContentsMargins(8, 6, 8, 6)
-        recipe_lay.setSpacing(4)
-
-        lbl_recipe = QLabel("RECIPE:")
-        lbl_recipe.setStyleSheet(
-            "color: #F59E0B; font-family: 'Consolas'; font-size: 10px; "
-            "font-weight: bold; border: none;")
-        self.cmb_recipes = QComboBox()
-        self.cmb_recipes.setStyleSheet(
-            "QComboBox { background: #111827; color: #E2E8F0; "
-            "font-family: 'Consolas'; font-size: 10px; "
-            "border: 1px solid #334155; border-radius: 3px; padding: 2px 4px; }"
-            "QComboBox::drop-down { border: none; }"
-            "QComboBox QAbstractItemView { background: #111827; color: #E2E8F0; "
-            "selection-background-color: #1E3A5F; font-size: 10px; }")
-        self.cmb_recipes.setSizePolicy(
-            self.cmb_recipes.sizePolicy().horizontalPolicy(),
-            self.cmb_recipes.sizePolicy().verticalPolicy())
-
-        _rcss = (
-            "QPushButton { background: #111827; color: #F59E0B; "
-            "border: 1px solid #F59E0B; border-radius: 3px; "
-            "padding: 2px 8px; font-family: 'Consolas'; font-size: 10px; "
-            "font-weight: bold; } "
-            "QPushButton:hover { background: #F59E0B; color: #000; } "
-            "QPushButton:disabled { background: #050914; color: #334155; "
-            "border-color: #1E293B; }")
-        self.btn_recipe_load = QPushButton("LOAD")
-        self.btn_recipe_save = QPushButton("SAVE")
-        self.btn_recipe_del = QPushButton("DEL")
-        for b in (self.btn_recipe_load, self.btn_recipe_save, self.btn_recipe_del):
-            b.setStyleSheet(_rcss)
-
-        recipe_lay.addWidget(lbl_recipe)
-        recipe_lay.addWidget(self.cmb_recipes, 1)
-        recipe_lay.addWidget(self.btn_recipe_load)
-        recipe_lay.addWidget(self.btn_recipe_save)
-        recipe_lay.addWidget(self.btn_recipe_del)
-        root.addWidget(recipe_frm)
-
-        self.btn_recipe_load.clicked.connect(self._load_selected_recipe)
-        self.btn_recipe_save.clicked.connect(self._save_recipe_as)
-        self.btn_recipe_del.clicked.connect(self._delete_selected_recipe)
-        self._refresh_recipe_list()
-
-        # MANUAL HOLD
-        self.grp_manual = QFrame()
-        self.grp_manual.setStyleSheet(
-            "QFrame { background: #0B1120; border-radius: 4px; "
-            "border: 1px solid #1E293B; border-top: 2px solid #EC4899; margin-bottom: 4px; }")
-        lay_manual = QVBoxLayout(self.grp_manual)
-        lay_manual.setContentsMargins(12, 12, 12, 12)
-        lay_manual.setSpacing(8)
-
+        # MANUAL HOLD (hidden — kept as attributes for signal compatibility)
         self.btn_hold = HoldButton("HOLD SPACE TO BACKWASH")
         self.btn_hold.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.sp_hold_p = NudgeSpinBox(0, 8000, 0, 25, " mbar", 300.0)
-
-        lay_manual.addWidget(self.btn_hold)
-        h_row = QHBoxLayout()
-        lbl_p = QLabel("Pressure:")
-        lbl_p.setStyleSheet(
-            "color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
-        h_row.addWidget(lbl_p)
-        h_row.addWidget(self.sp_hold_p)
-        lay_manual.addLayout(h_row)
-        root.addWidget(self.grp_manual)
 
         # VALVE CONTROL PANEL
         self.grp_valves = QFrame()
@@ -383,7 +310,7 @@ class LeftFrame(QFrame):
         self._pa_mode = "SMOOTH"
 
         _pa_pill_frm, self._pa_btns = self._make_mode_pills(
-            ["SMOOTH", "STEPPED", "SMART"], "#8B5CF6")
+            ["SMOOTH", "STEPPED"], "#8B5CF6")
         self._pa_btns[0].setChecked(True)
         self.mod_pa.content_lay.addWidget(_pa_pill_frm, 0, 0, 1, 2)
 
@@ -411,24 +338,16 @@ class LeftFrame(QFrame):
         self.mod_pa.content_lay.addWidget(self._lbl_a_time_step, 4, 0)
         self.mod_pa.content_lay.addWidget(self.sp_a_time_per_step, 4, 1)
 
-        self._lbl_a_num_steps = QLabel("Num Steps:")
-        self._lbl_a_num_steps.setStyleSheet(
-            "color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
-        self.sp_a_num_steps = NudgeSpinBox(1.0, 200.0, 0, 1.0, " steps", 8.0)
-        self.mod_pa.content_lay.addWidget(self._lbl_a_num_steps, 5, 0)
-        self.mod_pa.content_lay.addWidget(self.sp_a_num_steps, 5, 1)
-
         self.lbl_pa_info = QLabel("ETA: — min")
         self.lbl_pa_info.setProperty("is_dynamic_result", True)
         self.lbl_pa_info.setStyleSheet(
             "color: #8B5CF6; font-weight: bold; font-family: 'Consolas'; "
             "font-size: 11px; border: none; padding-top: 4px;")
-        self.mod_pa.content_lay.addWidget(self.lbl_pa_info, 6, 0, 1, 2)
+        self.mod_pa.content_lay.addWidget(self.lbl_pa_info, 5, 0, 1, 2)
         root.addWidget(self.mod_pa)
 
         self._pa_btns[0].clicked.connect(lambda: self._set_pa_mode("SMOOTH"))
         self._pa_btns[1].clicked.connect(lambda: self._set_pa_mode("STEPPED"))
-        self._pa_btns[2].clicked.connect(lambda: self._set_pa_mode("SMART"))
 
         # PHASE B: STEADY STATE
         self.mod_pb = EliteModule("PHASE B: STEADY STATE", "#F59E0B", checkable=True)
@@ -446,46 +365,23 @@ class LeftFrame(QFrame):
         self.mod_pb.content_lay.addWidget(self.lbl_pb_info, 3, 0, 1, 2)
         root.addWidget(self.mod_pb)
 
-        # PHASE C: RAMP DOWN
+        # PHASE C: RAMP DOWN (Smooth only)
         self.mod_pc = EliteModule("PHASE C: RAMP DOWN", "#EC4899", checkable=True)
-        self._pc_mode = "SMOOTH"
-
-        _pc_pill_frm, self._pc_btns = self._make_mode_pills(
-            ["SMOOTH", "STEPPED"], "#EC4899")
-        self._pc_btns[0].setChecked(True)
-        self.mod_pc.content_lay.addWidget(_pc_pill_frm, 0, 0, 1, 2)
 
         self._lbl_dn_rate = QLabel("Ramp Rate:")
         self._lbl_dn_rate.setStyleSheet(
             "color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
         self.sp_dn_rate = NudgeSpinBox(1.0, 5000.0, 0, 50.0, " mbar/min", 500.0)
-        self.mod_pc.content_lay.addWidget(self._lbl_dn_rate, 1, 0)
-        self.mod_pc.content_lay.addWidget(self.sp_dn_rate, 1, 1)
-
-        self._lbl_dn_step = QLabel("Step Size:")
-        self._lbl_dn_step.setStyleSheet(
-            "color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
-        self.sp_dn_step_mbar = NudgeSpinBox(50.0, 2000.0, 0, 50.0, " mbar", 250.0)
-        self.mod_pc.content_lay.addWidget(self._lbl_dn_step, 2, 0)
-        self.mod_pc.content_lay.addWidget(self.sp_dn_step_mbar, 2, 1)
-
-        self._lbl_dn_time_step = QLabel("Time/Step:")
-        self._lbl_dn_time_step.setStyleSheet(
-            "color: #94A3B8; font-family: 'Consolas'; font-size: 11px; border: none;")
-        self.sp_dn_time_per_step = NudgeSpinBox(0.1, 120.0, 1, 0.5, " min", 2.0)
-        self.mod_pc.content_lay.addWidget(self._lbl_dn_time_step, 3, 0)
-        self.mod_pc.content_lay.addWidget(self.sp_dn_time_per_step, 3, 1)
+        self.mod_pc.content_lay.addWidget(self._lbl_dn_rate, 0, 0)
+        self.mod_pc.content_lay.addWidget(self.sp_dn_rate, 0, 1)
 
         self.lbl_pc_info = QLabel("ETA: — min")
         self.lbl_pc_info.setProperty("is_dynamic_result", True)
         self.lbl_pc_info.setStyleSheet(
             "color: #EC4899; font-weight: bold; font-family: 'Consolas'; "
             "font-size: 11px; border: none; padding-top: 4px;")
-        self.mod_pc.content_lay.addWidget(self.lbl_pc_info, 4, 0, 1, 2)
+        self.mod_pc.content_lay.addWidget(self.lbl_pc_info, 1, 0, 1, 2)
         root.addWidget(self.mod_pc)
-
-        self._pc_btns[0].clicked.connect(lambda: self._set_pc_mode("SMOOTH"))
-        self._pc_btns[1].clicked.connect(lambda: self._set_pc_mode("STEPPED"))
 
         # ORCHESTRATOR: Bestätigungs-Gates
         self.frm_orchestrator = QFrame()
@@ -512,109 +408,22 @@ class LeftFrame(QFrame):
         lay_orch.addWidget(self.chk_confirm_gates)
         root.addWidget(self.frm_orchestrator)
 
-        # 🚀 TELEMETRY SERVER & QR CODE
-        self.mod_srv = EliteModule("NETWORK MONITOR SERVER", "#10B981", checkable=False)
-
-        # IP SICHER ERAHNT (Auch ohne Internet im Labornetzwerk)
-        import socket
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("10.255.255.255", 1))
-            self.local_ip = s.getsockname()[0]
-            s.close()
-        except Exception:
-            logger.warning("Could not detect local IP; falling back to 127.0.0.1")
-            self.local_ip = "127.0.0.1"
-
-        self.server_url = f"http://{self.local_ip}:8000"
-
-        self.btn_toggle_srv = QPushButton("START SERVER")
-        self.btn_toggle_srv.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_toggle_srv.setStyleSheet(
-            "background: #0F172A; color: #10B981; border: 1px solid #1E293B; "
-            "padding: 6px; font-weight: bold; border-radius: 3px;")
-        self.btn_toggle_srv.setCheckable(True)
-        self.btn_toggle_srv.toggled.connect(self._on_server_toggled)
-
-        self.mod_srv = EliteModule("NETWORK MONITOR SERVER", "#10B981", checkable=False)
-
-        self.lbl_url = QLabel("Starting in background...")
-        self.lbl_url.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_url.setStyleSheet(
-            "color: #00E5FF; font-weight: bold; font-family: 'Consolas'; font-size: 11px;")
-
-        self.lbl_qr = QLabel()
-        self.lbl_qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_qr.setMinimumHeight(120)
-        self.lbl_qr.setStyleSheet("background: #fff; border-radius: 4px; padding: 5px;")
-        self.lbl_qr.hide()  # Bleibt versteckt, bis die URL kommt
-
-        self.mod_srv.content_lay.addWidget(self.lbl_url, 0, 0, 1, 2)
-        self.mod_srv.content_lay.addWidget(self.lbl_qr, 1, 0, 1, 2)
-        root.addWidget(self.mod_srv)
-
         root.addStretch()
         self._current_bnnt_ml = 0.0
         self._wire_signals()
         self._set_p0_mode("AUTO")
         self._set_pa_mode("SMOOTH")
-        self._set_pc_mode("SMOOTH")
         self._load_last_params()  # Letzten Parametersatz wiederherstellen
         self._recalc_math()
-
-    def _generate_qr(self, url: str):
-        """Erzeugt den QR-Code aus der URL und legt ihn ins UI."""
-        try:
-            import qrcode
-            import io
-            from PySide6.QtGui import QImage, QPixmap
-
-            qr = qrcode.QRCode(version=1, box_size=3, border=1)
-            qr.add_data(url)
-            qr.make(fit=True)
-            img = qr.make_image(fill_color="black", back_color="white")
-
-            buf = io.BytesIO()
-            img.save(buf, "PNG")
-            qimg = QImage.fromData(buf.getvalue())
-            pixmap = QPixmap.fromImage(qimg)
-            self.lbl_qr.setPixmap(pixmap)
-            self.lbl_qr.show()  # QR-Code einblenden
-
-        except ImportError:
-            self.lbl_qr.setText("QR Error:\n'pip install qrcode pillow'\nnot found.")
-            self.lbl_qr.setStyleSheet("color: #FF1744; font-weight: bold; font-size: 11px;")
-            self.lbl_qr.show()
-
-    def _on_server_toggled(self, checked: bool):
-        if checked:
-            self.btn_toggle_srv.setText("SERVER RUNNING")
-            self.btn_toggle_srv.setStyleSheet(
-                "background: #10B981; color: #000; border: none; "
-                "padding: 6px; font-weight: bold; border-radius: 3px;")
-            self._generate_qr(self.server_url)
-            self.lbl_qr.show()
-        else:
-            self.btn_toggle_srv.setText("START SERVER")
-            self.btn_toggle_srv.setStyleSheet(
-                "background: #0F172A; color: #10B981; border: 1px solid #1E293B; "
-                "padding: 6px; font-weight: bold; border-radius: 3px;")
-            self.lbl_qr.hide()
-        self.server_toggle_requested.emit(checked)
-
-    def update_server_url(self, url: str):
-        """Wird vom MainWindow aufgerufen, sobald der Server den Token generiert hat."""
-        self.lbl_url.setText(url)
-        self._generate_qr(url)
 
     def _wire_signals(self):
         widgets = [
             self.sp_area, self.sp_calib, self.sp_thick,
             self.sp_fill_p, self.sp_bw_target_ml,
             self.sp_target_p, self.sp_a_rate,
-            self.sp_a_step_mbar, self.sp_a_time_per_step, self.sp_a_num_steps,
+            self.sp_a_step_mbar, self.sp_a_time_per_step,
             self.sp_h2o, self.sp_v_extra, self.sp_b_timeout,
-            self.sp_dn_rate, self.sp_dn_step_mbar, self.sp_dn_time_per_step,
+            self.sp_dn_rate,
         ]
         for w in widgets:
             w.valueChanged.connect(self._recalc_math)
@@ -639,27 +448,16 @@ class LeftFrame(QFrame):
             rate_a = self.sp_a_rate.value()
             eta_a = (self.sp_target_p.value() / rate_a) if rate_a > 0 else 0
             self.lbl_pa_info.setText(f"ETA: {eta_a:.1f} min @ {rate_a:.0f} mbar/min")
-        elif self._pa_mode == "STEPPED":
+        else:  # STEPPED
             step = self.sp_a_step_mbar.value()
             t = self.sp_a_time_per_step.value()
             n = max(1, math.ceil(self.sp_target_p.value() / step)) if step > 0 else 0
             self.lbl_pa_info.setText(f"{n} steps · ~{n * t:.1f} min total")
-        elif self._pa_mode == "SMART":
-            n = int(self.sp_a_num_steps.value())
-            t = self.sp_a_time_per_step.value()
-            step = self.sp_target_p.value() / n if n > 0 else 0
-            self.lbl_pa_info.setText(f"{n} steps · {step:.0f} mbar/step · ~{n * t:.1f} min")
 
-        # Phase C ETA
-        if self._pc_mode == "SMOOTH":
-            rate_c = self.sp_dn_rate.value()
-            c_min = (self.sp_target_p.value() / rate_c) if rate_c > 0 else 0
-            self.lbl_pc_info.setText(f"ETA: {c_min:.1f} min")
-        else:
-            step = self.sp_dn_step_mbar.value()
-            t = self.sp_dn_time_per_step.value()
-            n = max(1, math.ceil(self.sp_target_p.value() / step)) if step > 0 else 0
-            self.lbl_pc_info.setText(f"{n} steps · ~{n * t:.1f} min total")
+        # Phase C ETA (Smooth only)
+        rate_c = self.sp_dn_rate.value()
+        c_min = (self.sp_target_p.value() / rate_c) if rate_c > 0 else 0
+        self.lbl_pc_info.setText(f"ETA: {c_min:.1f} min")
 
         # Phase B Info (B1 + B2)
         b1_target = self._current_bnnt_ml + self.sp_h2o.value()
@@ -675,15 +473,6 @@ class LeftFrame(QFrame):
         self._save_last_params()
 
     def get_run_params(self) -> RunParams:
-        # Resolve SMART → STEPPED
-        _pa_mode = self._pa_mode
-        _pa_step = self.sp_a_step_mbar.value()
-        _pa_time = self.sp_a_time_per_step.value()
-        if _pa_mode == "SMART":
-            _pa_mode = "STEPPED"
-            n = int(self.sp_a_num_steps.value())
-            _pa_step = self.sp_target_p.value() / n if n > 0 else 250.0
-
         return RunParams(
             v_bnnt_ml=self._current_bnnt_ml,
             phase_b1_target_ml=self.sp_h2o.value(),
@@ -694,21 +483,19 @@ class LeftFrame(QFrame):
             run_phase_a=self.mod_pa.isChecked(),
             phase_a_target_mbar=self.sp_target_p.value(),
             phase_a_rate_mbar_min=self.sp_a_rate.value(),
-            phase_a_mode=_pa_mode,
-            phase_a_step_mbar=_pa_step,
-            phase_a_time_per_step_min=_pa_time,
+            phase_a_mode=self._pa_mode,
+            phase_a_step_mbar=self.sp_a_step_mbar.value(),
+            phase_a_time_per_step_min=self.sp_a_time_per_step.value(),
             run_phase_b=self.mod_pb.isChecked(),
             v_extra_ml=self.sp_v_extra.value(),
             phase_b_no_flow_timeout_min=self.sp_b_timeout.value(),
             run_phase_c=self.mod_pc.isChecked(),
             phase_c_rate_mbar_min=self.sp_dn_rate.value(),
-            phase_c_mode=self._pc_mode,
-            phase_c_step_mbar=self.sp_dn_step_mbar.value(),
-            phase_c_time_per_step_min=self.sp_dn_time_per_step.value(),
+            phase_c_mode="SMOOTH",
             confirm_between_phases=self.chk_confirm_gates.isChecked(),
         )
 
-    # ── Pill selector helpers ────────────────────────────────────────────────
+    # ── Pill selector helpers ────────────────────────────────────────
 
     def _make_mode_pills(self, modes: list, accent: str) -> tuple:
         frm = QFrame()
@@ -730,7 +517,8 @@ class LeftFrame(QFrame):
             if i == active_idx:
                 btn.setStyleSheet(
                     f"background: {accent}; color: #000; border: none; padding: 2px 6px; "
-                    "font-weight: bold; font-family: 'Consolas'; font-size: 10px; border-radius: 3px;")
+                    "font-weight: bold; font-family: 'Consolas'; "
+                    "font-size: 10px; border-radius: 3px;")
             else:
                 btn.setStyleSheet(
                     "background: #0F172A; color: #94A3B8; border: 1px solid #1E293B; "
@@ -751,36 +539,22 @@ class LeftFrame(QFrame):
             "AUTO": "ETA: — min (at live flow)",
         }
         self.lbl_bw_eta.setText(hints[mode])
-        self._apply_pill_styles(self._p0_btns, ["MANUAL", "CONTINUOUS", "AUTO"].index(mode), "#EC4899")
+        idx = ["MANUAL", "CONTINUOUS", "AUTO"].index(mode)
+        self._apply_pill_styles(self._p0_btns, idx, "#EC4899")
         self._recalc_math()
 
     def _set_pa_mode(self, mode: str):
         self._pa_mode = mode
         smooth = mode == "SMOOTH"
-        stepped = mode in ("STEPPED", "SMART")
-        smart = mode == "SMART"
         for w in (self._lbl_a_rate, self.sp_a_rate):
             w.setVisible(smooth)
         for w in (self._lbl_a_step, self.sp_a_step_mbar,
                   self._lbl_a_time_step, self.sp_a_time_per_step):
-            w.setVisible(stepped)
-        for w in (self._lbl_a_num_steps, self.sp_a_num_steps):
-            w.setVisible(smart)
-        self._apply_pill_styles(self._pa_btns, ["SMOOTH", "STEPPED", "SMART"].index(mode), "#8B5CF6")
-        self._recalc_math()
-
-    def _set_pc_mode(self, mode: str):
-        self._pc_mode = mode
-        smooth = mode == "SMOOTH"
-        for w in (self._lbl_dn_rate, self.sp_dn_rate):
-            w.setVisible(smooth)
-        for w in (self._lbl_dn_step, self.sp_dn_step_mbar,
-                  self._lbl_dn_time_step, self.sp_dn_time_per_step):
             w.setVisible(not smooth)
-        self._apply_pill_styles(self._pc_btns, 0 if smooth else 1, "#EC4899")
+        self._apply_pill_styles(self._pa_btns, ["SMOOTH", "STEPPED"].index(mode), "#8B5CF6")
         self._recalc_math()
 
-    # ── Confirm gate ─────────────────────────────────────────────────────────
+    # ── Confirm gate ────────────────────────────────────────────────────
 
     def _on_confirm_toggle(self, checked: bool):
         self._apply_confirm_style(checked)
@@ -799,7 +573,7 @@ class LeftFrame(QFrame):
 
     def set_running(self, running: bool):
         self._is_running = running
-        for m in self.modules + [self.mod_calc, self.mod_srv]:
+        for m in self.modules + [self.mod_calc]:
             m.setEnabled(not running)
         self.frm_orchestrator.setEnabled(not running)
         # Valve panel bleibt immer aktiv (manuelle Übersteuerung während Experiment)
@@ -1034,7 +808,6 @@ class LeftFrame(QFrame):
             return
         try:
             self.get_run_params().save_yaml(self._params_path())
-            logger.debug("Run params saved to %s", self._params_path())
         except Exception as exc:
             logger.warning("Could not save run params: %s", exc)
 
@@ -1082,90 +855,3 @@ class LeftFrame(QFrame):
             pass
         self._recalc_math()
 
-    # -----------------------------------------------------------------
-    # RECIPE LIBRARY
-    # -----------------------------------------------------------------
-    @staticmethod
-    def _recipes_dir() -> "Path":
-        from pathlib import Path
-        from src.utils.path_utils import project_root
-        d = project_root() / "src" / "config" / "recipes"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
-    def _refresh_recipe_list(self) -> None:
-        from pathlib import Path
-        self.cmb_recipes.blockSignals(True)
-        current = self.cmb_recipes.currentText()
-        self.cmb_recipes.clear()
-        try:
-            names = sorted(
-                p.stem for p in self._recipes_dir().glob("*.yaml")
-            )
-            self.cmb_recipes.addItems(names)
-            idx = self.cmb_recipes.findText(current)
-            if idx >= 0:
-                self.cmb_recipes.setCurrentIndex(idx)
-        except Exception as exc:
-            logger.warning("Could not list recipes: %s", exc)
-        self.cmb_recipes.blockSignals(False)
-
-    def _load_selected_recipe(self) -> None:
-        name = self.cmb_recipes.currentText().strip()
-        if not name:
-            return
-        path = self._recipes_dir() / f"{name}.yaml"
-        try:
-            p = RunParams.load_yaml(str(path))
-            self._apply_run_params(p)
-            self._save_last_params()
-            logger.info("Recipe loaded: %s", name)
-        except Exception as exc:
-            QMessageBox.warning(self, "Load Recipe", f"Could not load '{name}':\n{exc}")
-
-    def _save_recipe_as(self) -> None:
-        default = self.cmb_recipes.currentText().strip() or "new_recipe"
-        name, ok = QInputDialog.getText(
-            self, "Save Recipe", "Recipe name:", text=default)
-        if not ok or not name.strip():
-            return
-        name = name.strip().replace(" ", "_")
-        path = self._recipes_dir() / f"{name}.yaml"
-        if path.exists():
-            reply = QMessageBox.question(
-                self, "Overwrite?",
-                f"Recipe '{name}' already exists. Overwrite?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                return
-        try:
-            self.get_run_params().save_yaml(str(path))
-            self._refresh_recipe_list()
-            idx = self.cmb_recipes.findText(name)
-            if idx >= 0:
-                self.cmb_recipes.setCurrentIndex(idx)
-            logger.info("Recipe saved: %s", name)
-        except Exception as exc:
-            QMessageBox.warning(self, "Save Recipe", f"Could not save '{name}':\n{exc}")
-
-    def _delete_selected_recipe(self) -> None:
-        name = self.cmb_recipes.currentText().strip()
-        if not name:
-            return
-        reply = QMessageBox.question(
-            self, "Delete Recipe",
-            f"Delete recipe '{name}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        path = self._recipes_dir() / f"{name}.yaml"
-        try:
-            path.unlink(missing_ok=True)
-            self._refresh_recipe_list()
-            logger.info("Recipe deleted: %s", name)
-        except Exception as exc:
-            QMessageBox.warning(self, "Delete Recipe", f"Could not delete '{name}':\n{exc}")

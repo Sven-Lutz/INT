@@ -8,9 +8,19 @@ import traceback
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QtMsgType, qInstallMessageHandler
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
+
+
+def _qt_msg_handler(msg_type, context, message):
+    """Suppress Qt's internal stylesheet warnings (EliteModule class-selector quirk)."""
+    if "Could not parse stylesheet" in message:
+        return
+    if msg_type == QtMsgType.QtWarningMsg:
+        logger.warning("Qt: %s", message)
+    elif msg_type in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+        logger.error("Qt: %s", message)
 
 from src.utils.config_manager import ConfigManager
 from src.utils.path_utils import ensure_dir, project_root, resolve_under
@@ -159,13 +169,20 @@ def _pid_is_alive(pid: int) -> bool:
     if sys.platform.startswith("win"):
         try:
             import ctypes
+            import ctypes.wintypes
 
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
             handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
-            if handle:
-                ctypes.windll.kernel32.CloseHandle(handle)
-                return True
-            return False
+            if not handle:
+                return False
+            exit_code = ctypes.wintypes.DWORD()
+            alive = bool(
+                ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                and exit_code.value == STILL_ACTIVE
+            )
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return alive
         except Exception:
             return False
     else:
@@ -184,6 +201,7 @@ def main() -> int:
 
     _configure_qt_highdpi()
 
+    qInstallMessageHandler(_qt_msg_handler)
     app = QApplication(sys.argv)
     app.setApplicationName("Little Chonker")
     app.setOrganizationName("PelliKAn")
