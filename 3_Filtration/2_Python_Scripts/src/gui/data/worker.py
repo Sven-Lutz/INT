@@ -228,6 +228,8 @@ class ExperimentWorker(QObject):
     annotation_placed = Signal(float, str)
     # Emits the run_dir path once the telemetry store is initialised
     run_started = Signal(str)
+    # Emits the effective total target volume after it is computed in run()
+    progress_target_updated = Signal(float)
 
     def __init__(self, cfg: ExperimentConfig):
         super().__init__()
@@ -529,6 +531,7 @@ class ExperimentWorker(QObject):
                 float(p.phase_b1_target_ml),
                 1.0,
             )
+            self.progress_target_updated.emit(target_vol)
 
             if p.run_phase_a or p.run_phase_b or p.run_phase_c:
                 self.log_msg.emit("─" * 52, "#8B5CF6")
