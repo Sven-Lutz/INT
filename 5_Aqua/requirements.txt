@@ -1,0 +1,3 @@
+Bronkhorst-propar
+pyserial
+PySide6
