@@ -49,6 +49,7 @@ def main() -> int:
         window.led_requested.connect(runtime.set_led)
 
         runtime.state_changed.connect(window.set_process_state)
+        runtime.start_interlock_changed.connect(window.set_start_pending)
         runtime.run_started.connect(window.mark_run_started)
         runtime.run_finished.connect(window.show_run_summary)
         runtime.developer_snapshot.connect(window.update_developer_snapshot)

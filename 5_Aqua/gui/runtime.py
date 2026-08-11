@@ -23,6 +23,7 @@ class HardwareWorker(QObject):
     telemetry_received = Signal(object, float, object, bool)
     run_started = Signal()
     run_finished = Signal(object)
+    start_cycle_finished = Signal()
     operation_failed = Signal(str, str)
     developer_snapshot = Signal(object)
 
@@ -93,12 +94,16 @@ class HardwareWorker(QObject):
         empty_stop_enabled: bool,
         empty_threshold: float,
     ) -> None:
-        if self.controller.state == ProcessState.RUNNING:
-            LOGGER.warning("Start blocked because a drain run is already active")
+        if self.controller.state not in {ProcessState.READY, ProcessState.STOPPED}:
+            LOGGER.warning(
+                "Start blocked in state %s",
+                self.controller.state.name,
+            )
             self.operation_failed.emit(
                 "Start blocked",
-                "A drain run is already active.",
+                f"Cannot start from state {self.controller.state.name}.",
             )
+            self.start_cycle_finished.emit()
             return
 
         try:
@@ -138,11 +143,16 @@ class HardwareWorker(QObject):
             LOGGER.exception("Drain run failed")
             self.operation_failed.emit("Process failed", str(exc))
         finally:
-            self._run_started = None
-            self._emit_state()
-            self._emit_developer_snapshot()
-            if self.controller.state != ProcessState.DISCONNECTED:
-                self._start_idle_polling()
+            try:
+                self._run_started = None
+                self._emit_state()
+                self._emit_developer_snapshot()
+                if self.controller.state != ProcessState.DISCONNECTED:
+                    self._start_idle_polling()
+            finally:
+                # Never leave the GUI-side interlock latched, even if a
+                # diagnostic update fails while unwinding the worker slot.
+                self.start_cycle_finished.emit()
 
     @Slot(bool)
     def set_led(self, enabled: bool) -> None:
@@ -262,6 +272,7 @@ class ProcessRuntime(QObject):
     telemetry_received = Signal(object, float, object, bool)
     run_started = Signal()
     run_finished = Signal(object)
+    start_interlock_changed = Signal(bool)
     operation_failed = Signal(str, str)
     developer_snapshot = Signal(object)
 
@@ -274,6 +285,7 @@ class ProcessRuntime(QObject):
         super().__init__()
         self.controller = controller
         self._shutdown_started = False
+        self._start_in_flight = False
         self.thread = QThread(self)
         self.thread.setObjectName("AquaHardwareThread")
         self.worker = HardwareWorker(
@@ -293,6 +305,9 @@ class ProcessRuntime(QObject):
         self.worker.telemetry_received.connect(self.telemetry_received)
         self.worker.run_started.connect(self.run_started)
         self.worker.run_finished.connect(self.run_finished)
+        self.worker.start_cycle_finished.connect(
+            self._release_start_interlock
+        )
         self.worker.operation_failed.connect(self.operation_failed)
         self.worker.developer_snapshot.connect(self.developer_snapshot)
 
@@ -310,11 +325,30 @@ class ProcessRuntime(QObject):
         empty_stop_enabled: bool,
         empty_threshold: float,
     ) -> None:
+        # This method runs in the GUI thread. Guard before queueing work so a
+        # second click cannot remain queued until the first blocking run ends.
+        if self._start_in_flight:
+            LOGGER.warning("Duplicate START ignored while a run is pending")
+            self.operation_failed.emit(
+                "Start blocked",
+                "A start request is already pending or running.",
+            )
+            return
+
+        self._start_in_flight = True
+        self.start_interlock_changed.emit(True)
         self._start_process.emit(
             valve_position_percent,
             empty_stop_enabled,
             empty_threshold,
         )
+
+    @Slot()
+    def _release_start_interlock(self) -> None:
+        if not self._start_in_flight:
+            return
+        self._start_in_flight = False
+        self.start_interlock_changed.emit(False)
 
     def stop_process(self) -> None:
         # controller.start() blocks the worker event loop. request_stop()

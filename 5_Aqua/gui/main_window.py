@@ -131,6 +131,7 @@ class ProcessControlWindow(QMainWindow):
         self.setMinimumSize(1180, 720)
 
         self._state_name = "DISCONNECTED"
+        self._start_pending = False
         self._last_telemetry_monotonic: float | None = None
         self._focused_metric: str | None = None
         self._log_entries: deque[tuple[str, str, str, str]] = deque(
@@ -429,6 +430,10 @@ class ProcessControlWindow(QMainWindow):
         self.copy_developer_button.clicked.connect(self._copy_developer_snapshot)
 
     def _emit_start_requested(self) -> None:
+        if self._start_pending:
+            return
+        self._start_pending = True
+        self.start_button.setEnabled(False)
         self.start_requested.emit(
             self.valve_position.value(),
             self.auto_empty_stop.isChecked(),
@@ -487,7 +492,7 @@ class ProcessControlWindow(QMainWindow):
 
         self.connect_button.setEnabled(disconnected)
         self.disconnect_button.setEnabled(connected_idle or fault)
-        self.start_button.setEnabled(connected_idle)
+        self.start_button.setEnabled(connected_idle and not self._start_pending)
         self.stop_button.setEnabled(running or stopping)
         self.valve_position.setEnabled(connected_idle)
         self.auto_empty_stop.setEnabled(connected_idle)
@@ -506,6 +511,11 @@ class ProcessControlWindow(QMainWindow):
         self.connect_button.setEnabled(False)
         self.disconnect_button.setEnabled(False)
         self.append_log(message, "ERROR", source="aqua.config")
+
+    def set_start_pending(self, pending: bool) -> None:
+        self._start_pending = pending
+        connected_idle = self._state_name in {"READY", "STOPPED"}
+        self.start_button.setEnabled(connected_idle and not pending)
 
     def mark_run_started(self) -> None:
         self.clear_charts()

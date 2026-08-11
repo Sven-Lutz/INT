@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -16,6 +17,8 @@ from data.models import SystemMeasurement
 from gui.charting import PersistentMetricChart
 from gui.logging_bridge import configure_runtime_logging
 from gui.main_window import ProcessControlWindow
+from gui.runtime import ProcessRuntime
+from tests.test_controller_reuse import build_fake_controller
 
 
 def application() -> QApplication:
@@ -108,7 +111,51 @@ def test_window_telemetry_focus_and_escape_overview() -> None:
     app.processEvents()
     assert window._focused_metric is None
     assert window.metric_charts["flow"].isVisible()
+
+    window.set_process_state("READY")
+    QTest.mouseClick(window.start_button, Qt.MouseButton.LeftButton)
+    assert window._start_pending
+    assert not window.start_button.isEnabled()
+    window.set_start_pending(False)
+    assert window.start_button.isEnabled()
     window.close()
+
+
+def test_runtime_coalesces_duplicate_start_but_allows_later_run() -> None:
+    app = application()
+    with TemporaryDirectory() as temporary_directory:
+        controller, analog = build_fake_controller(Path(temporary_directory))
+        controller.connect()
+        runtime = ProcessRuntime(controller)
+        failures: list[tuple[str, str]] = []
+        runtime.operation_failed.connect(
+            lambda title, message: failures.append((title, message))
+        )
+        QTest.qWait(20)
+
+        runtime.start_process(100.0, True, 2.0)
+        runtime.start_process(100.0, True, 2.0)
+
+        deadline = time.monotonic() + 2.0
+        while runtime._start_in_flight and time.monotonic() < deadline:
+            QTest.qWait(10)
+            app.processEvents()
+
+        assert not runtime._start_in_flight
+        assert analog.calls == 1
+        assert failures == [
+            ("Start blocked", "A start request is already pending or running.")
+        ]
+
+        runtime.start_process(100.0, True, 2.0)
+        deadline = time.monotonic() + 2.0
+        while runtime._start_in_flight and time.monotonic() < deadline:
+            QTest.qWait(10)
+            app.processEvents()
+
+        assert not runtime._start_in_flight
+        assert analog.calls == 2
+        runtime.shutdown()
 
 
 def test_runtime_logging_is_rotating_bounded_and_not_duplicated() -> None:
@@ -149,5 +196,6 @@ def test_runtime_logging_is_rotating_bounded_and_not_duplicated() -> None:
 if __name__ == "__main__":
     test_chart_click_history_and_exact_sample_storage()
     test_window_telemetry_focus_and_escape_overview()
+    test_runtime_coalesces_duplicate_start_but_allows_later_run()
     test_runtime_logging_is_rotating_bounded_and_not_duplicated()
     print("GUI chart interactions: OK")
