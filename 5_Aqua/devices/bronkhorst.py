@@ -54,49 +54,81 @@ class BronkhorstFlowController:
         self.node_address = node_address
         self.baudrate = baudrate
         self._instrument: Any | None = None
+        self._connected = False
 
     @property
     def is_connected(self) -> bool:
-        return self._instrument is not None
+        return self._connected
 
     def connect(self) -> None:
         if self.is_connected:
             return
 
+        instrument = self._instrument
         try:
-            self._instrument = propar.instrument(
-                self.port,
-                self.node_address,
-                baudrate=self.baudrate,
-            )
-            self.read_control_mode()
+            if instrument is None:
+                instrument = propar.instrument(
+                    self.port,
+                    self.node_address,
+                    baudrate=self.baudrate,
+                )
+                self._instrument = instrument
+            else:
+                # ProPar caches masters by port. Reuse the retained
+                # instrument and explicitly reopen its stopped master.
+                instrument.master.start()
+
+            # Validate communication before exposing the connection as ready.
+            control_mode = instrument.readParameter(self.PARAM_CONTROL_MODE)
+            if control_mode is None:
+                raise RuntimeError(
+                    "Bronkhorst returned no control-mode response."
+                )
+            int(control_mode)
         except Exception as exc:
-            self._instrument = None
+            self._connected = False
+            if instrument is not None:
+                try:
+                    instrument.master.stop()
+                except Exception:
+                    # Cleanup must not hide the original connection error.
+                    pass
             raise BronkhorstError(
                 "Could not connect to Bronkhorst on "
                 f"{self.port}, node {self.node_address}, "
                 f"{self.baudrate} baud."
             ) from exc
 
+        self._connected = True
+
     def disconnect(self) -> None:
-        if self._instrument is None:
+        if not self._connected:
+            return
+
+        instrument = self._instrument
+        self._connected = False
+        if instrument is None:
             return
 
         try:
-            self._instrument.master.close()
-        finally:
-            self._instrument = None
+            instrument.master.stop()
+        except Exception as exc:
+            raise BronkhorstError(
+                "Could not disconnect Bronkhorst on "
+                f"{self.port}."
+            ) from exc
 
     def _require_connection(self) -> Any:
-        if self._instrument is None:
+        if not self._connected or self._instrument is None:
             raise BronkhorstError(
                 "Bronkhorst is not connected."
             )
         return self._instrument
 
     def read_parameter(self, parameter: int) -> Any:
+        instrument = self._require_connection()
         try:
-            return self._require_connection().readParameter(parameter)
+            return instrument.readParameter(parameter)
         except Exception as exc:
             raise BronkhorstError(
                 f"Could not read Bronkhorst parameter {parameter}."
