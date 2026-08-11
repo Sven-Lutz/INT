@@ -133,10 +133,10 @@ def format_metric(key: str, value: float | None) -> str:
 
 
 class PersistentMetricChart(QChartView):
-    """Interactive chart retaining the run history in memory.
+    """Interactive chart retaining bounded session history in memory.
 
     The default view follows the last ``window_seconds``. Users can
-    switch to the complete run history, hover samples for exact values,
+    switch to the complete session history, hover samples for exact values,
     and click the chart to focus it in the GUI.
     """
 
@@ -237,6 +237,21 @@ class PersistentMetricChart(QChartView):
     def set_full_history(self, enabled: bool) -> None:
         self._show_full_history = enabled
         self._update_axes()
+
+    def set_time_window(self, seconds: float | None) -> None:
+        """Change only the visible X range; retained samples stay intact."""
+
+        if seconds is None:
+            self._show_full_history = True
+        else:
+            if seconds <= 0:
+                raise ValueError("Chart time window must be greater than zero.")
+            self.window_seconds = float(seconds)
+            self._show_full_history = False
+        if self._x:
+            self._update_axes()
+        elif not self._show_full_history:
+            self.x_axis.setRange(0.0, self.window_seconds)
 
     def append_value(
         self,

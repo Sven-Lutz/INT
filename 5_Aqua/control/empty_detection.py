@@ -3,6 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from config import (
+    CAPACITANCE_EMPTY_CONSECUTIVE_SAMPLES,
+    CAPACITANCE_EMPTY_STOP_ENABLED,
+    CAPACITANCE_EMPTY_THRESHOLD,
+    CAPACITANCE_FILLED_VALUE,
+)
+
 
 class CapacitanceState(Enum):
     """Semantic fill state derived from the capacitance value."""
@@ -19,14 +26,14 @@ class EmptyDetectionSettings:
 
     Draining always runs from full towards empty, so the only relevant
     condition is ``capacitance <= empty_threshold``. There is no
-    "at or above" direction to choose. All thresholds are in volts, the
-    unit of the capacitance sensor.
+    "at or above" direction to choose. Thresholds use the scaled process
+    value, not the raw AI4 voltage.
     """
 
-    empty_threshold: float = 2.0
-    filled_threshold: float = 12.5
-    consecutive_samples: int = 3
-    enabled: bool = True
+    empty_threshold: float = CAPACITANCE_EMPTY_THRESHOLD
+    filled_threshold: float = CAPACITANCE_FILLED_VALUE
+    consecutive_samples: int = CAPACITANCE_EMPTY_CONSECUTIVE_SAMPLES
+    enabled: bool = CAPACITANCE_EMPTY_STOP_ENABLED
 
     def __post_init__(self) -> None:
         if self.empty_threshold < 0.0:

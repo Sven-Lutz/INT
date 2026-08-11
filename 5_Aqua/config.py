@@ -93,17 +93,17 @@ HUMIDITY_VOLTAGE_AT_100_PERCENT = 10.0
 # PROCESS SETTINGS
 # =============================================================================
 
-# The proportional valve is the actual manipulated variable. Draining
-# runs with a fixed valve opening, fully open by default.
+# Direct valve position is the default operator control method. Closed-loop
+# flow target remains available as the alternative control method per run.
 DEFAULT_VALVE_POSITION_PERCENT = 100.0
 
 SAMPLE_INTERVAL_SECONDS = 0.5
 MAXIMUM_ALLOWED_FLOW_ML_MIN = 200.0
 
-# Closed-loop flow control (flow setpoint -> controller -> valve position)
-# is not part of the operator workflow. The backend still supports it for
-# diagnostics; this is the setpoint used in that case.
+# Default for the operator-selectable closed-loop Flow Target control method.
 DEFAULT_FLOW_SETPOINT_ML_MIN = 100.0
+DEFAULT_TARGET_VOLUME_ML = 500.0
+TARGET_VOLUME_STOP_ENABLED = False
 
 
 # =============================================================================
@@ -112,7 +112,7 @@ DEFAULT_FLOW_SETPOINT_ML_MIN = 100.0
 
 # Draining always runs from "full" towards "empty", so the only relevant
 # condition is capacitance <= threshold, expressed in scaled units.
-CAPACITANCE_EMPTY_THRESHOLD = 2.0
+CAPACITANCE_EMPTY_THRESHOLD = 5.0
 
 # Number of consecutive samples below the threshold before the process is
 # stopped. Debounces single noisy readings.
@@ -216,6 +216,11 @@ def validate_configuration() -> None:
         raise ValueError(
             "DEFAULT_FLOW_SETPOINT_ML_MIN must not exceed "
             "MAXIMUM_ALLOWED_FLOW_ML_MIN."
+        )
+
+    if DEFAULT_TARGET_VOLUME_ML <= 0:
+        raise ValueError(
+            "DEFAULT_TARGET_VOLUME_ML must be greater than zero."
         )
 
     if SAMPLE_INTERVAL_SECONDS <= 0:

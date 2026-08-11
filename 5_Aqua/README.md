@@ -4,17 +4,25 @@ Desktop control, live telemetry, diagnostics, and measurement logging for the gr
 
 ## Process model
 
-The proportional Bronkhorst valve is the manipulated variable, not a flow setpoint. The vessel is drained from above and the run normally ends when the capacitance sensor no longer sees water:
+The operator independently selects how to drain and when to stop. One control
+method is active per run:
+
+- direct Bronkhorst Valve Position [%], or
+- closed-loop Bronkhorst Flow Target [ml/min].
+
+Empty detection and target drained volume are independent stop conditions;
+either can be enabled together, and the first reached condition wins:
 
 ```text
 DISCONNECTED
   -> Connect
 READY
   -> Start draining
-RUNNING                proportional valve at configured opening (100 % default)
+RUNNING                selected Valve Position or Flow Target active
   -> sample flow, capacitance, humidity, temperature and device state
-  -> integrate drained volume
-  -> capacitance <= empty threshold for N consecutive samples
+  -> integrate current Run Volume and cumulative Session Total
+  -> capacitance <= empty threshold for N consecutive samples, or
+  -> Run Volume >= enabled Target Volume
 STOPPING
   -> proportional valve closed
   -> downstream binary valve closed
@@ -22,7 +30,10 @@ STOPPED
   -> next run can be started without reconnecting
 ```
 
-A manual stop is possible at any time. Closed-loop flow control (`flow setpoint -> controller -> valve position`) remains in the backend for diagnostics only and is deliberately not exposed as the normal operator workflow.
+A manual stop is possible at any time. During RUNNING the selected control
+mode remains fixed, while its active target and the LED can be changed with
+verified hardware commands. Stop-condition settings remain locked for that
+run.
 
 ## Confirmed hardware mapping
 
@@ -87,8 +98,8 @@ EMPTY   ~  0 scaled units
 ```
 
 The GUI reports the scaled value, raw AI4 voltage, and semantic state
-(`FILLED`, `DRAINING`, `EMPTY`, `UNKNOWN`). There is only one automatic stop
-condition:
+(`FILLED`, `DRAINING`, `EMPTY`, `UNKNOWN`). The capacitance-based stop uses
+one direction:
 
 ```text
 capacitance <= empty threshold
@@ -120,14 +131,17 @@ Visible telemetry includes:
 - capacitance value and fill state
 - humidity
 - commanded valve opening and Bronkhorst valve output
-- integrated drained volume
+- cumulative Session Total with current Run Volume shown separately
 - Bronkhorst temperature
 - Bronkhorst alarm register
 - downstream binary valve and LED state
 
 ### Interactive Live Charts
 
-The chart layer retains a persistent run history for:
+The bounded chart layer retains history across all runs in the current Aqua
+session. Chart time is monotonic session time, so a new run never restarts the
+X coordinate at zero. The drained-volume plot uses cumulative Session Total;
+run-specific volume remains available in telemetry and `ProcessSummary`.
 
 | Metric | Unit | Y axis |
 | --- | --- | --- |
@@ -144,7 +158,8 @@ Interaction:
 - click a telemetry card to focus the corresponding chart
 - hover the line for exact time/value information
 - use metric toggle buttons to configure the overview
-- enable `Full run` to switch from the rolling 60 s window to the complete retained history
+- select `10 s`, `30 s`, `60 s`, `2 min`, `5 min`, `10 min`, or
+  `Full session`; changing the window never deletes retained samples
 - press `Esc` or `Overview` to return from a focused chart
 
 ### Operator Log
@@ -173,6 +188,8 @@ The `Developer Insights` tab exposes the diagnostic state that is intentionally 
 - in-memory measurement/event counts
 - active and most recent measurement/event CSV paths
 - summary CSV path
+- active run control/stop configuration, Run Volume, Session Total, and
+  pending live-command count
 
 This view is meant for commissioning and fault diagnosis, not process control.
 
@@ -197,12 +214,12 @@ Water vessel
 
 ## Main goals
 
-1. Drain water at a configured valve opening.
-2. Stop automatically when the capacitance sensor reliably reports empty.
+1. Drain using either direct Valve Position or closed-loop Flow Target.
+2. Stop on empty detection, Target Volume, manual STOP, or safety conditions.
 3. Provide live operator telemetry and interactive run charts.
 4. Record structured measurements, process events, summaries, and runtime diagnostics.
 5. Expose raw Developer Insights for commissioning without cluttering the operator workflow.
-6. Switch the LED manually while the process is idle.
+6. Adjust the active target and verified LED output during a run.
 
 ## Installation
 
@@ -225,6 +242,7 @@ python -m tests.test_state_machine
 python -m tests.test_safety
 python -m tests.test_empty_detection
 python -m tests.test_controller_reuse
+python -m pytest -q tests/test_process_sessions.py
 python -m tests.test_lucid_do
 python -m tests.test_bronkhorst
 python -m tests.test_lucid_ai4
@@ -253,7 +271,7 @@ COM4 and COM8 were successfully tested end to end. Water flow was observed with:
 
 Still to confirm on the physical Aqua setup:
 
-- `CAPACITANCE_EMPTY_THRESHOLD` (approximately 2 scaled units) and
+- `CAPACITANCE_EMPTY_THRESHOLD` (currently 5 scaled units) and
   `CAPACITANCE_FILLED_VALUE` are initial estimates. The configured full value
   near 25 must not be interpreted as a physically confirmed 25 V signal.
 - `CAPACITANCE_VALUE_PER_VOLT` / `CAPACITANCE_VALUE_OFFSET` currently pass the

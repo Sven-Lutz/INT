@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import asdict
 from datetime import datetime
@@ -20,11 +21,21 @@ from PySide6.QtWidgets import (
     QToolTip,
 )
 
-from config import CAPACITANCE_EMPTY_THRESHOLD, DEFAULT_VALVE_POSITION_PERCENT
+from config import (
+    CAPACITANCE_EMPTY_THRESHOLD,
+    DEFAULT_FLOW_SETPOINT_ML_MIN,
+    DEFAULT_TARGET_VOLUME_ML,
+    DEFAULT_VALVE_POSITION_PERCENT,
+)
+from control.run_configuration import ControlMode, RunConfiguration
 from data.models import SystemMeasurement
 from gui.charting import PersistentMetricChart
 from gui.logging_bridge import configure_runtime_logging
-from gui.main_window import CHART_ORDER, ProcessControlWindow
+from gui.main_window import (
+    CHART_ORDER,
+    CHART_TIME_WINDOWS,
+    ProcessControlWindow,
+)
 from gui.runtime import ProcessRuntime
 from tests.test_controller_reuse import build_fake_controller
 
@@ -71,6 +82,12 @@ def sample_developer_snapshot(
         "event_csv": "C:/data/events.csv",
         "summary_csv": "C:/data/summaries.csv",
         "runtime_log": "C:/data/aqua_runtime.log",
+        "run_configuration": {
+            "control_mode": "VALVE_POSITION",
+            "run_volume_ml": 175.0,
+            "session_total_volume_ml": 425.0,
+            "pending_live_commands": 0,
+        },
         "lucid_digital": {
             "port": "COM4",
             "status": lucid_status,
@@ -104,12 +121,12 @@ def sample_developer_snapshot(
         },
         "empty_detector": (
             "Capacitance DRAINING "
-            "(0/3 samples at or below 2 scaled units)"
+            "(0/3 samples at or below 5 scaled units)"
         ),
         "empty_detector_details": {
             "state": "DRAINING",
             "enabled": True,
-            "empty_threshold": 2.0,
+            "empty_threshold": 5.0,
             "consecutive_count": 0,
             "required_consecutive_count": 3,
         },
@@ -305,7 +322,7 @@ def test_window_telemetry_focus_and_escape_overview() -> None:
     assert window._focused_metric is None
 
     assert window.metric_charts["volume"].isVisible()
-    window.full_history_check.setChecked(True)
+    window.chart_window_selector.setCurrentText("Full session")
     assert all(
         chart._show_full_history
         for chart in window.metric_charts.values()
@@ -358,12 +375,12 @@ def test_numeric_inputs_preserve_ranges_steps_and_process_state() -> None:
     window.valve_position.stepUp()
     assert window.valve_position.value() == 100.0
     window.empty_threshold.stepUp()
-    assert window.empty_threshold.value() == 2.25
+    assert window.empty_threshold.value() == 5.25
     window.empty_threshold.stepDown()
-    assert window.empty_threshold.value() == 2.0
+    assert window.empty_threshold.value() == 5.0
 
     window.set_process_state("RUNNING")
-    assert not window.valve_position.isEnabled()
+    assert window.valve_position.isEnabled()
     assert not window.empty_threshold.isEnabled()
     window.set_process_state("STOPPED")
     assert window.valve_position.isEnabled()
@@ -398,8 +415,8 @@ def test_light_ui_preserves_operator_diagnostics_and_controls() -> None:
     assert not window.start_button.isEnabled()
     assert not window.disconnect_button.isEnabled()
     assert window.stop_button.isEnabled()
-    assert not window.led_on_button.isEnabled()
-    assert not window.led_off_button.isEnabled()
+    assert window.led_on_button.isEnabled()
+    assert window.led_off_button.isEnabled()
     QTest.mouseClick(window.stop_button, Qt.MouseButton.LeftButton)
     assert stop_requests == [True]
 
@@ -477,6 +494,11 @@ def test_light_ui_preserves_operator_diagnostics_and_controls() -> None:
         "LATEST MEASUREMENT",
         "Status",
     ) == "HISTORICAL"
+    assert developer_value(
+        window,
+        "CURRENT CONTROLLER STATE",
+        "Session total volume",
+    ) == "425.0 ml"
     assert "not current hardware state" in developer_value(
         window,
         "LATEST MEASUREMENT",
@@ -580,6 +602,233 @@ def test_light_ui_preserves_operator_diagnostics_and_controls() -> None:
     window.close()
 
 
+def test_control_configuration_and_gui_state_rules() -> None:
+    app = application()
+    window = ProcessControlWindow()
+
+    assert window.control_mode.currentText() == "Valve Position"
+    assert window.valve_position.isVisibleTo(window)
+    assert not window.flow_target.isVisibleTo(window)
+    assert window.flow_target.value() == DEFAULT_FLOW_SETPOINT_ML_MIN
+    assert window.target_volume.value() == DEFAULT_TARGET_VOLUME_ML
+    assert window.empty_threshold.value() == 5.0
+    assert not window.control_mode.isEnabled()
+    assert not window.led_on_button.isEnabled()
+
+    window.set_process_state("READY")
+    window.show()
+    app.processEvents()
+    assert window.control_mode.isEnabled()
+    assert window.valve_position.isEnabled()
+    assert not window.apply_setpoint_button.isVisible()
+    assert window.auto_empty_stop.isEnabled()
+    assert window.led_on_button.isEnabled()
+
+    window.control_mode.setCurrentIndex(1)
+    app.processEvents()
+    assert window._selected_control_mode() == ControlMode.FLOW_TARGET
+    assert not window.valve_position.isVisible()
+    assert window.flow_target.isVisible()
+    assert window.flow_target.isEnabled()
+
+    window.target_volume_stop.setChecked(True)
+    window.target_volume.setValue(500.0)
+    configurations: list[RunConfiguration] = []
+    window.start_requested.connect(configurations.append)
+    QTest.mouseClick(window.start_button, Qt.MouseButton.LeftButton)
+    assert len(configurations) == 1
+    configuration = configurations[0]
+    assert configuration.control_mode == ControlMode.FLOW_TARGET
+    assert configuration.flow_target_ml_min == DEFAULT_FLOW_SETPOINT_ML_MIN
+    assert configuration.target_volume_enabled
+    assert configuration.target_volume_ml == 500.0
+    assert configuration.empty_threshold == 5.0
+    assert not window.control_mode.isEnabled()
+    assert not window.led_on_button.isEnabled()
+
+    window.set_start_pending(False)
+    window.mark_run_started()
+    app.processEvents()
+    assert not window.control_mode.isEnabled()
+    assert window.flow_target.isEnabled()
+    assert not window.valve_position.isEnabled()
+    assert window.apply_setpoint_button.isEnabled()
+    assert window.apply_setpoint_button.isVisible()
+    assert not window.auto_empty_stop.isEnabled()
+    assert not window.empty_threshold.isEnabled()
+    assert not window.target_volume_stop.isEnabled()
+    assert not window.target_volume.isEnabled()
+    assert window.led_on_button.isEnabled()
+
+    changes: list[tuple[ControlMode, float]] = []
+    window.active_setpoint_requested.connect(
+        lambda mode, value: changes.append((mode, value))
+    )
+    window.flow_target.setValue(80.0)
+    QTest.mouseClick(
+        window.apply_setpoint_button,
+        Qt.MouseButton.LeftButton,
+    )
+    assert changes == [(ControlMode.FLOW_TARGET, 80.0)]
+
+    window.set_process_state("STOPPING")
+    assert not window.flow_target.isEnabled()
+    assert not window.apply_setpoint_button.isEnabled()
+    assert not window.led_on_button.isEnabled()
+    window.close()
+
+
+def test_session_charts_persist_across_runs_with_monotonic_time_and_volume() -> None:
+    window = ProcessControlWindow()
+    window.set_process_state("READY")
+    sample = sample_measurement()
+
+    window.mark_run_started()
+    window.update_measurement(
+        sample,
+        elapsed_seconds=10.0,
+        run_volume_ml=250.0,
+        session_total_volume_ml=250.0,
+    )
+    assert window.metric_charts["flow"].point_count == 1
+
+    window.set_process_state("STOPPED")
+    window.mark_run_started()
+    assert window.metric_charts["flow"].point_count == 1
+    window.update_measurement(
+        sample,
+        elapsed_seconds=70.0,
+        run_volume_ml=175.0,
+        session_total_volume_ml=425.0,
+    )
+
+    window.set_process_state("STOPPED")
+    window.mark_run_started()
+    window.update_measurement(
+        sample,
+        elapsed_seconds=105.0,
+        run_volume_ml=175.0,
+        session_total_volume_ml=600.0,
+    )
+
+    flow_chart = window.metric_charts["flow"]
+    volume_chart = window.metric_charts["volume"]
+    assert flow_chart.point_count == 3
+    assert [flow_chart.series.at(index).x() for index in range(3)] == [
+        10.0,
+        70.0,
+        105.0,
+    ]
+    assert [volume_chart.series.at(index).y() for index in range(3)] == [
+        250.0,
+        425.0,
+        600.0,
+    ]
+    assert window.telemetry_cards["volume"].value_label.text() == "600.0 ml"
+    assert window.telemetry_cards["volume"].detail_label.text() == (
+        "run: 175.0 ml"
+    )
+
+    window.focus_metric_chart("volume")
+    window.show_chart_overview()
+    assert flow_chart.point_count == 3
+    assert volume_chart.point_count == 3
+    window.close()
+
+
+def test_all_chart_time_windows_change_axes_without_deleting_history() -> None:
+    window = ProcessControlWindow()
+    chart = window.metric_charts["flow"]
+    chart.append_value(0.0, 1.0)
+    chart.append_value(700.0, 2.0)
+    expected_labels = [label for label, _ in CHART_TIME_WINDOWS]
+    assert [
+        window.chart_window_selector.itemText(index)
+        for index in range(window.chart_window_selector.count())
+    ] == expected_labels
+
+    expected_left = {
+        "10 s": 690.0,
+        "30 s": 670.0,
+        "60 s": 640.0,
+        "2 min": 580.0,
+        "5 min": 400.0,
+        "10 min": 100.0,
+    }
+    for label, left in expected_left.items():
+        window.chart_window_selector.setCurrentText(label)
+        assert chart.point_count == 2
+        assert chart.x_axis.min() == left
+        assert chart.x_axis.max() == 700.0
+
+    window.chart_window_selector.setCurrentText("Full session")
+    assert chart._show_full_history
+    assert chart.x_axis.min() == 0.0
+    assert chart.x_axis.max() == 700.0
+    assert chart.point_count == 2
+    window.close()
+
+
+def test_runtime_live_requests_are_applied_in_worker_thread() -> None:
+    app = application()
+    with TemporaryDirectory() as temporary_directory:
+        controller, analog = build_fake_controller(
+            Path(temporary_directory),
+            capacitance_value=25.0,
+        )
+        controller.connect()
+        runtime = ProcessRuntime(controller)
+        main_thread_id = threading.get_ident()
+        QTest.qWait(20)
+
+        runtime.start_process(
+            RunConfiguration(
+                control_mode=ControlMode.VALVE_POSITION,
+                valve_position_percent=100.0,
+                empty_stop_enabled=False,
+            )
+        )
+        deadline = time.monotonic() + 2.0
+        while (
+            (controller.state.name != "RUNNING" or analog.calls == 0)
+            and time.monotonic() < deadline
+        ):
+            QTest.qWait(5)
+            app.processEvents()
+
+        runtime.request_active_setpoint(ControlMode.VALVE_POSITION, 60.0)
+        runtime.set_led(True)
+        deadline = time.monotonic() + 2.0
+        while (
+            (
+                controller.bronkhorst.direct_commands != [100.0, 60.0]
+                or not controller.led.on_state
+            )
+            and time.monotonic() < deadline
+        ):
+            QTest.qWait(5)
+            app.processEvents()
+
+        assert controller.bronkhorst.direct_commands == [100.0, 60.0]
+        assert controller.led.on_state
+        assert all(
+            thread_id != main_thread_id
+            for thread_id in controller.bronkhorst.command_thread_ids
+        )
+        assert all(
+            thread_id != main_thread_id
+            for thread_id in controller.led.command_thread_ids
+        )
+
+        runtime.stop_process()
+        deadline = time.monotonic() + 2.0
+        while runtime._start_in_flight and time.monotonic() < deadline:
+            QTest.qWait(5)
+            app.processEvents()
+        assert not runtime._start_in_flight
+        runtime.shutdown()
+
+
 def test_runtime_coalesces_duplicate_start_but_allows_later_run() -> None:
     app = application()
     with TemporaryDirectory() as temporary_directory:
@@ -588,10 +837,12 @@ def test_runtime_coalesces_duplicate_start_but_allows_later_run() -> None:
         runtime = ProcessRuntime(controller)
         failures: list[tuple[str, str]] = []
         snapshots: list[dict[str, object]] = []
+        telemetry: list[object] = []
         runtime.operation_failed.connect(
             lambda title, message: failures.append((title, message))
         )
         runtime.developer_snapshot.connect(snapshots.append)
+        runtime.telemetry_received.connect(telemetry.append)
         QTest.qWait(20)
 
         runtime.start_process(100.0, True, 2.0)
@@ -616,11 +867,18 @@ def test_runtime_coalesces_duplicate_start_but_allows_later_run() -> None:
 
         assert not runtime._start_in_flight
         assert analog.calls == 2
+        assert len(telemetry) >= 2
+        assert telemetry[-1].session_elapsed_seconds > (
+            telemetry[0].session_elapsed_seconds
+        )
         assert snapshots
         assert snapshots[-1]["sample_interval_seconds"] == 0.001
         empty_details = snapshots[-1]["empty_detector_details"]
         assert isinstance(empty_details, dict)
         assert empty_details["required_consecutive_count"] == 1
+        run_details = snapshots[-1]["run_configuration"]
+        assert isinstance(run_details, dict)
+        assert run_details["control_mode"] == "VALVE_POSITION"
         runtime.shutdown()
 
 

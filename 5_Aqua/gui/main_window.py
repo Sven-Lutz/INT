@@ -41,11 +41,16 @@ from config import (
     CAPACITANCE_EMPTY_CONSECUTIVE_SAMPLES,
     CAPACITANCE_EMPTY_STOP_ENABLED,
     CAPACITANCE_EMPTY_THRESHOLD,
+    DEFAULT_FLOW_SETPOINT_ML_MIN,
+    DEFAULT_TARGET_VOLUME_ML,
     DEFAULT_VALVE_POSITION_PERCENT,
     GUI_LEFT_PANEL_MINIMUM_WIDTH,
     GUI_SPLITTER_SIZES,
+    MAXIMUM_ALLOWED_FLOW_ML_MIN,
     SAMPLE_INTERVAL_SECONDS,
+    TARGET_VOLUME_STOP_ENABLED,
 )
+from control.run_configuration import ControlMode, RunConfiguration
 from data.models import ProcessSummary, SystemMeasurement
 from gui.charting import METRIC_CONFIG, PersistentMetricChart, format_metric
 from gui.theme import set_dynamic_property
@@ -60,6 +65,15 @@ CHART_ORDER = (
     "temperature",
 )
 DEFAULT_VISIBLE_CHARTS = frozenset(CHART_ORDER)
+CHART_TIME_WINDOWS: tuple[tuple[str, float | None], ...] = (
+    ("10 s", 10.0),
+    ("30 s", 30.0),
+    ("60 s", 60.0),
+    ("2 min", 120.0),
+    ("5 min", 300.0),
+    ("10 min", 600.0),
+    ("Full session", None),
+)
 
 
 class TelemetryCard(QFrame):
@@ -123,9 +137,10 @@ class ProcessControlWindow(QMainWindow):
 
     connect_requested = Signal()
     disconnect_requested = Signal()
-    start_requested = Signal(float, bool, float)
+    start_requested = Signal(object)
     stop_requested = Signal()
     led_requested = Signal(bool)
+    active_setpoint_requested = Signal(object, float)
     empty_detection_changed = Signal(bool, float)
 
     def __init__(self) -> None:
@@ -138,6 +153,9 @@ class ProcessControlWindow(QMainWindow):
         self._start_pending = False
         self._last_telemetry_monotonic: float | None = None
         self._latest_measurement: SystemMeasurement | None = None
+        self._active_run_control_mode: ControlMode | None = None
+        self._run_volume_ml = 0.0
+        self._session_total_volume_ml = 0.0
         self._focused_metric: str | None = None
         self._log_entries: deque[tuple[str, str, str, str]] = deque(
             maxlen=1500
@@ -229,6 +247,15 @@ class ProcessControlWindow(QMainWindow):
         layout = QGridLayout(group)
         layout.setColumnStretch(1, 1)
 
+        control_heading = QLabel("CONTROL")
+        control_heading.setObjectName("secondaryText")
+        self.control_mode = QComboBox()
+        self.control_mode.addItem(
+            "Valve Position",
+            ControlMode.VALVE_POSITION,
+        )
+        self.control_mode.addItem("Flow Target", ControlMode.FLOW_TARGET)
+
         self.valve_position = QDoubleSpinBox()
         self.valve_position.setRange(0.0, 100.0)
         self.valve_position.setDecimals(0)
@@ -239,6 +266,23 @@ class ProcessControlWindow(QMainWindow):
         self.valve_position.setButtonSymbols(
             QAbstractSpinBox.ButtonSymbols.UpDownArrows
         )
+
+        self.flow_target = QDoubleSpinBox()
+        self.flow_target.setRange(0.0, MAXIMUM_ALLOWED_FLOW_ML_MIN)
+        self.flow_target.setDecimals(1)
+        self.flow_target.setSingleStep(5.0)
+        self.flow_target.setValue(DEFAULT_FLOW_SETPOINT_ML_MIN)
+        self.flow_target.setSuffix(" ml/min")
+        self.flow_target.setMinimumHeight(27)
+        self.flow_target.setButtonSymbols(
+            QAbstractSpinBox.ButtonSymbols.UpDownArrows
+        )
+
+        self.apply_setpoint_button = QPushButton("Apply active target")
+        self.apply_setpoint_button.setObjectName("primaryButton")
+
+        stop_heading = QLabel("STOP CONDITIONS")
+        stop_heading.setObjectName("secondaryText")
 
         self.auto_empty_stop = QCheckBox("Stop automatically when empty")
         self.auto_empty_stop.setChecked(CAPACITANCE_EMPTY_STOP_ENABLED)
@@ -253,6 +297,19 @@ class ProcessControlWindow(QMainWindow):
             QAbstractSpinBox.ButtonSymbols.UpDownArrows
         )
 
+        self.target_volume_stop = QCheckBox("Stop after target volume")
+        self.target_volume_stop.setChecked(TARGET_VOLUME_STOP_ENABLED)
+        self.target_volume = QDoubleSpinBox()
+        self.target_volume.setRange(0.1, 1_000_000.0)
+        self.target_volume.setDecimals(1)
+        self.target_volume.setSingleStep(50.0)
+        self.target_volume.setValue(DEFAULT_TARGET_VOLUME_ML)
+        self.target_volume.setSuffix(" ml")
+        self.target_volume.setMinimumHeight(27)
+        self.target_volume.setButtonSymbols(
+            QAbstractSpinBox.ButtonSymbols.UpDownArrows
+        )
+
         self.threshold_hint = QLabel()
         self.threshold_hint.setWordWrap(True)
         self.threshold_hint.setObjectName("secondaryText")
@@ -262,14 +319,33 @@ class ProcessControlWindow(QMainWindow):
         self.stop_button = QPushButton("STOP")
         self.stop_button.setObjectName("dangerButton")
 
-        layout.addWidget(QLabel("Valve opening"), 0, 0)
-        layout.addWidget(self.valve_position, 0, 1)
-        layout.addWidget(self.auto_empty_stop, 1, 0, 1, 2)
-        layout.addWidget(QLabel("Empty threshold (scaled)"), 2, 0)
-        layout.addWidget(self.empty_threshold, 2, 1)
-        layout.addWidget(self.threshold_hint, 3, 0, 1, 2)
-        layout.addWidget(self.start_button, 4, 0)
-        layout.addWidget(self.stop_button, 4, 1)
+        self.valve_position_label = QLabel("Valve Position")
+        self.flow_target_label = QLabel("Flow Target")
+        self.empty_threshold_label = QLabel("Empty threshold (scaled)")
+        self.target_volume_label = QLabel("Target volume")
+
+        layout.addWidget(control_heading, 0, 0, 1, 2)
+        layout.addWidget(QLabel("Mode"), 1, 0)
+        layout.addWidget(self.control_mode, 1, 1)
+        layout.addWidget(self.valve_position_label, 2, 0)
+        layout.addWidget(self.valve_position, 2, 1)
+        layout.addWidget(self.flow_target_label, 3, 0)
+        layout.addWidget(self.flow_target, 3, 1)
+        layout.addWidget(self.apply_setpoint_button, 4, 0, 1, 2)
+        layout.addWidget(stop_heading, 5, 0, 1, 2)
+        layout.addWidget(self.auto_empty_stop, 6, 0, 1, 2)
+        layout.addWidget(self.empty_threshold_label, 7, 0)
+        layout.addWidget(self.empty_threshold, 7, 1)
+        layout.addWidget(self.target_volume_stop, 8, 0, 1, 2)
+        layout.addWidget(self.target_volume_label, 9, 0)
+        layout.addWidget(self.target_volume, 9, 1)
+        layout.addWidget(self.threshold_hint, 10, 0, 1, 2)
+        layout.addWidget(self.start_button, 11, 0)
+        layout.addWidget(self.stop_button, 11, 1)
+        self.valve_position_label.setVisible(True)
+        self.valve_position.setVisible(True)
+        self.flow_target_label.setVisible(False)
+        self.flow_target.setVisible(False)
         return group
 
     def _build_telemetry_group(self) -> QGroupBox:
@@ -413,10 +489,14 @@ class ProcessControlWindow(QMainWindow):
             toolbar.addWidget(button)
 
         toolbar.addStretch()
-        self.full_history_check = QCheckBox("Full run")
+        toolbar.addWidget(QLabel("Time window"))
+        self.chart_window_selector = QComboBox()
+        for label, seconds in CHART_TIME_WINDOWS:
+            self.chart_window_selector.addItem(label, seconds)
+        self.chart_window_selector.setCurrentText("60 s")
         self.overview_button = QPushButton("Overview")
         self.overview_button.setVisible(False)
-        toolbar.addWidget(self.full_history_check)
+        toolbar.addWidget(self.chart_window_selector)
         toolbar.addWidget(self.overview_button)
         outer.addLayout(toolbar)
 
@@ -546,13 +626,24 @@ class ProcessControlWindow(QMainWindow):
         self.stop_button.clicked.connect(self.stop_requested.emit)
         self.led_on_button.clicked.connect(lambda: self.led_requested.emit(True))
         self.led_off_button.clicked.connect(lambda: self.led_requested.emit(False))
+        self.control_mode.currentIndexChanged.connect(
+            self._update_control_mode_visibility
+        )
+        self.apply_setpoint_button.clicked.connect(
+            self._emit_active_setpoint_requested
+        )
         self.auto_empty_stop.toggled.connect(self._emit_empty_detection_changed)
         self.empty_threshold.valueChanged.connect(self._emit_empty_detection_changed)
+        self.target_volume_stop.toggled.connect(
+            self._update_control_enablement
+        )
 
         for card in self.telemetry_cards.values():
             card.clicked.connect(self.focus_metric_chart)
 
-        self.full_history_check.toggled.connect(self._set_full_history)
+        self.chart_window_selector.currentIndexChanged.connect(
+            self._set_chart_time_window
+        )
         self.overview_button.clicked.connect(self.show_chart_overview)
         self.log_level_filter.currentTextChanged.connect(self._render_log)
         self.log_search.textChanged.connect(self._render_log)
@@ -570,11 +661,44 @@ class ProcessControlWindow(QMainWindow):
             return
         self._start_pending = True
         self.start_button.setEnabled(False)
+        control_mode = self._selected_control_mode()
+        self._active_run_control_mode = control_mode
         self.start_requested.emit(
-            self.valve_position.value(),
-            self.auto_empty_stop.isChecked(),
-            self.empty_threshold.value(),
+            RunConfiguration(
+                control_mode=control_mode,
+                valve_position_percent=self.valve_position.value(),
+                flow_target_ml_min=self.flow_target.value(),
+                empty_stop_enabled=self.auto_empty_stop.isChecked(),
+                empty_threshold=self.empty_threshold.value(),
+                target_volume_enabled=self.target_volume_stop.isChecked(),
+                target_volume_ml=self.target_volume.value(),
+            )
         )
+        self._update_control_enablement()
+
+    def _emit_active_setpoint_requested(self) -> None:
+        if self._state_name != "RUNNING":
+            return
+        mode = self._active_run_control_mode or self._selected_control_mode()
+        value = (
+            self.valve_position.value()
+            if mode == ControlMode.VALVE_POSITION
+            else self.flow_target.value()
+        )
+        self.active_setpoint_requested.emit(mode, value)
+
+    def _selected_control_mode(self) -> ControlMode:
+        value = self.control_mode.currentData()
+        return value if isinstance(value, ControlMode) else ControlMode(value)
+
+    def _update_control_mode_visibility(self, _index: int | None = None) -> None:
+        mode = self._selected_control_mode()
+        valve_mode = mode == ControlMode.VALVE_POSITION
+        self.valve_position_label.setVisible(valve_mode)
+        self.valve_position.setVisible(valve_mode)
+        self.flow_target_label.setVisible(not valve_mode)
+        self.flow_target.setVisible(not valve_mode)
+        self._update_control_enablement()
 
     def _emit_empty_detection_changed(self) -> None:
         self._update_threshold_hint()
@@ -584,7 +708,6 @@ class ProcessControlWindow(QMainWindow):
         )
 
     def _update_threshold_hint(self) -> None:
-        self.empty_threshold.setEnabled(self.auto_empty_stop.isChecked())
         if self.auto_empty_stop.isChecked():
             self.threshold_hint.setText(
                 "Stop at capacitance ≤ "
@@ -593,8 +716,9 @@ class ProcessControlWindow(QMainWindow):
             )
         else:
             self.threshold_hint.setText(
-                "Automatic empty stop is disabled; use STOP to end the run."
+                "Empty stop disabled; target volume or STOP may end the run."
             )
+        self._update_control_enablement()
 
     # ------------------------------------------------------------------
     # Process state / controls
@@ -650,13 +774,7 @@ class ProcessControlWindow(QMainWindow):
         self.disconnect_button.setEnabled(connected_idle or fault)
         self.start_button.setEnabled(connected_idle and not self._start_pending)
         self.stop_button.setEnabled(running or stopping)
-        self.valve_position.setEnabled(connected_idle)
-        self.auto_empty_stop.setEnabled(connected_idle)
-        self.empty_threshold.setEnabled(
-            connected_idle and self.auto_empty_stop.isChecked()
-        )
-        self.led_on_button.setEnabled(connected_idle)
-        self.led_off_button.setEnabled(connected_idle)
+        self._update_control_enablement()
 
         if disconnected or fault:
             self._last_telemetry_monotonic = None
@@ -672,11 +790,58 @@ class ProcessControlWindow(QMainWindow):
         self._start_pending = pending
         connected_idle = self._state_name in {"READY", "STOPPED"}
         self.start_button.setEnabled(connected_idle and not pending)
+        self.disconnect_button.setEnabled(connected_idle and not pending)
+        self._update_control_enablement()
+
+    def _update_control_enablement(
+        self,
+        _checked: bool | None = None,
+    ) -> None:
+        connected_idle = self._state_name in {"READY", "STOPPED"}
+        editable_idle = connected_idle and not self._start_pending
+        running = self._state_name == "RUNNING"
+        mode = (
+            self._active_run_control_mode
+            if running and self._active_run_control_mode is not None
+            else self._selected_control_mode()
+        )
+
+        self.control_mode.setEnabled(editable_idle)
+        self.valve_position.setEnabled(
+            (editable_idle or running)
+            and mode == ControlMode.VALVE_POSITION
+        )
+        self.flow_target.setEnabled(
+            (editable_idle or running)
+            and mode == ControlMode.FLOW_TARGET
+        )
+        self.apply_setpoint_button.setEnabled(running)
+        self.apply_setpoint_button.setVisible(running)
+
+        self.auto_empty_stop.setEnabled(editable_idle)
+        self.empty_threshold.setEnabled(
+            editable_idle and self.auto_empty_stop.isChecked()
+        )
+        self.target_volume_stop.setEnabled(editable_idle)
+        self.target_volume.setEnabled(
+            editable_idle and self.target_volume_stop.isChecked()
+        )
+        self.empty_threshold_label.setEnabled(
+            self.empty_threshold.isEnabled()
+        )
+        self.target_volume_label.setEnabled(self.target_volume.isEnabled())
+
+        led_enabled = editable_idle or running
+        self.led_on_button.setEnabled(led_enabled)
+        self.led_off_button.setEnabled(led_enabled)
 
     def mark_run_started(self) -> None:
-        self.clear_charts()
         self.set_process_state("RUNNING")
-        self.telemetry_cards["volume"].set_value(format_metric("volume", 0.0))
+        self._run_volume_ml = 0.0
+        self.telemetry_cards["volume"].set_value(
+            format_metric("volume", self._session_total_volume_ml),
+            detail="run: 0.0 ml",
+        )
 
     def show_run_summary(self, summary: ProcessSummary) -> None:
         self.system_latest_run.setText(
@@ -705,6 +870,8 @@ class ProcessControlWindow(QMainWindow):
         measurement: SystemMeasurement,
         *,
         elapsed_seconds: float,
+        run_volume_ml: float | None = None,
+        session_total_volume_ml: float | None = None,
         total_volume_ml: float | None = None,
         append_to_charts: bool = True,
     ) -> None:
@@ -738,16 +905,33 @@ class ProcessControlWindow(QMainWindow):
         )
         self.telemetry_cards["valve_position"].set_value(
             format_metric("valve_position", measurement.valve_position_percent),
-            detail=f"Bronkhorst output: {measurement.valve_output_raw_percent:.1f} %",
+            detail=(
+                "Flow Target mode · "
+                f"Bronkhorst output: {measurement.valve_output_raw_percent:.1f} %"
+                if self._active_run_control_mode == ControlMode.FLOW_TARGET
+                else (
+                    "commanded · Bronkhorst output: "
+                    f"{measurement.valve_output_raw_percent:.1f} %"
+                )
+            ),
         )
         self.telemetry_cards["temperature"].set_value(
             format_metric("temperature", measurement.bronkhorst_temperature_c),
             detail=f"control mode: {measurement.bronkhorst_control_mode}",
         )
 
-        if total_volume_ml is not None:
+        if run_volume_ml is None:
+            run_volume_ml = total_volume_ml
+        if session_total_volume_ml is None:
+            session_total_volume_ml = total_volume_ml
+        if run_volume_ml is not None:
+            self._run_volume_ml = run_volume_ml
+        if session_total_volume_ml is not None:
+            self._session_total_volume_ml = session_total_volume_ml
+        if run_volume_ml is not None or session_total_volume_ml is not None:
             self.telemetry_cards["volume"].set_value(
-                format_metric("volume", total_volume_ml)
+                format_metric("volume", self._session_total_volume_ml),
+                detail=f"run: {self._run_volume_ml:.1f} ml",
             )
 
         alarm = measurement.bronkhorst_alarm_info
@@ -776,7 +960,7 @@ class ProcessControlWindow(QMainWindow):
                 "capacitance": measurement.capacitance_value,
                 "humidity": measurement.humidity_percent,
                 "valve_position": measurement.valve_position_percent,
-                "volume": total_volume_ml,
+                "volume": session_total_volume_ml,
                 "temperature": measurement.bronkhorst_temperature_c,
             }
             for key, value in chart_values.items():
@@ -915,9 +1099,17 @@ class ProcessControlWindow(QMainWindow):
         for chart in self.metric_charts.values():
             chart.clear()
 
-    def _set_full_history(self, enabled: bool) -> None:
+    def _set_chart_time_window(self, _index: int | None = None) -> None:
+        seconds = self.chart_window_selector.currentData()
         for chart in self.metric_charts.values():
-            chart.set_full_history(enabled)
+            chart.set_time_window(seconds)
+
+    def _set_full_history(self, enabled: bool) -> None:
+        """Compatibility helper for callers using the former checkbox."""
+
+        self.chart_window_selector.setCurrentText(
+            "Full session" if enabled else "60 s"
+        )
 
     def _apply_chart_visibility(self) -> None:
         if self._focused_metric is not None:
@@ -1166,12 +1358,47 @@ class ProcessControlWindow(QMainWindow):
             ),
             "NO DATA": "No measurement available",
         }[measurement_status]
+        run_configuration_value = snapshot.get("run_configuration")
+        run_configuration = (
+            run_configuration_value
+            if isinstance(run_configuration_value, dict)
+            else {}
+        )
 
         self._add_developer_section(
             "CURRENT CONTROLLER STATE",
             (
                 ("Process state", process_state),
                 ("Connection", connection_text),
+                (
+                    "Control mode",
+                    str(run_configuration.get("control_mode", "—")),
+                ),
+                (
+                    "Run volume",
+                    self._format_number(
+                        run_configuration.get("run_volume_ml"),
+                        1,
+                        " ml",
+                    ),
+                ),
+                (
+                    "Session total volume",
+                    self._format_number(
+                        run_configuration.get("session_total_volume_ml"),
+                        1,
+                        " ml",
+                    ),
+                ),
+                (
+                    "Pending live commands",
+                    str(
+                        run_configuration.get(
+                            "pending_live_commands",
+                            "—",
+                        )
+                    ),
+                ),
             ),
         )
         self._add_developer_section(

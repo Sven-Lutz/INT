@@ -2,25 +2,35 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 
-from control.empty_detection import EmptyDetectionSettings
+from control.run_configuration import ControlMode, RunConfiguration
 from control.state_machine import ProcessState
 from control.water_process import WaterProcessController
+from data.models import SystemMeasurement
 
 
 LOGGER = logging.getLogger("aqua.gui.runtime")
+
+
+@dataclass(frozen=True)
+class TelemetryUpdate:
+    measurement: SystemMeasurement
+    session_elapsed_seconds: float
+    run_volume_ml: float
+    session_total_volume_ml: float
+    is_running: bool
 
 
 class HardwareWorker(QObject):
     """Owns blocking hardware operations inside a dedicated QThread."""
 
     state_changed = Signal(str)
-    telemetry_received = Signal(object, float, object, bool)
+    telemetry_received = Signal(object)
     run_started = Signal()
     run_finished = Signal(object)
     start_cycle_finished = Signal()
@@ -37,7 +47,6 @@ class HardwareWorker(QObject):
         self.controller = controller
         self.runtime_log_path = runtime_log_path
         self._session_started = time.monotonic()
-        self._run_started: float | None = None
         self._poll_timer: QTimer | None = None
         self._last_poll_error: str | None = None
         self._last_poll_error_reported = 0.0
@@ -87,13 +96,8 @@ class HardwareWorker(QObject):
             self._emit_state()
             self._emit_developer_snapshot()
 
-    @Slot(float, bool, float)
-    def start_process(
-        self,
-        valve_position_percent: float,
-        empty_stop_enabled: bool,
-        empty_threshold: float,
-    ) -> None:
+    @Slot(object)
+    def start_process(self, configuration: object) -> None:
         if self.controller.state not in {ProcessState.READY, ProcessState.STOPPED}:
             LOGGER.warning(
                 "Start blocked in state %s",
@@ -107,30 +111,27 @@ class HardwareWorker(QObject):
             return
 
         try:
+            if not isinstance(configuration, RunConfiguration):
+                raise TypeError("start_process requires RunConfiguration.")
             self._stop_idle_polling()
-            settings = self.controller.empty_detection_settings
-            self.controller.configure_empty_detection(
-                EmptyDetectionSettings(
-                    empty_threshold=empty_threshold,
-                    filled_threshold=settings.filled_threshold,
-                    consecutive_samples=settings.consecutive_samples,
-                    enabled=empty_stop_enabled,
-                )
-            )
-
-            self._run_started = time.monotonic()
-            self.run_started.emit()
             LOGGER.debug(
-                "Starting drain run: valve=%.1f%%, empty stop=%s, "
-                "threshold=%.3f scaled units",
-                valve_position_percent,
-                "on" if empty_stop_enabled else "off",
-                empty_threshold,
+                "Starting drain run: mode=%s, active target=%.3f, "
+                "empty stop=%s, target volume=%s",
+                configuration.control_mode.value,
+                configuration.active_target,
+                "on" if configuration.empty_stop_enabled else "off",
+                (
+                    f"{configuration.target_volume_ml:.1f} ml"
+                    if configuration.target_volume_enabled
+                    else "off"
+                ),
             )
 
             summary = self.controller.start(
-                valve_position_percent=valve_position_percent,
+                configuration=configuration,
                 on_measurement=self._on_run_measurement,
+                on_started=self._on_run_started,
+                on_command_error=self._on_command_error,
             )
             LOGGER.debug(
                 "Drain run finished: %s; volume=%.2f ml; duration=%.2f s",
@@ -144,7 +145,6 @@ class HardwareWorker(QObject):
             self.operation_failed.emit("Process failed", str(exc))
         finally:
             try:
-                self._run_started = None
                 self._emit_state()
                 self._emit_developer_snapshot()
                 if self.controller.state != ProcessState.DISCONNECTED:
@@ -156,14 +156,6 @@ class HardwareWorker(QObject):
 
     @Slot(bool)
     def set_led(self, enabled: bool) -> None:
-        if self.controller.state == ProcessState.RUNNING:
-            LOGGER.warning("LED command blocked while a run is active")
-            self.operation_failed.emit(
-                "LED change blocked",
-                "LED changes are disabled while a drain run is active.",
-            )
-            return
-
         try:
             self.controller.set_led(enabled)
             LOGGER.info("LED switched %s", "on" if enabled else "off")
@@ -185,10 +177,15 @@ class HardwareWorker(QObject):
             measurement = self.controller.measure()
             elapsed = time.monotonic() - self._session_started
             self.telemetry_received.emit(
-                measurement,
-                elapsed,
-                self.controller.total_volume_ml,
-                False,
+                TelemetryUpdate(
+                    measurement=measurement,
+                    session_elapsed_seconds=elapsed,
+                    run_volume_ml=self.controller.run_volume_ml,
+                    session_total_volume_ml=(
+                        self.controller.session_total_volume_ml
+                    ),
+                    is_running=False,
+                )
             )
             if self._last_poll_error is not None:
                 LOGGER.info("Idle telemetry polling recovered")
@@ -209,16 +206,27 @@ class HardwareWorker(QObject):
             self._last_poll_error = message
             self._emit_developer_snapshot()
 
-    def _on_run_measurement(self, measurement: object) -> None:
-        started = self._run_started or time.monotonic()
-        elapsed = time.monotonic() - started
+    def _on_run_measurement(self, measurement: SystemMeasurement) -> None:
+        elapsed = time.monotonic() - self._session_started
         self.telemetry_received.emit(
-            measurement,
-            elapsed,
-            self.controller.total_volume_ml,
-            True,
+            TelemetryUpdate(
+                measurement=measurement,
+                session_elapsed_seconds=elapsed,
+                run_volume_ml=self.controller.run_volume_ml,
+                session_total_volume_ml=(
+                    self.controller.session_total_volume_ml
+                ),
+                is_running=True,
+            )
         )
         self._emit_developer_snapshot(measurement)
+
+    def _on_run_started(self) -> None:
+        self.run_started.emit()
+
+    def _on_command_error(self, title: str, message: str) -> None:
+        LOGGER.error("%s: %s", title, message)
+        self.operation_failed.emit(title, message)
 
     def _start_idle_polling(self) -> None:
         if self._poll_timer is not None and not self._poll_timer.isActive():
@@ -252,6 +260,9 @@ class HardwareWorker(QObject):
             "summary_csv": str(logger.summary_path),
             "runtime_log": str(self.runtime_log_path or "—"),
             "lucid_digital": self.controller.lucid_digital_diagnostics,
+            "run_configuration": (
+                self.controller.run_configuration_diagnostics
+            ),
             "empty_detector": empty_detector.describe(),
             "empty_detector_details": {
                 "state": empty_detector.state.value,
@@ -278,11 +289,11 @@ class ProcessRuntime(QObject):
 
     _connect_hardware = Signal()
     _disconnect_hardware = Signal()
-    _start_process = Signal(float, bool, float)
+    _start_process = Signal(object)
     _set_led = Signal(bool)
 
     state_changed = Signal(str)
-    telemetry_received = Signal(object, float, object, bool)
+    telemetry_received = Signal(object)
     run_started = Signal()
     run_finished = Signal(object)
     start_interlock_changed = Signal(bool)
@@ -334,9 +345,9 @@ class ProcessRuntime(QObject):
 
     def start_process(
         self,
-        valve_position_percent: float,
-        empty_stop_enabled: bool,
-        empty_threshold: float,
+        configuration: RunConfiguration | float,
+        empty_stop_enabled: bool | None = None,
+        empty_threshold: float | None = None,
     ) -> None:
         # This method runs in the GUI thread. Guard before queueing work so a
         # second click cannot remain queued until the first blocking run ends.
@@ -348,13 +359,21 @@ class ProcessRuntime(QObject):
             )
             return
 
+        if not isinstance(configuration, RunConfiguration):
+            if empty_stop_enabled is None or empty_threshold is None:
+                raise TypeError(
+                    "Legacy start requires valve position, empty enabled, "
+                    "and empty threshold."
+                )
+            configuration = RunConfiguration(
+                valve_position_percent=float(configuration),
+                empty_stop_enabled=empty_stop_enabled,
+                empty_threshold=empty_threshold,
+            )
+
         self._start_in_flight = True
         self.start_interlock_changed.emit(True)
-        self._start_process.emit(
-            valve_position_percent,
-            empty_stop_enabled,
-            empty_threshold,
-        )
+        self._start_process.emit(configuration)
 
     @Slot()
     def _release_start_interlock(self) -> None:
@@ -372,7 +391,35 @@ class ProcessRuntime(QObject):
             self.state_changed.emit(ProcessState.STOPPING.name)
 
     def set_led(self, enabled: bool) -> None:
+        if self.controller.state == ProcessState.RUNNING:
+            try:
+                self.controller.request_led_change(enabled)
+            except Exception as exc:
+                LOGGER.warning("Live LED request rejected: %s", exc)
+                self.operation_failed.emit("LED change blocked", str(exc))
+            return
+        if self._start_in_flight:
+            self.operation_failed.emit(
+                "LED change blocked",
+                "LED changes are unavailable while START is pending.",
+            )
+            return
         self._set_led.emit(enabled)
+
+    def request_active_setpoint(
+        self,
+        control_mode: ControlMode | str,
+        value: float,
+    ) -> None:
+        try:
+            mode = ControlMode(control_mode)
+            if mode == ControlMode.VALVE_POSITION:
+                self.controller.request_valve_position(value)
+            else:
+                self.controller.request_flow_target(value)
+        except Exception as exc:
+            LOGGER.warning("Live setpoint request rejected: %s", exc)
+            self.operation_failed.emit("Setpoint change blocked", str(exc))
 
     def shutdown(self) -> None:
         if self._shutdown_started:

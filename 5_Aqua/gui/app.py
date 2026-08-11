@@ -47,6 +47,9 @@ def main() -> int:
         window.start_requested.connect(runtime.start_process)
         window.stop_requested.connect(runtime.stop_process)
         window.led_requested.connect(runtime.set_led)
+        window.active_setpoint_requested.connect(
+            runtime.request_active_setpoint
+        )
 
         runtime.state_changed.connect(window.set_process_state)
         runtime.start_interlock_changed.connect(window.set_start_pending)
@@ -54,12 +57,15 @@ def main() -> int:
         runtime.run_finished.connect(window.show_run_summary)
         runtime.developer_snapshot.connect(window.update_developer_snapshot)
         runtime.telemetry_received.connect(
-            lambda measurement, elapsed, total_volume, is_running: (
+            lambda update: (
                 window.update_measurement(
-                    measurement,
-                    elapsed_seconds=elapsed,
-                    total_volume_ml=total_volume,
-                    append_to_charts=is_running,
+                    update.measurement,
+                    elapsed_seconds=update.session_elapsed_seconds,
+                    run_volume_ml=update.run_volume_ml,
+                    session_total_volume_ml=(
+                        update.session_total_volume_ml
+                    ),
+                    append_to_charts=update.is_running,
                 )
             )
         )

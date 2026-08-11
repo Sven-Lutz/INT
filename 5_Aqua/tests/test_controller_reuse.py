@@ -17,11 +17,21 @@ from data.repository import MeasurementRepository
 class FakeBronkhorst:
     VALVE_OUTPUT_FULL_SCALE = 16_777_215
 
-    def __init__(self, *, fail_close: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_close: bool = False,
+        flow_ml_min: float = 10.0,
+    ) -> None:
         self.is_connected = False
         self.valve_percent = 0.0
         self.fail_close = fail_close
         self.close_attempted = False
+        self.flow_ml_min = flow_ml_min
+        self.flow_target_ml_min = 0.0
+        self.direct_commands: list[float] = []
+        self.flow_commands: list[float] = []
+        self.command_thread_ids: list[int] = []
 
     def connect(self) -> None:
         self.is_connected = True
@@ -36,16 +46,21 @@ class FakeBronkhorst:
         self.valve_percent = 0.0
 
     def set_direct_valve_position(self, percent: float) -> None:
+        self.direct_commands.append(percent)
+        self.command_thread_ids.append(threading.get_ident())
         self.valve_percent = percent
 
     def set_flow_ml_min(self, value: float) -> None:
+        self.flow_commands.append(value)
+        self.command_thread_ids.append(threading.get_ident())
+        self.flow_target_ml_min = value
         self.valve_percent = 50.0
 
     def read_flow_ml_min(self) -> float:
-        return 10.0
+        return self.flow_ml_min
 
     def read_flow_setpoint_ml_min(self) -> float:
-        return 0.0
+        return self.flow_target_ml_min
 
     def read_temperature_c(self) -> float:
         return 22.5
@@ -127,13 +142,20 @@ class FakeBinaryValve:
 
 
 class FakeLed:
-    def __init__(self) -> None:
+    def __init__(self, *, fail_write: bool = False) -> None:
         self.channel = 1
         self.on_state = False
+        self.fail_write = fail_write
+        self.command_thread_ids: list[int] = []
+        self.write_count = 0
 
     @property
     def last_known_state(self) -> int:
         return 1 if self.on_state else 0
+
+    @property
+    def last_known_on(self) -> bool:
+        return self.on_state
 
     def preflight(self) -> dict[str, object]:
         return {
@@ -150,9 +172,17 @@ class FakeLed:
         }
 
     def on(self) -> None:
+        self.command_thread_ids.append(threading.get_ident())
+        self.write_count += 1
+        if self.fail_write:
+            raise RuntimeError("LED verification failed")
         self.on_state = True
 
     def off(self) -> None:
+        self.command_thread_ids.append(threading.get_ident())
+        self.write_count += 1
+        if self.fail_write:
+            raise RuntimeError("LED verification failed")
         self.on_state = False
 
     def is_on(self, *, refresh: bool = True) -> bool:

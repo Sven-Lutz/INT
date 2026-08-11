@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
-from threading import Event
+from enum import Enum
+from threading import Event, Lock
 from typing import Callable
 
 from config import (
@@ -15,6 +18,7 @@ from config import (
     SAMPLE_INTERVAL_SECONDS,
 )
 from control.empty_detection import EmptyDetectionSettings, EmptyDetector
+from control.run_configuration import ControlMode, RunConfiguration
 from control.safety import SafetyLimits, SafetyMonitor, SafetyViolationError
 from control.state_machine import ProcessState, ProcessStateMachine
 from data.logger import CsvDataLogger
@@ -37,17 +41,25 @@ class LucidDigitalConfigurationError(WaterProcessError):
     """Critical Lucid digital configuration does not match Aqua safety."""
 
 
+class _LiveCommandKind(Enum):
+    VALVE_POSITION = "VALVE_POSITION"
+    FLOW_TARGET = "FLOW_TARGET"
+    LED = "LED"
+
+
+@dataclass(frozen=True)
+class _LiveCommand:
+    kind: _LiveCommandKind
+    value: float | bool
+
+
 class WaterProcessController:
     """Drives the gravity-fed drain process.
 
-    The proportional valve is the manipulated variable and stays at a
-    fixed opening (100 % by default) for the whole run. Measured flow is
-    telemetry and is integrated into drained volume. The run normally
-    ends when capacitance reports an empty vessel or the operator stops.
-
-    Closed-loop flow control remains available through
-    ``flow_setpoint_ml_min`` for diagnostics, but it is intentionally not
-    part of the operator GUI workflow.
+    Each run uses either direct proportional-valve position or a closed-loop
+    flow target. Empty detection and target run volume are independent stop
+    conditions. Measured flow is integrated into both run-specific volume
+    and a cumulative application-session total.
     """
 
     def __init__(
@@ -96,10 +108,13 @@ class WaterProcessController:
         self._stop_event = Event()
         self._valve_position_percent = 0.0
         self._run_valve_position_percent = 0.0
+        self._active_flow_target_ml_min: float | None = None
+        self._active_run_configuration: RunConfiguration | None = None
         self._run_started_at: datetime | None = None
         self._run_stopped_at: datetime | None = None
         self._last_measurement: SystemMeasurement | None = None
         self._total_volume_ml = 0.0
+        self._session_total_volume_ml = 0.0
         self._flow_values: list[float] = []
         self._capacitance_values: list[float] = []
         self._humidity_values: list[float] = []
@@ -109,6 +124,9 @@ class WaterProcessController:
         self._lucid_preflight_result = "NOT RUN"
         self._lucid_preflight_error: str | None = None
         self._lucid_channel_diagnostics: dict[str, dict[str, object]] = {}
+        self._live_command_lock = Lock()
+        self._pending_live_commands: deque[_LiveCommand] = deque()
+        self._accept_live_commands = False
 
     @property
     def state(self) -> ProcessState:
@@ -116,7 +134,54 @@ class WaterProcessController:
 
     @property
     def total_volume_ml(self) -> float:
+        """Volume drained during the current or most recently completed run."""
+
         return self._total_volume_ml
+
+    @property
+    def run_volume_ml(self) -> float:
+        return self._total_volume_ml
+
+    @property
+    def session_total_volume_ml(self) -> float:
+        return self._session_total_volume_ml
+
+    @property
+    def active_control_mode(self) -> ControlMode | None:
+        configuration = self._active_run_configuration
+        return configuration.control_mode if configuration is not None else None
+
+    @property
+    def active_flow_target_ml_min(self) -> float | None:
+        return self._active_flow_target_ml_min
+
+    @property
+    def pending_live_command_count(self) -> int:
+        with self._live_command_lock:
+            return len(self._pending_live_commands)
+
+    @property
+    def run_configuration_diagnostics(self) -> dict[str, object]:
+        configuration = self._active_run_configuration
+        if configuration is None:
+            return {
+                "control_mode": "—",
+                "run_volume_ml": self._total_volume_ml,
+                "session_total_volume_ml": self._session_total_volume_ml,
+                "pending_live_commands": self.pending_live_command_count,
+            }
+        return {
+            "control_mode": configuration.control_mode.value,
+            "active_valve_position_percent": self._valve_position_percent,
+            "active_flow_target_ml_min": self._active_flow_target_ml_min,
+            "empty_stop_enabled": configuration.empty_stop_enabled,
+            "empty_threshold": configuration.empty_threshold,
+            "target_volume_enabled": configuration.target_volume_enabled,
+            "target_volume_ml": configuration.target_volume_ml,
+            "run_volume_ml": self._total_volume_ml,
+            "session_total_volume_ml": self._session_total_volume_ml,
+            "pending_live_commands": self.pending_live_command_count,
+        }
 
     @property
     def valve_position_percent(self) -> float:
@@ -373,10 +438,145 @@ class WaterProcessController:
         return False
 
     def set_led(self, enabled: bool) -> None:
+        """Apply an immediate LED command outside an active run."""
+
         if enabled:
             self.led.on()
         else:
             self.led.off()
+
+    def request_led_change(self, enabled: bool) -> None:
+        """Queue an LED command for execution by the active run thread."""
+
+        self._queue_live_command(
+            _LiveCommand(_LiveCommandKind.LED, bool(enabled))
+        )
+
+    def request_valve_position(self, percent: float) -> None:
+        if not 0.0 <= percent <= 100.0:
+            raise ValueError(
+                "Valve position must be between 0 and 100 percent."
+            )
+        self._require_live_control_mode(ControlMode.VALVE_POSITION)
+        self._queue_live_command(
+            _LiveCommand(_LiveCommandKind.VALVE_POSITION, float(percent))
+        )
+
+    def request_flow_target(self, flow_ml_min: float) -> None:
+        if flow_ml_min < 0.0:
+            raise ValueError("Flow target must not be negative.")
+        self._require_live_control_mode(ControlMode.FLOW_TARGET)
+        self._queue_live_command(
+            _LiveCommand(_LiveCommandKind.FLOW_TARGET, float(flow_ml_min))
+        )
+
+    def _require_live_control_mode(self, expected: ControlMode) -> None:
+        configuration = self._active_run_configuration
+        if configuration is None or configuration.control_mode != expected:
+            active = (
+                configuration.control_mode.value
+                if configuration is not None
+                else "NONE"
+            )
+            raise WaterProcessError(
+                f"Live {expected.value} update rejected; active mode is {active}."
+            )
+
+    def _queue_live_command(self, command: _LiveCommand) -> None:
+        with self._live_command_lock:
+            if self.state != ProcessState.RUNNING or not self._accept_live_commands:
+                raise WaterProcessError(
+                    "Live command rejected because the process is not accepting "
+                    "adjustments."
+                )
+            self._pending_live_commands.append(command)
+
+    def _take_pending_live_commands(self) -> tuple[_LiveCommand, ...]:
+        with self._live_command_lock:
+            commands = tuple(self._pending_live_commands)
+            self._pending_live_commands.clear()
+        return commands
+
+    def _apply_pending_live_commands(
+        self,
+        on_command_error: Callable[[str, str], None] | None,
+    ) -> None:
+        for command in self._take_pending_live_commands():
+            if self._stop_event.is_set():
+                return
+            if command.kind == _LiveCommandKind.LED:
+                requested = bool(command.value)
+                previous = self.led.last_known_on
+                try:
+                    self.set_led(requested)
+                    self._log_event(
+                        event_type="LED_CHANGED",
+                        severity="INFO",
+                        message=(
+                            f"LED {self._format_on_off(previous)} -> "
+                            f"{self._format_on_off(requested)}."
+                        ),
+                    )
+                except Exception as exc:
+                    message = f"LED change failed: {exc}"
+                    self._log_event(
+                        event_type="LED_CHANGE_FAILED",
+                        severity="ERROR",
+                        message=message,
+                    )
+                    if on_command_error is not None:
+                        on_command_error("LED command failed", message)
+                continue
+
+            if command.kind == _LiveCommandKind.VALVE_POSITION:
+                requested_position = float(command.value)
+                previous_position = self._valve_position_percent
+                try:
+                    self.bronkhorst.set_direct_valve_position(
+                        requested_position
+                    )
+                except Exception as exc:
+                    self._log_event(
+                        event_type="VALVE_SETPOINT_CHANGE_FAILED",
+                        severity="ERROR",
+                        message=f"Valve position change failed: {exc}",
+                    )
+                    raise
+                self._valve_position_percent = requested_position
+                self._log_event(
+                    event_type="VALVE_SETPOINT_CHANGED",
+                    severity="INFO",
+                    message=(
+                        f"{previous_position:g} % -> "
+                        f"{requested_position:g} %."
+                    ),
+                )
+                continue
+
+            requested_flow = float(command.value)
+            previous_flow = self._active_flow_target_ml_min
+            try:
+                self.bronkhorst.set_flow_ml_min(requested_flow)
+            except Exception as exc:
+                self._log_event(
+                    event_type="FLOW_SETPOINT_CHANGE_FAILED",
+                    severity="ERROR",
+                    message=f"Flow target change failed: {exc}",
+                )
+                raise
+            self._active_flow_target_ml_min = requested_flow
+            previous_text = "—" if previous_flow is None else f"{previous_flow:g}"
+            self._log_event(
+                event_type="FLOW_SETPOINT_CHANGED",
+                severity="INFO",
+                message=f"{previous_text} ml/min -> {requested_flow:g} ml/min.",
+            )
+
+    @staticmethod
+    def _format_on_off(value: bool | None) -> str:
+        if value is None:
+            return "UNKNOWN"
+        return "ON" if value else "OFF"
 
     def request_stop(
         self,
@@ -389,20 +589,49 @@ class WaterProcessController:
         thread persists the stop event after it leaves the run loop.
         """
 
-        self._stop_reason = reason
-        self._completed_successfully = True
+        with self._live_command_lock:
+            self._accept_live_commands = False
+            self._pending_live_commands.clear()
+            self._stop_reason = reason
+            self._completed_successfully = True
         self._stop_event.set()
         LOGGER.debug("Stop event set: %s", reason)
 
     def start(
         self,
         *,
+        configuration: RunConfiguration | None = None,
         valve_position_percent: float = DEFAULT_VALVE_POSITION_PERCENT,
         flow_setpoint_ml_min: float | None = None,
+        target_volume_ml: float | None = None,
         duration_seconds: float | None = None,
         on_measurement: Callable[[SystemMeasurement], None] | None = None,
+        on_started: Callable[[], None] | None = None,
+        on_command_error: Callable[[str, str], None] | None = None,
     ) -> ProcessSummary:
         """Run the drain process until empty, timed out, or stopped."""
+
+        if configuration is None:
+            settings = self.empty_detector.settings
+            configuration = RunConfiguration(
+                control_mode=(
+                    ControlMode.VALVE_POSITION
+                    if flow_setpoint_ml_min is None
+                    else ControlMode.FLOW_TARGET
+                ),
+                valve_position_percent=valve_position_percent,
+                flow_target_ml_min=(
+                    0.0
+                    if flow_setpoint_ml_min is None
+                    else flow_setpoint_ml_min
+                ),
+                empty_stop_enabled=settings.enabled,
+                empty_threshold=settings.empty_threshold,
+                target_volume_enabled=target_volume_ml is not None,
+                target_volume_ml=(
+                    1.0 if target_volume_ml is None else target_volume_ml
+                ),
+            )
 
         # A completed run is a normal reusable state. Re-arm explicitly so
         # the operator can start the next run without disconnect/reconnect.
@@ -414,13 +643,33 @@ class WaterProcessController:
                 "Process must be READY before starting."
             )
 
-        if not 0.0 <= valve_position_percent <= 100.0:
-            raise ValueError(
-                "valve_position_percent must be between 0 and 100."
+        current_empty_settings = self.empty_detector.settings
+        self.configure_empty_detection(
+            EmptyDetectionSettings(
+                empty_threshold=configuration.empty_threshold,
+                filled_threshold=current_empty_settings.filled_threshold,
+                consecutive_samples=(
+                    current_empty_settings.consecutive_samples
+                ),
+                enabled=configuration.empty_stop_enabled,
             )
+        )
 
-        self._valve_position_percent = valve_position_percent
-        self._run_valve_position_percent = valve_position_percent
+        self._active_run_configuration = configuration
+        direct_valve_mode = (
+            configuration.control_mode == ControlMode.VALVE_POSITION
+        )
+        self._valve_position_percent = (
+            configuration.valve_position_percent
+            if direct_valve_mode
+            else 0.0
+        )
+        self._run_valve_position_percent = self._valve_position_percent
+        self._active_flow_target_ml_min = (
+            configuration.flow_target_ml_min
+            if not direct_valve_mode
+            else None
+        )
         self._run_started_at = datetime.now()
         self._run_stopped_at = None
         self._last_measurement = None
@@ -431,34 +680,43 @@ class WaterProcessController:
         self._stop_reason = ""
         self._completed_successfully = False
         self.empty_detector.reset()
+        with self._live_command_lock:
+            self._pending_live_commands.clear()
+            self._accept_live_commands = False
 
         self.logger.start_run()
         self._stop_event.clear()
         self.state_machine.mark_running("Water process started.")
+        with self._live_command_lock:
+            self._accept_live_commands = True
 
         try:
+            if on_started is not None:
+                on_started()
             self.binary_valve.open()
 
-            if flow_setpoint_ml_min is None:
+            if direct_valve_mode:
                 self.bronkhorst.set_direct_valve_position(
-                    valve_position_percent
+                    configuration.valve_position_percent
                 )
                 self._log_event(
                     event_type="PROCESS_STARTED",
                     severity="INFO",
                     message=(
                         "Draining started with valve at "
-                        f"{valve_position_percent:.0f} %."
+                        f"{configuration.valve_position_percent:.0f} %."
                     ),
                 )
             else:
-                self.bronkhorst.set_flow_ml_min(flow_setpoint_ml_min)
+                self.bronkhorst.set_flow_ml_min(
+                    configuration.flow_target_ml_min
+                )
                 self._log_event(
                     event_type="PROCESS_STARTED",
                     severity="INFO",
                     message=(
-                        "Diagnostic closed-loop draining started at "
-                        f"{flow_setpoint_ml_min:.1f} ml/min."
+                        "Closed-loop draining started at "
+                        f"{configuration.flow_target_ml_min:.1f} ml/min."
                     ),
                 )
 
@@ -473,9 +731,19 @@ class WaterProcessController:
                     severity="INFO",
                     message=f"Automatic empty stop armed: {empty_condition}.",
                 )
+            if configuration.target_volume_enabled:
+                self._log_event(
+                    event_type="TARGET_VOLUME_ARMED",
+                    severity="INFO",
+                    message=(
+                        "Target-volume stop armed at "
+                        f"{configuration.target_volume_ml:.1f} ml run volume."
+                    ),
+                )
 
             started_monotonic = time.monotonic()
             while not self._stop_event.is_set():
+                self._apply_pending_live_commands(on_command_error)
                 measurement = self.measure()
                 self.safety_monitor.check(measurement)
 
@@ -486,11 +754,32 @@ class WaterProcessController:
                 if on_measurement is not None:
                     on_measurement(measurement)
 
+                if self._stop_event.is_set():
+                    break
+
                 if self.empty_detector.update(measurement.capacitance_value):
                     self._stop_reason = f"Vessel empty: {empty_condition}."
                     self._completed_successfully = True
                     self._log_event(
                         event_type="EMPTY_STOP",
+                        severity="INFO",
+                        message=self._stop_reason,
+                    )
+                    break
+
+                if (
+                    configuration.target_volume_enabled
+                    and self._total_volume_ml
+                    >= configuration.target_volume_ml
+                ):
+                    self._stop_reason = (
+                        "Target drained volume reached: "
+                        f"{self._total_volume_ml:.1f} ml >= "
+                        f"{configuration.target_volume_ml:.1f} ml."
+                    )
+                    self._completed_successfully = True
+                    self._log_event(
+                        event_type="VOLUME_STOP",
                         severity="INFO",
                         message=self._stop_reason,
                     )
@@ -544,6 +833,9 @@ class WaterProcessController:
             raise
 
         finally:
+            with self._live_command_lock:
+                self._accept_live_commands = False
+                self._pending_live_commands.clear()
             self._shutdown_hardware()
             summary = self._build_summary()
             try:
@@ -677,7 +969,9 @@ class WaterProcessController:
             average_flow = (
                 self._last_measurement.flow_ml_min + measurement.flow_ml_min
             ) / 2.0
-            self._total_volume_ml += average_flow * delta_seconds / 60.0
+            drained_volume_ml = average_flow * delta_seconds / 60.0
+            self._total_volume_ml += drained_volume_ml
+            self._session_total_volume_ml += drained_volume_ml
 
         self._last_measurement = measurement
 
