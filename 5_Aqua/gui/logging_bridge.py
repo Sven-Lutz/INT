@@ -23,7 +23,7 @@ class QtLogHandler(logging.Handler):
             self.emitter.record_received.emit(
                 record.levelname,
                 record.name,
-                record.getMessage(),
+                self.format(record),
             )
         except Exception:
             self.handleError(record)

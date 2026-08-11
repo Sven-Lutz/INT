@@ -233,10 +233,13 @@ class HardwareWorker(QObject):
 
     def _emit_developer_snapshot(self, measurement: object | None = None) -> None:
         logger = self.controller.logger
+        empty_detector = self.controller.empty_detector
+        empty_settings = empty_detector.settings
         if measurement is None:
             measurement = self.controller.last_measurement
         snapshot: dict[str, Any] = {
             "process_state": self.controller.state.name,
+            "sample_interval_seconds": self.controller.sample_interval_seconds,
             "repository_measurements": self.controller.repository.measurement_count(),
             "repository_events": self.controller.repository.event_count(),
             "logging_run_active": logger.run_started,
@@ -248,7 +251,16 @@ class HardwareWorker(QObject):
             "event_csv": str(logger.event_path or logger.last_event_path or "—"),
             "summary_csv": str(logger.summary_path),
             "runtime_log": str(self.runtime_log_path or "—"),
-            "empty_detector": self.controller.empty_detector.describe(),
+            "empty_detector": empty_detector.describe(),
+            "empty_detector_details": {
+                "state": empty_detector.state.value,
+                "enabled": empty_detector.enabled,
+                "empty_threshold": empty_settings.empty_threshold,
+                "consecutive_count": empty_detector.below_threshold_count,
+                "required_consecutive_count": (
+                    empty_settings.consecutive_samples
+                ),
+            },
         }
 
         if measurement is not None:

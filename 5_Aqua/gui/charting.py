@@ -169,7 +169,9 @@ class PersistentMetricChart(QChartView):
 
         chart = QChart()
         chart.addSeries(self.series)
-        chart.setTitle(self.metric_config.label)
+        chart.setTitle(
+            f"{self.metric_config.label} [{self.metric_config.unit}]"
+        )
         chart.legend().hide()
         chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)
         chart.setDropShadowEnabled(False)
@@ -186,7 +188,7 @@ class PersistentMetricChart(QChartView):
         self.x_axis.setTickCount(7)
 
         self.y_axis = QValueAxis()
-        self.y_axis.setTitleText(self.metric_config.axis_title)
+        self.y_axis.setTitleText(f"[{self.metric_config.unit}]")
         self.y_axis.setLabelFormat(
             f"%.{self.metric_config.decimals}f"
         )
@@ -208,7 +210,7 @@ class PersistentMetricChart(QChartView):
 
         self.setChart(chart)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setMinimumHeight(190)
+        self.setMinimumHeight(130)
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(

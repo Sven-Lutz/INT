@@ -37,6 +37,24 @@ QLabel#secondaryText {
     font-size: 8pt;
 }
 
+QLabel[sampleContext="true"] {
+    padding: 0 1px 2px 1px;
+}
+
+QLabel[sampleContext="true"][status="live"] {
+    color: #386b49;
+}
+
+QLabel[sampleContext="true"][status="stale"] {
+    color: #9a5900;
+    font-weight: 600;
+}
+
+QLabel[sampleContext="true"][status="historical"] {
+    color: #69717a;
+    font-weight: 600;
+}
+
 QLabel[stateDisplay="true"] {
     background: #f7f8f9;
     border: 1px solid #c7ccd1;
@@ -230,6 +248,30 @@ QLabel#ledState[ledState="on"] {
     color: #236b3d;
 }
 
+QLabel#statusTitle {
+    color: #69717a;
+    font-size: 8pt;
+}
+
+QLabel[systemStatus="true"] {
+    color: #5f6770;
+    font-size: 8.5pt;
+    font-weight: 600;
+}
+
+QLabel[systemStatus="true"][status="ok"],
+QLabel[systemStatus="true"][status="live"] {
+    color: #236b3d;
+}
+
+QLabel[systemStatus="true"][status="warning"] {
+    color: #9a5900;
+}
+
+QLabel[systemStatus="true"][status="error"] {
+    color: #a12622;
+}
+
 QToolButton {
     min-height: 23px;
     padding: 1px 7px;
@@ -252,8 +294,6 @@ QToolButton:checked {
 }
 
 QLineEdit,
-QSpinBox,
-QDoubleSpinBox,
 QComboBox {
     min-height: 25px;
     padding: 1px 5px;
@@ -264,11 +304,20 @@ QComboBox {
     selection-background-color: #b9d6e8;
 }
 
+QComboBox {
+    padding-right: 22px;
+}
+
 QLineEdit:focus,
-QSpinBox:focus,
-QDoubleSpinBox:focus,
 QComboBox:focus {
     border-color: #5d8fac;
+}
+
+QLineEdit:disabled,
+QComboBox:disabled {
+    color: #8c949b;
+    background: #f1f2f3;
+    border-color: #d3d7da;
 }
 
 QCheckBox {
@@ -309,6 +358,39 @@ QTextEdit {
     selection-background-color: #c7ddeb;
     font-family: "Cascadia Mono", "Consolas", monospace;
     font-size: 8.5pt;
+}
+
+QTableWidget,
+QTreeWidget {
+    background: #ffffff;
+    alternate-background-color: #f7f8f9;
+    border: 1px solid #c9ced3;
+    color: #252a30;
+    selection-background-color: #dcebf5;
+    selection-color: #20252b;
+    gridline-color: #e3e6e8;
+    font-size: 8.5pt;
+}
+
+QTableWidget#operatorLog::item,
+QTreeWidget#developerTree::item {
+    min-height: 20px;
+    padding: 1px 4px;
+}
+
+QHeaderView::section {
+    background: #eef0f2;
+    color: #4c555e;
+    border: none;
+    border-right: 1px solid #d5d9dd;
+    border-bottom: 1px solid #c9ced3;
+    padding: 3px 5px;
+    font-weight: 600;
+}
+
+QPlainTextEdit#logDetail,
+QPlainTextEdit#rawSnapshot {
+    background: #fbfbfc;
 }
 
 QScrollArea {
