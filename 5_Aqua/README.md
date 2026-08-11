@@ -235,6 +235,33 @@ LucidControl command-line utility must exist at:
 C:\Program Files\LucidControl\LucidIoCtrl.exe
 ```
 
+## Operator startup
+
+For normal operation, double-click the workstation shortcut:
+
+```text
+Aqua Process Control
+```
+
+No command line, virtual-environment activation, Git knowledge, or repository
+navigation is required. The shortcut starts `start_aqua.ps1`, which locates a
+pre-installed `.venv` in `5_Aqua` or its parent directory and runs the safe
+GUI entry point with `pythonw.exe`. No terminal window remains visible.
+
+The desktop shortcut contains the absolute path of the current workstation;
+`start_aqua.ps1` itself resolves all project paths relative to its own
+location. The Python environment and hardware dependencies must already be
+installed and commissioned. Startup diagnostics are retained under
+`5_Aqua/logs/`, while application diagnostics continue to use the bounded
+runtime log documented above.
+
+A maintainer can create or update the current user's shortcut at any time:
+
+```powershell
+cd 5_Aqua
+powershell -ExecutionPolicy Bypass -File .\install_desktop_shortcut.ps1
+```
+
 ## Recommended test order
 
 ```powershell
