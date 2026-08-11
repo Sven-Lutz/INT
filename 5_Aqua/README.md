@@ -75,6 +75,41 @@ fixed 0–100 % axis. Rising humidity indicates a leak and is therefore
 the one remaining upper safety limit
 (`CRITICAL_HUMIDITY_PERCENT`, disabled until calibrated).
 
+## GUI
+
+The window is wired to the real controller. `Connect` opens the
+Bronkhorst, the LucidControl DO and the AI4 on a background thread —
+every device call blocks on a serial port and must not run in the GUI
+thread — and reports each step. A failed connect produces an error entry
+in the log, a dialog naming the port, and an entry under
+`Developer Insights → Last error`, instead of silently doing nothing.
+`Connect` stays available so the attempt can be repeated.
+
+Buttons follow the process state: `Start draining` needs a connection,
+`Stop` is only active during a run, LED and the run parameters lock while
+draining.
+
+**Logging** shows one line per event with a level (`INFO`, `SUCCESS`,
+`WARNING`, `ERROR`, `DEBUG`). Tracebacks go to `DEBUG` and stay hidden
+until `Show debug output` is ticked.
+
+**Developer Insights** shows the values behind the telemetry: configured
+ports and AI4 channel assignment, Bronkhorst control mode and raw alarm
+word, raw valve output, both raw channel voltages next to their converted
+values, sample count, configured versus measured sample interval,
+integrated volume and the last run summary.
+
+**Charts** are interactive:
+
+- `Time window` switches all four plots between 10 s and the full run.
+- Clicking a point reads off its exact time and value below the plot.
+- Dragging zooms into a region, which also pauses the live follow.
+- Double-clicking resets the zoom and resumes following.
+
+Colour is used only where it carries information: process state,
+capacitance state, alarm, LED state and log level. Everything else keeps
+the native Qt look.
+
 ## Chart axes
 
 `gui/charting.py` holds a central `METRIC_CONFIG`. Each physical
