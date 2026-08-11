@@ -1,29 +1,28 @@
-# Process Control
+# Aqua Process Control
 
-Desktop control and measurement software for a gravity-fed water process.
+Desktop control, live telemetry, diagnostics, and measurement logging for the gravity-fed Aqua water process.
 
 ## Process model
 
-The proportional valve is the manipulated variable, not a flow setpoint.
-The vessel is drained from above and the run ends when the capacitance
-sensor no longer sees water:
+The proportional Bronkhorst valve is the manipulated variable, not a flow setpoint. The vessel is drained from above and the run normally ends when the capacitance sensor no longer sees water:
 
 ```text
-IDLE
-  -> Start
-DRAINING              valve at the configured opening (100 % by default)
-  -> capacitance measured every sample
+DISCONNECTED
+  -> Connect
+READY
+  -> Start draining
+RUNNING                proportional valve at configured opening (100 % default)
+  -> sample flow, capacitance, humidity, temperature and device state
+  -> integrate drained volume
   -> capacitance <= empty threshold for N consecutive samples
 STOPPING
-  -> valve closed
-COMPLETED
+  -> proportional valve closed
+  -> downstream binary valve closed
+STOPPED
+  -> next run can be started without reconnecting
 ```
 
-A manual stop is possible at any time. Closed-loop flow control
-(flow setpoint -> controller -> valve position) still exists in the
-backend for diagnostics but is not part of the operator workflow —
-pass `flow_setpoint_ml_min` to `WaterProcessController.start()` to use
-it.
+A manual stop is possible at any time. Closed-loop flow control (`flow setpoint -> controller -> valve position`) remains in the backend for diagnostics only and is deliberately not exposed as the normal operator workflow.
 
 ## Confirmed hardware mapping
 
@@ -37,77 +36,144 @@ it.
   - baud rate: 38400
   - node address: 3
 
-`CAPACITANCE_CHANNEL` and `HUMIDITY_CHANNEL` in `config.py` are the only
-place where these AI4 channels are defined. Everything downstream —
-device read, `SystemMeasurement`, CSV, GUI value, chart axis — follows
-those two constants, so a swapped sensor is corrected in exactly one
-place. Run `python -m tests.test_channel_map` to verify the assignment:
-draining the vessel must move the capacitance value, not the humidity
-value.
+`CAPACITANCE_CHANNEL` and `HUMIDITY_CHANNEL` in `config.py` are the single source of truth for the complete AI signal chain:
+
+```text
+AI4 channel -> acquisition -> SystemMeasurement -> CSV -> telemetry -> chart
+```
+
+Run `python -m tests.test_channel_map` during commissioning to verify the assignment: draining the vessel must move the capacitance value, not the humidity value.
 
 ## Sensor semantics
 
-The capacitance sensor is read as a voltage — volts are its unit
-throughout — but it behaves almost binary:
+### Capacitance
+
+The acquisition keeps the raw AI4 voltage and a separately scaled capacitance
+process value. The configured values are currently approximate commissioning
+references, not confirmed physical voltages:
 
 ```text
-FILLED  ~ 25 V
+FILLED  ~ 25 scaled units
    |  draining
    v
-EMPTY   ~  0 V
+EMPTY   ~  0 scaled units
 ```
 
-Accordingly the GUI reports a value in volts plus a state (`FILLED`,
-`DRAINING`, `EMPTY`, `UNKNOWN`) and there is only one stop condition:
+The GUI reports the scaled value, raw AI4 voltage, and semantic state
+(`FILLED`, `DRAINING`, `EMPTY`, `UNKNOWN`). There is only one automatic stop
+condition:
 
 ```text
 capacitance <= empty threshold
 ```
 
-There is no "at or above" direction to pick. The stop is debounced —
-`CAPACITANCE_EMPTY_CONSECUTIVE_SAMPLES` readings in a row must stay at
-or below the threshold before the process stops, so a single noisy
-sample cannot abort a run.
+The condition is debounced. `CAPACITANCE_EMPTY_CONSECUTIVE_SAMPLES` consecutive readings must remain at or below the threshold before the run stops.
 
-Humidity is converted from voltage to `% RH` in the acquisition layer
-(`devices/sensors.py`) and is displayed and plotted as a percentage on a
-fixed 0–100 % axis. Rising humidity indicates a leak and is therefore
-the one remaining upper safety limit
-(`CRITICAL_HUMIDITY_PERCENT`, disabled until calibrated).
+### Humidity
 
-## Chart axes
+Humidity is converted from AI4 voltage to `% RH` in `devices/sensors.py` and plotted on a fixed 0–100 % axis. Rising humidity is the remaining upper safety limit. `CRITICAL_HUMIDITY_PERCENT` stays disabled until the sensor has been calibrated.
 
-`gui/charting.py` holds a central `METRIC_CONFIG`. Each physical
-quantity has its own unit and range instead of one generic autoscaling
-rule:
+## Operator GUI
 
-| Metric         | Unit   | Y axis                     |
-| -------------- | ------ | -------------------------- |
-| Flow           | ml/min | 0 to 1.15 x observed max   |
-| Capacitance    | V      | 0 to 30 (fixed)            |
-| Humidity       | %      | 0 to 100 (fixed)           |
-| Valve position | %      | 0 to 100 (fixed)           |
-| Drained volume | ml     | 0 to 1.15 x observed max   |
-| Temperature    | °C     | 0 to 50 (fixed)            |
+Start the integrated GUI with:
 
-The telemetry cards format their values through the same definitions, so
-a number and its plot can never disagree about the unit.
+```powershell
+python -m gui.app
+```
+
+The GUI builds the real `WaterProcessController`; it is no longer a static widget prototype.
+
+### Live Telemetry
+
+While connected, the hardware worker polls telemetry even when no drain run is active. During a run, the same samples used for safety checks and CSV logging feed the GUI. The header reports telemetry freshness (`LIVE` / `STALE`).
+
+Visible telemetry includes:
+
+- flow
+- capacitance value and fill state
+- humidity
+- commanded valve opening and Bronkhorst valve output
+- integrated drained volume
+- Bronkhorst temperature
+- Bronkhorst alarm register
+- downstream binary valve and LED state
+
+### Interactive Live Charts
+
+The chart layer retains a persistent run history for:
+
+| Metric | Unit | Y axis |
+| --- | --- | --- |
+| Flow | ml/min | dynamic from zero |
+| Capacitance | scaled | fixed 0 to 30 with current defaults |
+| Humidity | % | fixed 0 to 100 % |
+| Valve position | % | fixed 0 to 100 % |
+| Drained volume | ml | dynamic from zero |
+| Temperature | °C | fixed 0 to 50 °C |
+
+Interaction:
+
+- click a chart to focus it
+- click a telemetry card to focus the corresponding chart
+- hover the line for exact time/value information
+- use metric toggle buttons to configure the overview
+- enable `Full run` to switch from the rolling 60 s window to the complete retained history
+- press `Esc` or `Overview` to return from a focused chart
+
+### Operator Log
+
+The `Operator Log` tab receives standard Python `logging` records from the Aqua runtime. It supports severity filtering, auto-scroll, and a bounded in-memory view. The same runtime information is persisted independently of the GUI to:
+
+```text
+measurements/aqua_runtime.log
+```
+
+The runtime log rotates automatically. Generated logs and measurements remain ignored by Git.
+
+### Developer Insights
+
+The `Developer Insights` tab exposes the diagnostic state that is intentionally hidden from the normal operator controls, including:
+
+- process state
+- raw AI4 voltages
+- Bronkhorst control mode
+- raw valve output and converted valve output percentage
+- flow setpoint readback
+- binary valve / LED state
+- empty-detector status
+- in-memory measurement/event counts
+- active and most recent measurement/event CSV paths
+- summary CSV path
+
+This view is meant for commissioning and fault diagnosis, not process control.
+
+## Logging and measurement data
+
+Each drain run produces:
+
+- `process_control_measurements_<timestamp>.csv`
+- `process_control_events_<timestamp>.csv`
+- one row in `process_control_summaries.csv`
+
+The CSV logger and runtime logger serve different purposes: CSV files are structured process data; `aqua_runtime.log` records application, hardware, and GUI/runtime events.
 
 ## Process path
 
+```text
 Water vessel
-→ Bronkhorst flow sensor
-→ proportional control valve
-→ binary valve
-→ outlet
+  -> Bronkhorst flow sensor / proportional valve
+  -> downstream binary valve
+  -> outlet
+```
 
 ## Main goals
 
 1. Drain water at a configured valve opening.
-2. Measure capacitance and stop automatically once the vessel is empty.
-3. Record all measurements and process events.
-4. Switch the LED on and off.
-5. Integrate the validated process into a GUI.
+2. Stop automatically when the capacitance sensor reliably reports empty.
+3. Provide live operator telemetry and interactive run charts.
+4. Record structured measurements, process events, summaries, and runtime diagnostics.
+5. Expose raw Developer Insights for commissioning without cluttering the operator workflow.
+6. Switch the LED manually while the process is idle.
 
 ## Installation
 
@@ -129,6 +195,7 @@ C:\Program Files\LucidControl\LucidIoCtrl.exe
 python -m tests.test_state_machine
 python -m tests.test_safety
 python -m tests.test_empty_detection
+python -m tests.test_controller_reuse
 python -m tests.test_lucid_do
 python -m tests.test_bronkhorst
 python -m tests.test_lucid_ai4
@@ -136,40 +203,32 @@ python -m tests.test_channel_map
 python -m tests.test_process
 ```
 
-`test_state_machine`, `test_safety` and `test_empty_detection` run
-without hardware.
+The state-machine, safety, empty-detection, and controller-reuse tests run without Aqua hardware. Device/channel/process tests require the corresponding hardware.
 
-## Start command-line process
+## Command-line process
+
+The validated backend can still be run without the GUI:
 
 ```powershell
 python main.py
 ```
 
-## Start static GUI prototype
+## Commissioning status
 
-```powershell
-python -m gui.app
-```
-
-## Important commissioning status
-
-COM4 and COM8 were successfully tested end to end. Water flow was
-observed with:
+COM4 and COM8 were successfully tested end to end. Water flow was observed with:
 
 - LucidControl COM4
 - logical channel 0
 - state 1
 - Bronkhorst forced-open mode
 
-Still open:
+Still to confirm on the physical Aqua setup:
 
-- `CAPACITANCE_EMPTY_THRESHOLD` (2.0 V) and `CAPACITANCE_FILLED_VALUE`
-  (12.5 V) are first estimates from the observed 25 V / 0 V behaviour.
-  Confirm them against a real drain run.
-- `CAPACITANCE_VALUE_PER_VOLT` / `CAPACITANCE_VALUE_OFFSET` pass the
-  reading through unchanged, which is correct as long as the sensor is
-  wired straight to the AI4 input.
-- `HUMIDITY_VOLTAGE_AT_0_PERCENT` / `HUMIDITY_VOLTAGE_AT_100_PERCENT`
-  assume a 0–10 V sensor. Confirm against the sensor data sheet.
-- `CRITICAL_HUMIDITY_PERCENT` stays disabled until the humidity sensor
-  has been calibrated.
+- `CAPACITANCE_EMPTY_THRESHOLD` (approximately 2 scaled units) and
+  `CAPACITANCE_FILLED_VALUE` are initial estimates. The configured full value
+  near 25 must not be interpreted as a physically confirmed 25 V signal.
+- `CAPACITANCE_VALUE_PER_VOLT` / `CAPACITANCE_VALUE_OFFSET` currently pass the
+  raw reading through unchanged; verify the actual sensor transfer function
+  and AI4 electrical range during commissioning.
+- `HUMIDITY_VOLTAGE_AT_0_PERCENT` / `HUMIDITY_VOLTAGE_AT_100_PERCENT` assume a linear 0–10 V sensor.
+- `CRITICAL_HUMIDITY_PERCENT` remains disabled until humidity calibration is complete.

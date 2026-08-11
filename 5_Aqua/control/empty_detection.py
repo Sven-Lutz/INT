@@ -131,5 +131,5 @@ class EmptyDetector:
             f"Capacitance {self._state.value} "
             f"({self._below_threshold_count}/"
             f"{self.settings.consecutive_samples} samples at or "
-            f"below {self.settings.empty_threshold:g} V)"
+            f"below {self.settings.empty_threshold:g} scaled units)"
         )

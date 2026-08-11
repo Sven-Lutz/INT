@@ -7,12 +7,12 @@ from dataclasses import dataclass
 class CapacitanceScaling:
     """Scales the AI4 reading of the capacitance sensor.
 
-    The capacitance process value is a voltage, so the defaults pass the
-    reading through unchanged; gain and offset only correct for a
-    divider or amplifier in front of the AI4 input.
+    The raw acquisition is a voltage. The defaults currently pass its
+    numeric value through unchanged, but the result remains a separately
+    scaled process value until commissioning confirms the transfer function.
 
-    The sensor behaves almost binary: roughly ``full_value`` volts while
-    water is present and roughly zero once the vessel has run empty.
+    The sensor behaves almost binary: roughly ``full_value`` scaled units
+    while water is present and roughly zero once the vessel has run empty.
     """
 
     value_per_volt: float = 1.0

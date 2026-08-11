@@ -30,14 +30,10 @@ class LucidDigitalOutput:
             )
 
         if not self.port:
-            raise ValueError(
-                "LucidControl port must not be empty."
-            )
+            raise ValueError("LucidControl port must not be empty.")
 
         if self.timeout_seconds <= 0:
-            raise ValueError(
-                "timeout_seconds must be greater than zero."
-            )
+            raise ValueError("timeout_seconds must be greater than zero.")
 
     def _run(self, *arguments: str) -> str:
         command = [
@@ -86,20 +82,14 @@ class LucidDigitalOutput:
     @staticmethod
     def _validate_channel(channel: int) -> None:
         if not isinstance(channel, int):
-            raise TypeError(
-                "LucidControl channel must be an integer."
-            )
+            raise TypeError("LucidControl channel must be an integer.")
         if channel < 0:
-            raise ValueError(
-                "LucidControl channel must not be negative."
-            )
+            raise ValueError("LucidControl channel must not be negative.")
 
     @staticmethod
     def _validate_state(state: int) -> None:
         if state not in (0, 1):
-            raise ValueError(
-                "Digital output state must be 0 or 1."
-            )
+            raise ValueError("Digital output state must be 0 or 1.")
 
     def read_channel(self, channel: int) -> int:
         self._validate_channel(channel)
@@ -124,11 +114,7 @@ class LucidDigitalOutput:
 
         return 1 if int(match.group(1)) != 0 else 0
 
-    def write_channel(
-        self,
-        channel: int,
-        state: int,
-    ) -> None:
+    def write_channel(self, channel: int, state: int) -> None:
         self._validate_channel(channel)
         self._validate_state(state)
 
@@ -139,7 +125,6 @@ class LucidDigitalOutput:
         )
 
         readback = self.read_channel(channel)
-
         if readback != state:
             raise LucidControlError(
                 f"LucidControl read-back failed on {self.port}, "
@@ -149,7 +134,14 @@ class LucidDigitalOutput:
 
 
 class BinaryValve:
-    """High-level abstraction for the downstream binary valve."""
+    """High-level abstraction for the downstream binary valve.
+
+    Successful writes already perform a hardware read-back. The cached
+    state can therefore be used by high-frequency telemetry without
+    launching another LucidIoCtrl subprocess for every sample. Calls to
+    ``is_open()`` still refresh from hardware by default for diagnostics
+    and backward compatibility.
+    """
 
     def __init__(
         self,
@@ -160,36 +152,36 @@ class BinaryValve:
         closed_state: int = 0,
     ) -> None:
         if open_state == closed_state:
-            raise ValueError(
-                "open_state and closed_state must differ."
-            )
+            raise ValueError("open_state and closed_state must differ.")
 
         self.controller = controller
         self.channel = channel
         self.open_state = open_state
         self.closed_state = closed_state
+        self._last_state: int | None = None
+
+    @property
+    def last_known_open(self) -> bool | None:
+        if self._last_state is None:
+            return None
+        return self._last_state == self.open_state
 
     def open(self) -> None:
-        self.controller.write_channel(
-            self.channel,
-            self.open_state,
-        )
+        self.controller.write_channel(self.channel, self.open_state)
+        self._last_state = self.open_state
 
     def close(self) -> None:
-        self.controller.write_channel(
-            self.channel,
-            self.closed_state,
-        )
+        self.controller.write_channel(self.channel, self.closed_state)
+        self._last_state = self.closed_state
 
-    def is_open(self) -> bool:
-        return (
-            self.controller.read_channel(self.channel)
-            == self.open_state
-        )
+    def is_open(self, *, refresh: bool = True) -> bool:
+        if refresh or self._last_state is None:
+            self._last_state = self.controller.read_channel(self.channel)
+        return self._last_state == self.open_state
 
 
 class LedController:
-    """High-level abstraction for the LED output."""
+    """High-level abstraction for the LED output with cached read-back."""
 
     def __init__(
         self,
@@ -200,29 +192,29 @@ class LedController:
         off_state: int = 0,
     ) -> None:
         if on_state == off_state:
-            raise ValueError(
-                "on_state and off_state must differ."
-            )
+            raise ValueError("on_state and off_state must differ.")
 
         self.controller = controller
         self.channel = channel
         self.on_state = on_state
         self.off_state = off_state
+        self._last_state: int | None = None
+
+    @property
+    def last_known_on(self) -> bool | None:
+        if self._last_state is None:
+            return None
+        return self._last_state == self.on_state
 
     def on(self) -> None:
-        self.controller.write_channel(
-            self.channel,
-            self.on_state,
-        )
+        self.controller.write_channel(self.channel, self.on_state)
+        self._last_state = self.on_state
 
     def off(self) -> None:
-        self.controller.write_channel(
-            self.channel,
-            self.off_state,
-        )
+        self.controller.write_channel(self.channel, self.off_state)
+        self._last_state = self.off_state
 
-    def is_on(self) -> bool:
-        return (
-            self.controller.read_channel(self.channel)
-            == self.on_state
-        )
+    def is_on(self, *, refresh: bool = True) -> bool:
+        if refresh or self._last_state is None:
+            self._last_state = self.controller.read_channel(self.channel)
+        return self._last_state == self.on_state

@@ -82,7 +82,7 @@ def main() -> None:
 
         print(
             f"{raw}  ->  "
-            f"Capacitance={capacitance:.3f} V "
+            f"Capacitance={capacitance:.3f} scaled "
             f"({settings.classify(capacitance).value}) | "
             f"Humidity={humidity:.1f} %"
         )

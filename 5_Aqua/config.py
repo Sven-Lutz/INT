@@ -63,23 +63,24 @@ HUMIDITY_CHANNEL = 1
 # SENSOR SCALING
 # =============================================================================
 
-# The capacitance sensor reports a voltage, and that voltage is the
-# process value: capacitance is measured and displayed in volts.
+# The AI4 driver reports a raw voltage. A separate scaled capacitance
+# process value is derived from it; the physical transfer function has
+# not yet been confirmed during commissioning.
 #
-#   capacitance_value [V] = voltage * CAPACITANCE_VALUE_PER_VOLT
-#                           + CAPACITANCE_VALUE_OFFSET
+#   capacitance_value [scaled] = raw_voltage * CAPACITANCE_VALUE_PER_VOLT
+#                                + CAPACITANCE_VALUE_OFFSET
 #
-# The defaults pass the reading through unchanged. They only need to be
-# touched if a divider or amplifier sits between sensor and AI4 input.
+# The defaults pass the numeric reading through unchanged. This does not
+# establish that a configured value near 25 is a physical 25 V signal.
 CAPACITANCE_VALUE_PER_VOLT = 1.0
 CAPACITANCE_VALUE_OFFSET = 0.0
 
-# Observed behaviour of the sensor: roughly 25 V while water is present
-# and roughly 0 V once the vessel has run empty.
+# Current commissioning estimates: roughly 25 scaled units while water
+# is present and roughly 0 once the vessel has run empty.
 CAPACITANCE_FULL_VALUE = 25.0
 
-# Above this voltage the vessel is reported as FILLED, below the empty
-# threshold as EMPTY, and in between as DRAINING.
+# Above this scaled value the vessel is reported as FILLED, below the
+# empty threshold as EMPTY, and in between as DRAINING.
 CAPACITANCE_FILLED_VALUE = 12.5
 
 # The humidity sensor is read as a voltage and converted to % relative
@@ -110,7 +111,7 @@ DEFAULT_FLOW_SETPOINT_ML_MIN = 100.0
 # =============================================================================
 
 # Draining always runs from "full" towards "empty", so the only relevant
-# condition is capacitance <= threshold. In volts, like the sensor value.
+# condition is capacitance <= threshold, expressed in scaled units.
 CAPACITANCE_EMPTY_THRESHOLD = 2.0
 
 # Number of consecutive samples below the threshold before the process is

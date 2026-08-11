@@ -126,10 +126,12 @@ def build_controller() -> WaterProcessController:
 
 def print_measurement(measurement: SystemMeasurement) -> None:
     capacitance = (
-        f"{measurement.capacitance_value:.3f} V"
+        f"{measurement.capacitance_value:.3f} scaled"
         if measurement.capacitance_value is not None
         else "—"
     )
+    if measurement.capacitance_voltage_v is not None:
+        capacitance += f" (raw {measurement.capacitance_voltage_v:.3f} V)"
     humidity = (
         f"{measurement.humidity_percent:.1f} %"
         if measurement.humidity_percent is not None
