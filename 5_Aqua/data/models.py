@@ -17,8 +17,13 @@ class SystemMeasurement:
     valve_output_raw: int
     valve_output_raw_percent: float
 
+    # Commanded valve opening in percent. This is the manipulated
+    # variable of the drain process.
+    valve_position_percent: float
+
     capacitance_voltage_v: float | None
     capacitance_value: float | None
+    capacitance_state: str
 
     humidity_voltage_v: float | None
     humidity_percent: float | None
@@ -40,12 +45,13 @@ class ProcessSummary:
     started_at: datetime
     stopped_at: datetime
     duration_seconds: float
-    target_flow_ml_min: float
+    valve_position_percent: float
     total_volume_ml: float
     average_flow_ml_min: float
     minimum_flow_ml_min: float
     maximum_flow_ml_min: float
-    maximum_capacitance_value: float | None
+    minimum_capacitance_value: float | None
+    final_capacitance_value: float | None
     maximum_humidity_percent: float | None
     stop_reason: str
     completed_successfully: bool

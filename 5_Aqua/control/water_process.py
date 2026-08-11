@@ -7,13 +7,17 @@ from typing import Callable
 
 from config import (
     CAPACITANCE_CHANNEL,
-    CRITICAL_CAPACITANCE_VALUE,
     CRITICAL_HUMIDITY_PERCENT,
+    DEFAULT_VALVE_POSITION_PERCENT,
     HUMIDITY_CHANNEL,
     MAXIMUM_ALLOWED_FLOW_ML_MIN,
     SAMPLE_INTERVAL_SECONDS,
 )
 
+from control.empty_detection import (
+    EmptyDetectionSettings,
+    EmptyDetector,
+)
 from control.safety import (
     SafetyLimits,
     SafetyMonitor,
@@ -33,6 +37,7 @@ from data.repository import MeasurementRepository
 from devices.bronkhorst import BronkhorstFlowController
 from devices.lucid_ai4 import LucidAnalogInput
 from devices.lucid_do import BinaryValve, LedController
+from devices.sensors import CapacitanceScaling, HumidityScaling
 
 
 class WaterProcessError(RuntimeError):
@@ -40,6 +45,18 @@ class WaterProcessError(RuntimeError):
 
 
 class WaterProcessController:
+    """Drives the gravity-fed drain process.
+
+    The proportional valve is the manipulated variable and stays at a
+    fixed opening (100 % by default) for the whole run. The measured
+    flow is telemetry and is integrated into a drained volume. The run
+    ends when the capacitance sensor reports an empty vessel, when a
+    configured duration elapses, or on a manual stop.
+
+    Closed-loop flow control is still available through
+    ``flow_setpoint_ml_min`` but is not part of the operator workflow.
+    """
+
     def __init__(
         self,
         *,
@@ -51,10 +68,19 @@ class WaterProcessController:
         repository: MeasurementRepository,
         state_machine: ProcessStateMachine | None = None,
         safety_monitor: SafetyMonitor | None = None,
+        empty_detector: EmptyDetector | None = None,
+        capacitance_scaling: CapacitanceScaling | None = None,
+        humidity_scaling: HumidityScaling | None = None,
         sample_interval_seconds: float = SAMPLE_INTERVAL_SECONDS,
         capacitance_channel: int = CAPACITANCE_CHANNEL,
         humidity_channel: int = HUMIDITY_CHANNEL,
     ) -> None:
+        if capacitance_channel == humidity_channel:
+            raise ValueError(
+                "capacitance_channel and humidity_channel must "
+                "differ."
+            )
+
         self.bronkhorst = bronkhorst
         self.binary_valve = binary_valve
         self.led = led
@@ -69,10 +95,18 @@ class WaterProcessController:
             or SafetyMonitor(
                 SafetyLimits(
                     maximum_flow_ml_min=MAXIMUM_ALLOWED_FLOW_ML_MIN,
-                    critical_capacitance_value=CRITICAL_CAPACITANCE_VALUE,
                     critical_humidity_percent=CRITICAL_HUMIDITY_PERCENT,
                 )
             )
+        )
+        self.empty_detector = (
+            empty_detector or EmptyDetector()
+        )
+        self.capacitance_scaling = (
+            capacitance_scaling or CapacitanceScaling()
+        )
+        self.humidity_scaling = (
+            humidity_scaling or HumidityScaling()
         )
 
         self.sample_interval_seconds = sample_interval_seconds
@@ -80,12 +114,20 @@ class WaterProcessController:
         self.humidity_channel = humidity_channel
 
         self._stop_event = Event()
-        self._target_flow_ml_min = 0.0
+
+        # Currently commanded opening, zero in the safe state.
+        self._valve_position_percent = 0.0
+
+        # Opening configured for the active run, kept for the summary.
+        self._run_valve_position_percent = 0.0
+
         self._run_started_at: datetime | None = None
         self._run_stopped_at: datetime | None = None
         self._last_measurement: SystemMeasurement | None = None
         self._total_volume_ml = 0.0
         self._flow_values: list[float] = []
+        self._capacitance_values: list[float] = []
+        self._humidity_values: list[float] = []
         self._stop_reason = ""
         self._completed_successfully = False
 
@@ -96,6 +138,28 @@ class WaterProcessController:
     @property
     def total_volume_ml(self) -> float:
         return self._total_volume_ml
+
+    @property
+    def valve_position_percent(self) -> float:
+        return self._valve_position_percent
+
+    @property
+    def empty_detection_settings(self) -> EmptyDetectionSettings:
+        return self.empty_detector.settings
+
+    def configure_empty_detection(
+        self,
+        settings: EmptyDetectionSettings,
+    ) -> None:
+        """Replaces the empty-detection settings between runs."""
+
+        if self.state == ProcessState.RUNNING:
+            raise WaterProcessError(
+                "Empty detection cannot be reconfigured while the "
+                "process is running."
+            )
+
+        self.empty_detector = EmptyDetector(settings)
 
     def _log_event(
         self,
@@ -156,25 +220,44 @@ class WaterProcessController:
     def start(
         self,
         *,
-        flow_setpoint_ml_min: float,
+        valve_position_percent: float = (
+            DEFAULT_VALVE_POSITION_PERCENT
+        ),
+        flow_setpoint_ml_min: float | None = None,
         duration_seconds: float | None = None,
         on_measurement: (
             Callable[[SystemMeasurement], None] | None
         ) = None,
     ) -> ProcessSummary:
+        """Runs the drain process until it is empty or stopped.
+
+        ``flow_setpoint_ml_min`` switches the Bronkhorst into
+        closed-loop flow control instead of a fixed valve opening. It is
+        kept for diagnostics and is not used by the GUI.
+        """
+
         if not self.state_machine.is_ready:
             raise WaterProcessError(
                 "Process must be READY before starting."
             )
 
-        self._target_flow_ml_min = flow_setpoint_ml_min
+        if not 0.0 <= valve_position_percent <= 100.0:
+            raise ValueError(
+                "valve_position_percent must be between 0 and 100."
+            )
+
+        self._valve_position_percent = valve_position_percent
+        self._run_valve_position_percent = valve_position_percent
         self._run_started_at = datetime.now()
         self._run_stopped_at = None
         self._last_measurement = None
         self._total_volume_ml = 0.0
         self._flow_values.clear()
+        self._capacitance_values.clear()
+        self._humidity_values.clear()
         self._stop_reason = ""
         self._completed_successfully = False
+        self.empty_detector.reset()
 
         self.logger.start_run()
         self._stop_event.clear()
@@ -184,9 +267,48 @@ class WaterProcessController:
 
         try:
             self.binary_valve.open()
-            self.bronkhorst.set_flow_ml_min(
-                flow_setpoint_ml_min
+
+            if flow_setpoint_ml_min is None:
+                self.bronkhorst.set_direct_valve_position(
+                    valve_position_percent
+                )
+                self._log_event(
+                    event_type="PROCESS_STARTED",
+                    severity="INFO",
+                    message=(
+                        "Draining started with valve at "
+                        f"{valve_position_percent:.0f} %."
+                    ),
+                )
+            else:
+                self.bronkhorst.set_flow_ml_min(
+                    flow_setpoint_ml_min
+                )
+                self._log_event(
+                    event_type="PROCESS_STARTED",
+                    severity="INFO",
+                    message=(
+                        "Draining started in closed-loop mode at "
+                        f"{flow_setpoint_ml_min:.1f} ml/min."
+                    ),
+                )
+
+            settings = self.empty_detector.settings
+            empty_condition = (
+                f"capacitance <= {settings.empty_threshold:g} "
+                f"for {settings.consecutive_samples} "
+                "consecutive samples"
             )
+
+            if self.empty_detector.enabled:
+                self._log_event(
+                    event_type="EMPTY_DETECTION",
+                    severity="INFO",
+                    message=(
+                        "Automatic empty stop armed: "
+                        f"{empty_condition}."
+                    ),
+                )
 
             started_monotonic = time.monotonic()
 
@@ -200,6 +322,20 @@ class WaterProcessController:
 
                 if on_measurement is not None:
                     on_measurement(measurement)
+
+                if self.empty_detector.update(
+                    measurement.capacitance_value
+                ):
+                    self._stop_reason = (
+                        f"Vessel empty: {empty_condition}."
+                    )
+                    self._completed_successfully = True
+                    self._log_event(
+                        event_type="EMPTY_STOP",
+                        severity="INFO",
+                        message=self._stop_reason,
+                    )
+                    break
 
                 if duration_seconds is not None:
                     if (
@@ -239,6 +375,19 @@ class WaterProcessController:
             )
         )
 
+        capacitance_value = self.capacitance_scaling.to_value(
+            capacitance_voltage
+        )
+        humidity_percent = self.humidity_scaling.to_percent(
+            humidity_voltage
+        )
+
+        capacitance_state = (
+            self.empty_detector.settings.classify(
+                capacitance_value
+            )
+        )
+
         return SystemMeasurement(
             timestamp=datetime.now(),
             flow_ml_min=self.bronkhorst.read_flow_ml_min(),
@@ -260,10 +409,12 @@ class WaterProcessController:
             valve_output_raw_percent=(
                 self.bronkhorst.read_valve_output_raw_percent()
             ),
+            valve_position_percent=self._valve_position_percent,
             capacitance_voltage_v=capacitance_voltage,
-            capacitance_value=None,
+            capacitance_value=capacitance_value,
+            capacitance_state=capacitance_state.value,
             humidity_voltage_v=humidity_voltage,
-            humidity_percent=None,
+            humidity_percent=humidity_percent,
             binary_valve_open=self.binary_valve.is_open(),
             led_on=self.led.is_on(),
         )
@@ -272,6 +423,7 @@ class WaterProcessController:
         if self.bronkhorst.is_connected:
             self.bronkhorst.force_valve_closed()
         self.binary_valve.close()
+        self._valve_position_percent = 0.0
 
     def _shutdown_hardware(self) -> None:
         if self.state == ProcessState.RUNNING:
@@ -295,6 +447,16 @@ class WaterProcessController:
         measurement: SystemMeasurement,
     ) -> None:
         self._flow_values.append(measurement.flow_ml_min)
+
+        if measurement.capacitance_value is not None:
+            self._capacitance_values.append(
+                measurement.capacitance_value
+            )
+
+        if measurement.humidity_percent is not None:
+            self._humidity_values.append(
+                measurement.humidity_percent
+            )
 
         if self._last_measurement is not None:
             delta_seconds = (
@@ -327,7 +489,9 @@ class WaterProcessController:
             started_at=started,
             stopped_at=stopped,
             duration_seconds=(stopped - started).total_seconds(),
-            target_flow_ml_min=self._target_flow_ml_min,
+            valve_position_percent=(
+                self._run_valve_position_percent
+            ),
             total_volume_ml=self._total_volume_ml,
             average_flow_ml_min=average_flow,
             minimum_flow_ml_min=(
@@ -340,8 +504,21 @@ class WaterProcessController:
                 if self._flow_values
                 else 0.0
             ),
-            maximum_capacitance_value=None,
-            maximum_humidity_percent=None,
+            minimum_capacitance_value=(
+                min(self._capacitance_values)
+                if self._capacitance_values
+                else None
+            ),
+            final_capacitance_value=(
+                self._capacitance_values[-1]
+                if self._capacitance_values
+                else None
+            ),
+            maximum_humidity_percent=(
+                max(self._humidity_values)
+                if self._humidity_values
+                else None
+            ),
             stop_reason=(
                 self._stop_reason or "Process completed."
             ),
