@@ -10,10 +10,6 @@ class SafetyViolationError(RuntimeError):
     """Base error for all process safety violations."""
 
 
-class CriticalCapacitanceError(SafetyViolationError):
-    pass
-
-
 class CriticalHumidityError(SafetyViolationError):
     pass
 
@@ -32,8 +28,14 @@ class InvalidMeasurementError(SafetyViolationError):
 
 @dataclass(frozen=True)
 class SafetyLimits:
+    """Hard limits that abort the process with a fault.
+
+    Capacitance is deliberately not part of the safety layer. Running
+    empty is the normal end of the drain process, not a fault, and is
+    handled by ``control.empty_detection`` inside the process logic.
+    """
+
     maximum_flow_ml_min: float
-    critical_capacitance_value: float | None = None
     critical_humidity_percent: float | None = None
     stop_on_any_bronkhorst_alarm: bool = True
 
@@ -54,7 +56,6 @@ class SafetyMonitor:
     ) -> None:
         self._check_finite(measurement)
         self._check_flow(measurement)
-        self._check_capacitance(measurement)
         self._check_humidity(measurement)
         self._check_alarm(measurement)
 
@@ -86,28 +87,6 @@ class SafetyMonitor:
                 "Maximum permitted flow exceeded."
             )
 
-    def _check_capacitance(
-        self,
-        measurement: SystemMeasurement,
-    ) -> None:
-        limit = self.limits.critical_capacitance_value
-
-        if limit is None:
-            return
-
-        value = measurement.capacitance_value
-
-        if value is None:
-            raise InvalidMeasurementError(
-                "Capacitance monitoring is enabled, "
-                "but no calibrated value is available."
-            )
-
-        if value >= limit:
-            raise CriticalCapacitanceError(
-                "Critical capacitance limit reached."
-            )
-
     def _check_humidity(
         self,
         measurement: SystemMeasurement,
@@ -125,6 +104,7 @@ class SafetyMonitor:
                 "but no calibrated value is available."
             )
 
+        # Rising humidity indicates a leak, so this stays an upper limit.
         if value >= limit:
             raise CriticalHumidityError(
                 "Critical humidity limit reached."

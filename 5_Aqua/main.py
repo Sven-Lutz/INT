@@ -8,10 +8,19 @@ from config import (
     BRONKHORST_NODE_ADDRESS,
     BRONKHORST_PORT,
     CAPACITANCE_CHANNEL,
+    CAPACITANCE_EMPTY_CONSECUTIVE_SAMPLES,
+    CAPACITANCE_EMPTY_STOP_ENABLED,
+    CAPACITANCE_EMPTY_THRESHOLD,
+    CAPACITANCE_FILLED_VALUE,
+    CAPACITANCE_FULL_VALUE,
+    CAPACITANCE_VALUE_OFFSET,
+    CAPACITANCE_VALUE_PER_VOLT,
     CSV_DELIMITER,
     DATETIME_FORMAT,
-    DEFAULT_FLOW_SETPOINT_ML_MIN,
+    DEFAULT_VALVE_POSITION_PERCENT,
     HUMIDITY_CHANNEL,
+    HUMIDITY_VOLTAGE_AT_0_PERCENT,
+    HUMIDITY_VOLTAGE_AT_100_PERCENT,
     LED_CHANNEL,
     LED_OFF_STATE,
     LED_ON_STATE,
@@ -24,8 +33,13 @@ from config import (
     create_required_directories,
     validate_configuration,
 )
+from control.empty_detection import (
+    EmptyDetectionSettings,
+    EmptyDetector,
+)
 from control.water_process import WaterProcessController
 from data.logger import CsvDataLogger
+from data.models import SystemMeasurement
 from data.repository import MeasurementRepository
 from devices.bronkhorst import BronkhorstFlowController
 from devices.lucid_ai4 import LucidAnalogInput
@@ -34,9 +48,25 @@ from devices.lucid_do import (
     LedController,
     LucidDigitalOutput,
 )
+from devices.sensors import CapacitanceScaling, HumidityScaling
 
 
-RUN_DURATION_SECONDS = 60.0
+# Upper bound for a drain run. The run normally ends earlier, as soon as
+# the capacitance sensor reports an empty vessel.
+MAXIMUM_RUN_DURATION_SECONDS = 900.0
+
+
+def build_empty_detector() -> EmptyDetector:
+    return EmptyDetector(
+        EmptyDetectionSettings(
+            empty_threshold=CAPACITANCE_EMPTY_THRESHOLD,
+            filled_threshold=CAPACITANCE_FILLED_VALUE,
+            consecutive_samples=(
+                CAPACITANCE_EMPTY_CONSECUTIVE_SAMPLES
+            ),
+            enabled=CAPACITANCE_EMPTY_STOP_ENABLED,
+        )
+    )
 
 
 def build_controller() -> WaterProcessController:
@@ -74,9 +104,42 @@ def build_controller() -> WaterProcessController:
             datetime_format=DATETIME_FORMAT,
         ),
         repository=MeasurementRepository(),
+        empty_detector=build_empty_detector(),
+        capacitance_scaling=CapacitanceScaling(
+            value_per_volt=CAPACITANCE_VALUE_PER_VOLT,
+            offset=CAPACITANCE_VALUE_OFFSET,
+            full_value=CAPACITANCE_FULL_VALUE,
+        ),
+        humidity_scaling=HumidityScaling(
+            voltage_at_0_percent=(
+                HUMIDITY_VOLTAGE_AT_0_PERCENT
+            ),
+            voltage_at_100_percent=(
+                HUMIDITY_VOLTAGE_AT_100_PERCENT
+            ),
+        ),
         sample_interval_seconds=SAMPLE_INTERVAL_SECONDS,
         capacitance_channel=CAPACITANCE_CHANNEL,
         humidity_channel=HUMIDITY_CHANNEL,
+    )
+
+
+def print_measurement(measurement: SystemMeasurement) -> None:
+    capacitance = (
+        f"{measurement.capacitance_value:.3f} V"
+        if measurement.capacitance_value is not None
+        else "—"
+    )
+    humidity = (
+        f"{measurement.humidity_percent:.1f} %"
+        if measurement.humidity_percent is not None
+        else "—"
+    )
+
+    print(
+        f"Flow={measurement.flow_ml_min:.3f} ml/min | "
+        f"Cap={capacitance} ({measurement.capacitance_state}) | "
+        f"Humidity={humidity}"
     )
 
 
@@ -91,15 +154,11 @@ def main() -> int:
         controller.connect()
 
         summary = controller.start(
-            flow_setpoint_ml_min=(
-                DEFAULT_FLOW_SETPOINT_ML_MIN
+            valve_position_percent=(
+                DEFAULT_VALVE_POSITION_PERCENT
             ),
-            duration_seconds=RUN_DURATION_SECONDS,
-            on_measurement=lambda m: print(
-                f"Flow={m.flow_ml_min:.3f} ml/min | "
-                f"Cap={m.capacitance_voltage_v:.5f} V | "
-                f"Humidity={m.humidity_voltage_v:.5f} V"
-            ),
+            duration_seconds=MAXIMUM_RUN_DURATION_SECONDS,
+            on_measurement=print_measurement,
         )
 
         print(summary)
