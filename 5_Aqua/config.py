@@ -55,8 +55,8 @@ LUCID_AI_PORT = "COM7"
 #
 # Nothing downstream re-derives a channel number, so a swapped sensor is
 # corrected here and nowhere else.
-CAPACITANCE_CHANNEL = 0
-HUMIDITY_CHANNEL = 1
+CAPACITANCE_CHANNEL = 2
+HUMIDITY_CHANNEL = 0
 
 
 # =============================================================================
