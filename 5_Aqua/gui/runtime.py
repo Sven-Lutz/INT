@@ -251,6 +251,7 @@ class HardwareWorker(QObject):
             "event_csv": str(logger.event_path or logger.last_event_path or "—"),
             "summary_csv": str(logger.summary_path),
             "runtime_log": str(self.runtime_log_path or "—"),
+            "lucid_digital": self.controller.lucid_digital_diagnostics,
             "empty_detector": empty_detector.describe(),
             "empty_detector_details": {
                 "state": empty_detector.state.value,

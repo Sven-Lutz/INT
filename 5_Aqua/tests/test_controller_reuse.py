@@ -6,6 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
+import pytest
+
 from control.empty_detection import EmptyDetectionSettings, EmptyDetector
 from control.water_process import WaterProcessController, WaterProcessError
 from data.logger import CsvDataLogger
@@ -75,12 +77,39 @@ class FakeAnalogInputs:
 
 
 class FakeBinaryValve:
-    def __init__(self, *, fail_close: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_close: bool = False,
+        fail_open: bool = False,
+    ) -> None:
+        self.channel = 0
         self.open_state = False
         self.fail_close = fail_close
+        self.fail_open = fail_open
         self.close_attempted = False
 
+    @property
+    def last_known_state(self) -> int:
+        return 1 if self.open_state else 0
+
+    def preflight(self) -> dict[str, object]:
+        return {
+            "port": "FAKE",
+            "role": "Binary Valve",
+            "channel": self.channel,
+            "expected_mode": "reflect",
+            "reported_mode": "reflect",
+            "expected_inverted": False,
+            "inverted": False,
+            "actual_logical_state": self.last_known_state,
+            "internal_output_value": None,
+            "optional_diagnostic_error": None,
+        }
+
     def open(self) -> None:
+        if self.fail_open:
+            raise RuntimeError("binary valve open verification failed")
         self.open_state = True
 
     def close(self) -> None:
@@ -92,10 +121,33 @@ class FakeBinaryValve:
     def is_open(self, *, refresh: bool = True) -> bool:
         return self.open_state
 
+    def verify_closed(self) -> None:
+        if self.open_state:
+            raise RuntimeError("binary valve is not closed")
+
 
 class FakeLed:
     def __init__(self) -> None:
+        self.channel = 1
         self.on_state = False
+
+    @property
+    def last_known_state(self) -> int:
+        return 1 if self.on_state else 0
+
+    def preflight(self) -> dict[str, object]:
+        return {
+            "port": "FAKE",
+            "role": "LED",
+            "channel": self.channel,
+            "expected_mode": "reflect",
+            "reported_mode": "reflect",
+            "expected_inverted": False,
+            "inverted": False,
+            "actual_logical_state": self.last_known_state,
+            "internal_output_value": None,
+            "optional_diagnostic_error": None,
+        }
 
     def on(self) -> None:
         self.on_state = True
@@ -113,12 +165,13 @@ def build_fake_controller(
     capacitance_value: float = 0.0,
     bronkhorst: FakeBronkhorst | None = None,
     binary_valve: FakeBinaryValve | None = None,
+    led: FakeLed | None = None,
 ) -> tuple[WaterProcessController, FakeAnalogInputs]:
     analog = FakeAnalogInputs(capacitance_value=capacitance_value)
     controller = WaterProcessController(
         bronkhorst=bronkhorst or FakeBronkhorst(),
         binary_valve=binary_valve or FakeBinaryValve(),
-        led=FakeLed(),
+        led=led or FakeLed(),
         analog_inputs=analog,
         logger=CsvDataLogger(directory),
         repository=MeasurementRepository(),
@@ -208,8 +261,30 @@ def test_safe_state_attempts_both_valve_closures() -> None:
         assert binary_valve.close_attempted
 
 
+def test_unverified_binary_open_preserves_process_fault_behavior() -> None:
+    with TemporaryDirectory() as temporary_directory:
+        binary_valve = FakeBinaryValve(fail_open=True)
+        controller, _ = build_fake_controller(
+            Path(temporary_directory),
+            binary_valve=binary_valve,
+        )
+        controller.connect()
+
+        with pytest.raises(RuntimeError, match="open verification failed"):
+            controller.start()
+
+        assert controller.state.name == "FAULT"
+        assert any(
+            event.event_type == "PROCESS_FAULT"
+            for event in controller.repository.recent_events()
+        )
+        assert binary_valve.close_attempted
+        controller.disconnect()
+
+
 if __name__ == "__main__":
     test_controller_can_run_twice_without_reconnect()
     test_stop_request_is_immediate_and_persisted_by_worker()
     test_safe_state_attempts_both_valve_closures()
+    test_unverified_binary_open_preserves_process_fault_behavior()
     print("controller reuse, stop and safe state: OK")

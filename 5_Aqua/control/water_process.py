@@ -22,7 +22,7 @@ from data.models import ProcessEvent, ProcessSummary, SystemMeasurement
 from data.repository import MeasurementRepository
 from devices.bronkhorst import BronkhorstFlowController
 from devices.lucid_ai4 import LucidAnalogInput
-from devices.lucid_do import BinaryValve, LedController
+from devices.lucid_do import BinaryValve, LedController, LucidControlError
 from devices.sensors import CapacitanceScaling, HumidityScaling
 
 
@@ -31,6 +31,10 @@ LOGGER = logging.getLogger("aqua.control.water_process")
 
 class WaterProcessError(RuntimeError):
     """Base error for process-control failures."""
+
+
+class LucidDigitalConfigurationError(WaterProcessError):
+    """Critical Lucid digital configuration does not match Aqua safety."""
 
 
 class WaterProcessController:
@@ -101,6 +105,10 @@ class WaterProcessController:
         self._humidity_values: list[float] = []
         self._stop_reason = ""
         self._completed_successfully = False
+        self._lucid_digital_status = "DISCONNECTED"
+        self._lucid_preflight_result = "NOT RUN"
+        self._lucid_preflight_error: str | None = None
+        self._lucid_channel_diagnostics: dict[str, dict[str, object]] = {}
 
     @property
     def state(self) -> ProcessState:
@@ -123,6 +131,57 @@ class WaterProcessController:
     @property
     def empty_detection_settings(self) -> EmptyDetectionSettings:
         return self.empty_detector.settings
+
+    @property
+    def lucid_digital_diagnostics(self) -> dict[str, object]:
+        """Return cached commissioning data without performing hardware I/O."""
+
+        channels: dict[str, dict[str, object]] = {}
+        port = "—"
+        last_communication_error: str | None = None
+        actuators = (
+            ("binary_valve", self.binary_valve, "Binary Valve"),
+            ("led", self.led, "LED"),
+        )
+        for key, actuator, role in actuators:
+            channel = getattr(actuator, "channel", None)
+            entry = dict(self._lucid_channel_diagnostics.get(key, {}))
+            entry.setdefault("role", role)
+            entry.setdefault("channel", channel)
+            entry.setdefault("expected_mode", "reflect")
+            entry.setdefault("expected_inverted", False)
+            if entry.get("port"):
+                port = str(entry["port"])
+
+            output = getattr(actuator, "controller", None)
+            if output is not None:
+                port = str(getattr(output, "port", port))
+                diagnostic_reader = getattr(output, "channel_diagnostics", None)
+                if callable(diagnostic_reader) and isinstance(channel, int):
+                    entry.update(diagnostic_reader(channel))
+                communication_error = getattr(
+                    output,
+                    "last_communication_error",
+                    None,
+                )
+                if communication_error:
+                    last_communication_error = str(communication_error)
+
+            entry["cached_application_state"] = getattr(
+                actuator,
+                "last_known_state",
+                None,
+            )
+            channels[key] = entry
+
+        return {
+            "port": port,
+            "status": self._lucid_digital_status,
+            "preflight": self._lucid_preflight_result,
+            "preflight_error": self._lucid_preflight_error,
+            "last_communication_error": last_communication_error,
+            "channels": channels,
+        }
 
     def configure_empty_detection(self, settings: EmptyDetectionSettings) -> None:
         if self.state == ProcessState.RUNNING:
@@ -164,17 +223,67 @@ class WaterProcessController:
                 "Process can only connect from DISCONNECTED."
             )
 
-        LOGGER.debug("Connecting Bronkhorst and confirming safe outputs")
-        self.bronkhorst.connect()
+        LOGGER.debug(
+            "Connecting Bronkhorst, validating Lucid Digital, and "
+            "confirming safe outputs"
+        )
+        self._lucid_digital_status = "CHECKING"
+        self._lucid_preflight_result = "NOT RUN"
+        self._lucid_preflight_error = None
+        self._lucid_channel_diagnostics.clear()
         try:
-            self._apply_safe_state()
+            self.bronkhorst.connect()
         except Exception:
-            try:
-                self.bronkhorst.disconnect()
-            finally:
-                LOGGER.exception("Safe-state confirmation failed during connect")
+            self._lucid_digital_status = "DISCONNECTED"
+            LOGGER.exception("Bronkhorst connection failed before Lucid preflight")
             raise
 
+        lucid_preflight_valid = False
+        try:
+            self._preflight_lucid_digital_outputs()
+            lucid_preflight_valid = True
+            self._apply_safe_state()
+            self.binary_valve.verify_closed()
+        except Exception as exc:
+            if isinstance(exc, LucidDigitalConfigurationError):
+                self._lucid_digital_status = "CONFIG ERROR"
+                self._lucid_preflight_result = "FAIL"
+                self._lucid_preflight_error = str(exc)
+            elif (
+                self._exception_contains_lucid_error(exc)
+                or not lucid_preflight_valid
+                or self.binary_valve.last_known_state
+                != self.binary_valve.closed_state
+            ):
+                self._lucid_digital_status = "COMM ERROR"
+                self._lucid_preflight_result = "FAIL"
+                self._lucid_preflight_error = str(exc)
+            else:
+                # The Lucid checks and verified binary safe state passed; a
+                # different device (for example Bronkhorst) blocked READY.
+                self._lucid_digital_status = "OK"
+                self._lucid_preflight_result = "PASS"
+                self._lucid_preflight_error = None
+            if self.bronkhorst.is_connected:
+                try:
+                    self.bronkhorst.force_valve_closed()
+                except Exception:
+                    LOGGER.exception(
+                        "Could not force Bronkhorst safe state after "
+                        "connection failure"
+                    )
+            try:
+                self.bronkhorst.disconnect()
+            except Exception:
+                LOGGER.exception(
+                    "Bronkhorst cleanup failed after Lucid/safe-state preflight"
+                )
+            LOGGER.exception("Lucid/safe-state preflight failed during connect")
+            raise
+
+        self._lucid_digital_status = "OK"
+        self._lucid_preflight_result = "PASS"
+        self._lucid_preflight_error = None
         self.state_machine.mark_ready(
             "Devices connected and safe state confirmed."
         )
@@ -184,6 +293,8 @@ class WaterProcessController:
             raise WaterProcessError(
                 "Cannot disconnect while the process is running. Stop the run first."
             )
+        if self.state == ProcessState.DISCONNECTED:
+            return
 
         safe_state_error: Exception | None = None
         try:
@@ -195,11 +306,71 @@ class WaterProcessController:
             self.bronkhorst.disconnect()
             if self.state != ProcessState.DISCONNECTED:
                 self.state_machine.mark_disconnected("Devices disconnected.")
+            self._lucid_digital_status = "DISCONNECTED"
+            self._lucid_preflight_result = "NOT RUN"
 
         if safe_state_error is not None:
             raise WaterProcessError(
                 "Hardware disconnected, but safe-state confirmation was incomplete."
             ) from safe_state_error
+
+    def _preflight_lucid_digital_outputs(self) -> None:
+        """Require known reflect/non-inverted outputs before READY."""
+
+        inspections = (
+            ("binary_valve", self.binary_valve),
+            ("led", self.led),
+        )
+        for key, actuator in inspections:
+            try:
+                details = actuator.preflight()
+            except LucidControlError:
+                raise
+            except Exception as exc:
+                raise LucidControlError(
+                    f"Lucid Digital critical preflight read failed for {key}."
+                ) from exc
+            self._lucid_channel_diagnostics[key] = dict(details)
+
+        for details in self._lucid_channel_diagnostics.values():
+            port = str(details.get("port", "unknown port"))
+            channel = details.get("channel", "?")
+            role = details.get("role", "Digital Output")
+            reported_mode = str(details.get("reported_mode", "unavailable"))
+            if reported_mode.lower() != "reflect":
+                raise LucidDigitalConfigurationError(
+                    "Lucid Digital configuration error: "
+                    f"{port} CH{channel} {role} expected "
+                    f"outDiMode=reflect, received "
+                    f"outDiMode={reported_mode}. The output cannot be "
+                    "controlled safely until the hardware configuration "
+                    "is corrected."
+                )
+
+            inverted = details.get("inverted")
+            if inverted is not False:
+                received = (
+                    "on" if inverted is True else str(inverted)
+                )
+                raise LucidDigitalConfigurationError(
+                    "Lucid Digital configuration error: "
+                    f"{port} CH{channel} {role} expected "
+                    f"outDiInverted=off, received "
+                    f"outDiInverted={received}. The output cannot be "
+                    "controlled safely until the hardware configuration "
+                    "is corrected."
+                )
+
+    @staticmethod
+    def _exception_contains_lucid_error(exc: BaseException) -> bool:
+        current: BaseException | None = exc
+        visited: set[int] = set()
+        while current is not None and id(current) not in visited:
+            if isinstance(current, LucidControlError):
+                return True
+            visited.add(id(current))
+            current = current.__cause__ or current.__context__
+        return False
 
     def set_led(self, enabled: bool) -> None:
         if enabled:

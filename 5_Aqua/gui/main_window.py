@@ -344,6 +344,7 @@ class ProcessControlWindow(QMainWindow):
         layout.setVerticalSpacing(3)
 
         self.system_controller_status = self._new_system_status_label()
+        self.system_lucid_status = self._new_system_status_label()
         self.system_telemetry_status = self._new_system_status_label()
         self.system_sampling_status = self._new_system_status_label()
         self.system_logger_status = self._new_system_status_label()
@@ -361,6 +362,7 @@ class ProcessControlWindow(QMainWindow):
 
         rows = (
             ("Controller", self.system_controller_status),
+            ("Lucid Digital", self.system_lucid_status),
             ("Telemetry", self.system_telemetry_status),
             ("Sampling", self.system_sampling_status),
             ("Run logger", self.system_logger_status),
@@ -374,6 +376,7 @@ class ProcessControlWindow(QMainWindow):
 
         self.system_latest_run.setText("No completed run")
         self.system_logger_status.setText("Idle")
+        self.system_lucid_status.setText("DISCONNECTED")
         return group
 
     @staticmethod
@@ -1111,6 +1114,22 @@ class ProcessControlWindow(QMainWindow):
                 f"{sample_interval:g} s configured"
             )
 
+        lucid_value = snapshot.get("lucid_digital")
+        lucid = lucid_value if isinstance(lucid_value, dict) else {}
+        lucid_status = str(lucid.get("status", "DISCONNECTED")).upper()
+        self.system_lucid_status.setText(lucid_status)
+        set_dynamic_property(
+            self.system_lucid_status,
+            "status",
+            {
+                "OK": "ok",
+                "CONFIG ERROR": "error",
+                "COMM ERROR": "error",
+                "CHECKING": "warning",
+                "DISCONNECTED": "muted",
+            }.get(lucid_status, "muted"),
+        )
+
     def _render_developer_snapshot(self) -> None:
         snapshot = self._developer_snapshot
         process_state = self._state_name
@@ -1287,6 +1306,128 @@ class ProcessControlWindow(QMainWindow):
             (
                 ("Downstream binary valve", binary_state),
                 ("LED", led_state),
+            ),
+        )
+
+        lucid_value = snapshot.get("lucid_digital")
+        lucid = lucid_value if isinstance(lucid_value, dict) else {}
+        lucid_channels_value = lucid.get("channels")
+        lucid_channels = (
+            lucid_channels_value
+            if isinstance(lucid_channels_value, dict)
+            else {}
+        )
+        binary_value = lucid_channels.get("binary_valve")
+        binary = binary_value if isinstance(binary_value, dict) else {}
+        led_value = lucid_channels.get("led")
+        led = led_value if isinstance(led_value, dict) else {}
+        binary_prefix = f"Binary Valve / CH{binary.get('channel', '?')}"
+        led_prefix = f"LED / CH{led.get('channel', '?')}"
+
+        def lucid_state(
+            value: object,
+            active_text: str,
+            inactive_text: str,
+        ) -> str:
+            if value == 1:
+                return f"{active_text} (1)"
+            if value == 0:
+                return f"{inactive_text} (0)"
+            return "—"
+
+        def lucid_inverted(value: object) -> str:
+            if value is True:
+                return "on"
+            if value is False:
+                return "off"
+            return "—"
+
+        def optional_value(channel: dict[str, object]) -> str:
+            if channel.get("optional_diagnostic_error"):
+                return "Unavailable / transient communication error"
+            value = channel.get("internal_output_value")
+            return "—" if value is None else str(value)
+
+        self._add_developer_section(
+            "LUCID DIGITAL",
+            (
+                ("Port", str(lucid.get("port", "—"))),
+                ("Status", str(lucid.get("status", "DISCONNECTED"))),
+                ("Preflight", str(lucid.get("preflight", "NOT RUN"))),
+                (
+                    "Preflight error",
+                    str(lucid.get("preflight_error") or "—"),
+                ),
+                (
+                    f"{binary_prefix} expected mode",
+                    str(binary.get("expected_mode", "reflect")),
+                ),
+                (
+                    f"{binary_prefix} reported mode",
+                    str(binary.get("reported_mode") or "—"),
+                ),
+                (f"{binary_prefix} expected inverted", "off"),
+                (
+                    f"{binary_prefix} reported inverted",
+                    lucid_inverted(binary.get("inverted")),
+                ),
+                (
+                    f"{binary_prefix} actual logical read-back",
+                    lucid_state(
+                        binary.get("actual_logical_state"),
+                        "OPEN",
+                        "CLOSED",
+                    ),
+                ),
+                (
+                    f"{binary_prefix} cached application state",
+                    lucid_state(
+                        binary.get("cached_application_state"),
+                        "OPEN",
+                        "CLOSED",
+                    ),
+                ),
+                (
+                    f"{binary_prefix} internal/configured outDiValue",
+                    optional_value(binary),
+                ),
+                (
+                    f"{led_prefix} expected mode",
+                    str(led.get("expected_mode", "reflect")),
+                ),
+                (
+                    f"{led_prefix} reported mode",
+                    str(led.get("reported_mode") or "—"),
+                ),
+                (f"{led_prefix} expected inverted", "off"),
+                (
+                    f"{led_prefix} reported inverted",
+                    lucid_inverted(led.get("inverted")),
+                ),
+                (
+                    f"{led_prefix} actual logical read-back",
+                    lucid_state(
+                        led.get("actual_logical_state"),
+                        "ON",
+                        "OFF",
+                    ),
+                ),
+                (
+                    f"{led_prefix} cached application state",
+                    lucid_state(
+                        led.get("cached_application_state"),
+                        "ON",
+                        "OFF",
+                    ),
+                ),
+                (
+                    f"{led_prefix} internal/configured outDiValue",
+                    optional_value(led),
+                ),
+                (
+                    "Last communication error",
+                    str(lucid.get("last_communication_error") or "—"),
+                ),
             ),
         )
 

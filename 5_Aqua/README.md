@@ -36,6 +36,33 @@ A manual stop is possible at any time. Closed-loop flow control (`flow setpoint 
   - baud rate: 38400
   - node address: 3
 
+### Lucid Digital commissioning requirements
+
+READY requires the following persistent hardware configuration and readable
+logical state:
+
+| Port / channel | Function | `outDiMode` | `outDiInverted` | Safe logical state |
+| --- | --- | --- | --- | --- |
+| COM4 CH0 | Binary Valve | `reflect` | `off` | `0` / closed |
+| COM4 CH1 | LED | `reflect` | `off` | `0` / off |
+
+Normal Aqua Connect only inspects this configuration. It does **not** run
+`-soutDiMode=reflect -p` or otherwise rewrite persistent Lucid settings. A
+reported mode such as `inactive` prevents READY and must be corrected during
+explicit hardware commissioning.
+
+On the commissioned Windows installation, successful `LucidIoCtrl` commands
+commonly return exit code `1`; exit codes `0` and `1` are therefore accepted
+only when stdout and stderr contain no Lucid error. `(0x10) Internal I/O read
+error` and `(0x11) Invalid number of bytes received` are transient protocol
+errors. Aqua retries read-only commands at most three times, but never blindly
+repeats an actuator write.
+
+The authoritative output state is the logical read-back from `-tL -r`.
+`outDiValue` is internal/configured diagnostic information only and may
+disagree with the actual output. It is never used for valve/LED state,
+safe-state verification, or READY.
+
 `CAPACITANCE_CHANNEL` and `HUMIDITY_CHANNEL` in `config.py` are the single source of truth for the complete AI signal chain:
 
 ```text
@@ -140,6 +167,8 @@ The `Developer Insights` tab exposes the diagnostic state that is intentionally 
 - raw valve output and converted valve output percentage
 - flow setpoint readback
 - binary valve / LED state
+- Lucid Digital preflight, critical configuration/read-back, cached state,
+  optional `outDiValue`, and last communication error
 - empty-detector status
 - in-memory measurement/event counts
 - active and most recent measurement/event CSV paths

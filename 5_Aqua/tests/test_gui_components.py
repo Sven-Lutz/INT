@@ -60,6 +60,7 @@ def sample_developer_snapshot(
     measurement: SystemMeasurement | None = None,
 ) -> dict[str, object]:
     current_measurement = measurement or sample_measurement()
+    lucid_status = "DISCONNECTED" if process_state == "DISCONNECTED" else "OK"
     return {
         "process_state": process_state,
         "sample_interval_seconds": 0.5,
@@ -70,6 +71,37 @@ def sample_developer_snapshot(
         "event_csv": "C:/data/events.csv",
         "summary_csv": "C:/data/summaries.csv",
         "runtime_log": "C:/data/aqua_runtime.log",
+        "lucid_digital": {
+            "port": "COM4",
+            "status": lucid_status,
+            "preflight": "PASS",
+            "preflight_error": None,
+            "last_communication_error": None,
+            "channels": {
+                "binary_valve": {
+                    "channel": 0,
+                    "expected_mode": "reflect",
+                    "reported_mode": "reflect",
+                    "inverted": False,
+                    "actual_logical_state": 0,
+                    "cached_application_state": 0,
+                    "internal_output_value": 1,
+                    "optional_diagnostic_error": None,
+                },
+                "led": {
+                    "channel": 1,
+                    "expected_mode": "reflect",
+                    "reported_mode": "reflect",
+                    "inverted": False,
+                    "actual_logical_state": 1,
+                    "cached_application_state": 1,
+                    "internal_output_value": None,
+                    "optional_diagnostic_error": (
+                        "Unavailable / transient communication error"
+                    ),
+                },
+            },
+        },
         "empty_detector": (
             "Capacitance DRAINING "
             "(0/3 samples at or below 2 scaled units)"
@@ -463,6 +495,7 @@ def test_light_ui_preserves_operator_diagnostics_and_controls() -> None:
     assert window.telemetry_context_label.property("status") == "historical"
     assert "last sample" in window.led_state_label.text()
     assert window.system_controller_status.text() == "Disconnected"
+    assert window.system_lucid_status.text() == "DISCONNECTED"
     assert window.system_telemetry_status.text() == "Historical sample"
     assert developer_value(
         window,
@@ -474,6 +507,23 @@ def test_light_ui_preserves_operator_diagnostics_and_controls() -> None:
         "DATA / LOGGING",
         "Runtime log",
     ) == "C:/data/aqua_runtime.log"
+    assert developer_value(window, "LUCID DIGITAL", "Port") == "COM4"
+    assert developer_value(window, "LUCID DIGITAL", "Preflight") == "PASS"
+    assert developer_value(
+        window,
+        "LUCID DIGITAL",
+        "Binary Valve / CH0 actual logical read-back",
+    ) == "CLOSED (0)"
+    assert developer_value(
+        window,
+        "LUCID DIGITAL",
+        "Binary Valve / CH0 internal/configured outDiValue",
+    ) == "1"
+    assert developer_value(
+        window,
+        "LUCID DIGITAL",
+        "LED / CH1 internal/configured outDiValue",
+    ) == "Unavailable / transient communication error"
 
     tabs.setCurrentIndex(1)
     app.processEvents()
@@ -517,6 +567,16 @@ def test_light_ui_preserves_operator_diagnostics_and_controls() -> None:
         "BRONKHORST",
         "Measured flow",
     ) == "12.50 ml/min"
+
+    config_error_snapshot = sample_developer_snapshot()
+    lucid = config_error_snapshot["lucid_digital"]
+    assert isinstance(lucid, dict)
+    lucid["status"] = "CONFIG ERROR"
+    lucid["preflight"] = "FAIL"
+    window.update_developer_snapshot(config_error_snapshot)
+    assert window.system_lucid_status.text() == "CONFIG ERROR"
+    assert window.system_lucid_status.property("status") == "error"
+    assert developer_value(window, "LUCID DIGITAL", "Preflight") == "FAIL"
     window.close()
 
 
