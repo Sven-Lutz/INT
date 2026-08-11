@@ -78,8 +78,8 @@ class TelemetryCard(QFrame):
             self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(11, 9, 11, 9)
-        layout.setSpacing(2)
+        layout.setContentsMargins(7, 5, 7, 5)
+        layout.setSpacing(1)
 
         self.title_label = QLabel(title.upper())
         self.title_label.setObjectName("telemetryTitle")
@@ -126,8 +126,8 @@ class ProcessControlWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Aqua Process Control")
-        self.resize(1540, 940)
+        self.setWindowTitle("Process Control")
+        self.resize(1440, 900)
         self.setMinimumSize(1180, 720)
 
         self._state_name = "DISCONNECTED"
@@ -142,8 +142,8 @@ class ProcessControlWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(12, 10, 12, 12)
-        root.setSpacing(9)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(6)
 
         root.addWidget(self._build_header())
 
@@ -174,29 +174,22 @@ class ProcessControlWindow(QMainWindow):
         frame = QFrame()
         frame.setObjectName("headerFrame")
         layout = QHBoxLayout(frame)
-        layout.setContentsMargins(15, 10, 15, 10)
+        layout.setContentsMargins(10, 7, 10, 7)
 
-        title_box = QVBoxLayout()
-        title_box.setSpacing(0)
-        title = QLabel("AQUA · Process Control")
+        title = QLabel("Process Control")
         title.setObjectName("appTitle")
-        subtitle = QLabel(
-            "Gravity drain · capacitance empty detection · live instrumentation"
-        )
-        subtitle.setObjectName("appSubtitle")
-        title_box.addWidget(title)
-        title_box.addWidget(subtitle)
 
-        self.state_label = QLabel("DISCONNECTED")
-        self.state_label.setProperty("statusChip", True)
-        self.telemetry_status_label = QLabel("TELEMETRY —")
-        self.telemetry_status_label.setProperty("statusChip", True)
+        self.state_label = QLabel("State: DISCONNECTED")
+        self.state_label.setProperty("stateDisplay", True)
+        self.telemetry_status_label = QLabel("●")
+        self.telemetry_status_label.setProperty("telemetryIndicator", True)
+        self.telemetry_status_label.setToolTip("Telemetry unavailable")
 
         self.connect_button = QPushButton("Connect")
         self.connect_button.setObjectName("primaryButton")
         self.disconnect_button = QPushButton("Disconnect")
 
-        layout.addLayout(title_box)
+        layout.addWidget(title)
         layout.addStretch()
         layout.addWidget(self.telemetry_status_label)
         layout.addWidget(self.state_label)
@@ -208,8 +201,8 @@ class ProcessControlWindow(QMainWindow):
     def _build_left_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 5, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 4, 0)
+        layout.setSpacing(5)
         layout.addWidget(self._build_process_group())
         layout.addWidget(self._build_telemetry_group())
         layout.addWidget(self._build_output_group())
@@ -245,10 +238,10 @@ class ProcessControlWindow(QMainWindow):
 
         self.threshold_hint = QLabel()
         self.threshold_hint.setWordWrap(True)
-        self.threshold_hint.setObjectName("appSubtitle")
+        self.threshold_hint.setObjectName("secondaryText")
 
-        self.start_button = QPushButton("START DRAINING")
-        self.start_button.setObjectName("primaryButton")
+        self.start_button = QPushButton("Start draining")
+        self.start_button.setObjectName("startButton")
         self.stop_button = QPushButton("STOP")
         self.stop_button.setObjectName("dangerButton")
 
@@ -263,9 +256,9 @@ class ProcessControlWindow(QMainWindow):
         return group
 
     def _build_telemetry_group(self) -> QGroupBox:
-        group = QGroupBox("Live Telemetry")
+        group = QGroupBox("Telemetry")
         layout = QGridLayout(group)
-        layout.setSpacing(6)
+        layout.setSpacing(4)
 
         self.telemetry_cards: dict[str, TelemetryCard] = {
             "flow": TelemetryCard("Flow", metric_key="flow"),
@@ -306,12 +299,19 @@ class ProcessControlWindow(QMainWindow):
         return group
 
     def _build_output_group(self) -> QGroupBox:
-        group = QGroupBox("Manual Output")
+        group = QGroupBox("LED")
         layout = QHBoxLayout(group)
-        self.led_on_button = QPushButton("LED on")
-        self.led_off_button = QPushButton("LED off")
+        self.led_on_button = QPushButton("LED ON")
+        self.led_on_button.setObjectName("ledOnButton")
+        self.led_off_button = QPushButton("LED OFF")
+        self.led_off_button.setObjectName("ledOffButton")
+        self.led_state_label = QLabel("LED: —")
+        self.led_state_label.setObjectName("ledState")
+        self.led_state_label.setProperty("ledState", "unknown")
         layout.addWidget(self.led_on_button)
         layout.addWidget(self.led_off_button)
+        layout.addStretch()
+        layout.addWidget(self.led_state_label)
         return group
 
     def _build_right_panel(self) -> QWidget:
@@ -319,13 +319,13 @@ class ProcessControlWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
         splitter.addWidget(self._build_chart_group())
         splitter.addWidget(self._build_diagnostics_tabs())
-        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([650, 250])
+        splitter.setSizes([700, 190])
         return splitter
 
     def _build_chart_group(self) -> QGroupBox:
-        group = QGroupBox("Live Charts")
+        group = QGroupBox("Charts")
         outer = QVBoxLayout(group)
 
         toolbar = QHBoxLayout()
@@ -467,7 +467,7 @@ class ProcessControlWindow(QMainWindow):
     def set_process_state(self, state_name: str) -> None:
         state_name = state_name.upper()
         self._state_name = state_name
-        self.state_label.setText(state_name)
+        self.state_label.setText(f"State: {state_name}")
 
         status_map = {
             "DISCONNECTED": "disconnected",
@@ -546,7 +546,7 @@ class ProcessControlWindow(QMainWindow):
 
         self.telemetry_cards["flow"].set_value(
             format_metric("flow", measurement.flow_ml_min),
-            detail="measured process telemetry",
+            detail="",
         )
         cap_severity = "ok" if measurement.capacitance_state == "FILLED" else "normal"
         if measurement.capacitance_state == "EMPTY":
@@ -594,6 +594,14 @@ class ProcessControlWindow(QMainWindow):
             detail=f"LED {'ON' if measurement.led_on else 'OFF'}",
             severity="ok" if measurement.binary_valve_open else "normal",
         )
+        self.led_state_label.setText(
+            f"LED: {'ON' if measurement.led_on else 'OFF'}"
+        )
+        set_dynamic_property(
+            self.led_state_label,
+            "ledState",
+            "on" if measurement.led_on else "off",
+        )
 
         if append_to_charts:
             chart_values = {
@@ -611,16 +619,23 @@ class ProcessControlWindow(QMainWindow):
 
     def _update_freshness(self) -> None:
         if self._last_telemetry_monotonic is None:
-            self.telemetry_status_label.setText("TELEMETRY —")
+            self.telemetry_status_label.setText("●")
+            self.telemetry_status_label.setToolTip("Telemetry unavailable")
             set_dynamic_property(self.telemetry_status_label, "status", "muted")
             return
 
         age = max(0.0, time.monotonic() - self._last_telemetry_monotonic)
         if age <= 2.5:
-            self.telemetry_status_label.setText(f"LIVE · {age:.1f}s")
+            self.telemetry_status_label.setText("●")
+            self.telemetry_status_label.setToolTip(
+                f"Telemetry current ({age:.1f} s old)"
+            )
             set_dynamic_property(self.telemetry_status_label, "status", "live")
         else:
-            self.telemetry_status_label.setText(f"STALE · {age:.1f}s")
+            self.telemetry_status_label.setText(f"● STALE {age:.1f} s")
+            self.telemetry_status_label.setToolTip(
+                f"Telemetry stale ({age:.1f} s old)"
+            )
             set_dynamic_property(self.telemetry_status_label, "status", "stale")
 
     # ------------------------------------------------------------------
@@ -716,21 +731,21 @@ class ProcessControlWindow(QMainWindow):
     def _render_log(self) -> None:
         minimum = self._level_number(self.log_level_filter.currentText())
         colors = {
-            "DEBUG": "#71879a",
-            "INFO": "#cbd8e3",
-            "WARNING": "#ffc96b",
-            "ERROR": "#ff7d8d",
-            "CRITICAL": "#ff5c70",
+            "DEBUG": "#737b84",
+            "INFO": "#252a30",
+            "WARNING": "#9a5900",
+            "ERROR": "#b42318",
+            "CRITICAL": "#8a1024",
         }
         lines: list[str] = []
         for timestamp, level, source, message in self._log_entries:
             if self._level_number(level) < minimum:
                 continue
-            color = colors.get(level, "#cbd8e3")
+            color = colors.get(level, "#252a30")
             lines.append(
-                f'<span style="color:#71879a">{html.escape(timestamp)}</span> '
+                f'<span style="color:#69717a">{html.escape(timestamp)}</span> '
                 f'<span style="color:{color};font-weight:600">{html.escape(level):<8}</span> '
-                f'<span style="color:#6fa6bf">{html.escape(source)}</span> '
+                f'<span style="color:#315b75">{html.escape(source)}</span> '
                 f'<span style="color:{color}">{html.escape(message)}</span>'
             )
 

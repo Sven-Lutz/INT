@@ -4,7 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
-from PySide6.QtCore import QPoint, QPointF, Qt, Signal
+from PySide6.QtCore import QMargins, QPoint, QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QToolTip
 
@@ -63,7 +63,7 @@ METRIC_CONFIG: dict[str, MetricConfig] = {
         key="flow",
         label="Flow",
         unit="ml/min",
-        color="#65d9ff",
+        color="#2369a1",
         y_minimum=0.0,
         y_maximum=None,
         decimals=2,
@@ -73,7 +73,7 @@ METRIC_CONFIG: dict[str, MetricConfig] = {
         key="capacitance",
         label="Capacitance",
         unit="scaled",
-        color="#b49cff",
+        color="#73519a",
         y_minimum=0.0,
         y_maximum=CAPACITANCE_FULL_VALUE * 1.2,
         decimals=2,
@@ -82,7 +82,7 @@ METRIC_CONFIG: dict[str, MetricConfig] = {
         key="humidity",
         label="Humidity",
         unit="%",
-        color="#72e0a1",
+        color="#2f7d59",
         y_minimum=0.0,
         y_maximum=100.0,
         decimals=1,
@@ -91,7 +91,7 @@ METRIC_CONFIG: dict[str, MetricConfig] = {
         key="valve_position",
         label="Valve Position",
         unit="%",
-        color="#ffc96b",
+        color="#c47722",
         y_minimum=0.0,
         y_maximum=100.0,
         decimals=1,
@@ -100,7 +100,7 @@ METRIC_CONFIG: dict[str, MetricConfig] = {
         key="volume",
         label="Drained Volume",
         unit="ml",
-        color="#ff9f73",
+        color="#b45245",
         y_minimum=0.0,
         y_maximum=None,
         decimals=1,
@@ -110,7 +110,7 @@ METRIC_CONFIG: dict[str, MetricConfig] = {
         key="temperature",
         label="Temperature",
         unit="°C",
-        color="#f48fb1",
+        color="#a14f74",
         y_minimum=0.0,
         y_maximum=50.0,
         decimals=1,
@@ -172,10 +172,12 @@ class PersistentMetricChart(QChartView):
         chart.setTitle(self.metric_config.label)
         chart.legend().hide()
         chart.setAnimationOptions(QChart.AnimationOption.NoAnimation)
-        chart.setBackgroundBrush(QColor("#0c141e"))
+        chart.setDropShadowEnabled(False)
+        chart.setMargins(QMargins(3, 3, 3, 3))
+        chart.setBackgroundBrush(QColor("#ffffff"))
         chart.setPlotAreaBackgroundVisible(True)
-        chart.setPlotAreaBackgroundBrush(QColor("#0a1119"))
-        chart.setTitleBrush(QColor("#dce7f2"))
+        chart.setPlotAreaBackgroundBrush(QColor("#ffffff"))
+        chart.setTitleBrush(QColor("#2c333a"))
 
         self.x_axis = QValueAxis()
         self.x_axis.setTitleText("Time [s]")
@@ -191,10 +193,10 @@ class PersistentMetricChart(QChartView):
         self.y_axis.setTickCount(6)
 
         for axis in (self.x_axis, self.y_axis):
-            axis.setLabelsColor(QColor("#8ea2b5"))
-            axis.setTitleBrush(QColor("#8ea2b5"))
-            axis.setGridLineColor(QColor("#223141"))
-            axis.setLinePenColor(QColor("#34495d"))
+            axis.setLabelsColor(QColor("#59636d"))
+            axis.setTitleBrush(QColor("#4b555f"))
+            axis.setGridLineColor(QColor("#e1e4e7"))
+            axis.setLinePenColor(QColor("#9aa1a8"))
 
         minimum, maximum = self.metric_config.axis_range(None)
         self.y_axis.setRange(minimum, maximum)
@@ -206,7 +208,7 @@ class PersistentMetricChart(QChartView):
 
         self.setChart(chart)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setMinimumHeight(210)
+        self.setMinimumHeight(190)
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(

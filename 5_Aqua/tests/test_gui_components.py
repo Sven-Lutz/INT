@@ -9,14 +9,14 @@ from tempfile import TemporaryDirectory
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QTabWidget, QToolTip
 
 from data.models import SystemMeasurement
 from gui.charting import PersistentMetricChart
 from gui.logging_bridge import configure_runtime_logging
-from gui.main_window import ProcessControlWindow
+from gui.main_window import CHART_ORDER, ProcessControlWindow
 from gui.runtime import ProcessRuntime
 from tests.test_controller_reuse import build_fake_controller
 
@@ -63,6 +63,13 @@ def test_chart_click_history_and_exact_sample_storage() -> None:
     assert chart.series.at(1).x() == 20.0
     assert chart.series.at(1).y() == 3.75
     assert chart.x_axis.min() == 10.0
+    assert chart.chart().backgroundBrush().color().name() == "#ffffff"
+    assert chart.chart().plotAreaBackgroundBrush().color().name() == "#ffffff"
+
+    chart._show_hover_tooltip(QPointF(1.0, 2.5), True)
+    assert "2.50 ml/min" in QToolTip.text()
+    assert "t = 1.0 s" in QToolTip.text()
+    chart._show_hover_tooltip(QPointF(), False)
 
     chart.set_full_history(True)
     assert chart.x_axis.min() == 0.0
@@ -93,10 +100,18 @@ def test_window_telemetry_focus_and_escape_overview() -> None:
 
     assert window.metric_charts["flow"].latest_value == measurement.flow_ml_min
     assert window.metric_charts["capacitance"].latest_value == 20.0
+    assert window.windowTitle() == "Process Control"
+    assert set(window.metric_charts) == set(CHART_ORDER)
+    assert set(window.metric_toggle_buttons) == set(CHART_ORDER)
+    assert " V" not in window.telemetry_cards["capacitance"].value_label.text()
     assert "raw: 4.200 V" in window.telemetry_cards[
         "capacitance"
     ].detail_label.text()
     assert "50.0 %" in window.telemetry_cards["humidity"].value_label.text()
+    assert window.led_state_label.text() == "LED: OFF"
+    assert window.telemetry_status_label.text() == "●"
+    assert window.telemetry_status_label.property("status") == "live"
+    assert "Telemetry current" in window.telemetry_status_label.toolTip()
 
     QTest.mouseClick(
         window.telemetry_cards["temperature"],
@@ -112,12 +127,100 @@ def test_window_telemetry_focus_and_escape_overview() -> None:
     assert window._focused_metric is None
     assert window.metric_charts["flow"].isVisible()
 
+    window.focus_metric_chart("temperature")
+    QTest.mouseClick(window.overview_button, Qt.MouseButton.LeftButton)
+    app.processEvents()
+    assert window._focused_metric is None
+
+    window.metric_toggle_buttons["volume"].setChecked(True)
+    app.processEvents()
+    assert window.metric_charts["volume"].isVisible()
+    window.full_history_check.setChecked(True)
+    assert all(
+        chart._show_full_history
+        for chart in window.metric_charts.values()
+    )
+
+    window._last_telemetry_monotonic = time.monotonic() - 3.0
+    window._update_freshness()
+    assert "STALE" in window.telemetry_status_label.text()
+    assert window.telemetry_status_label.property("status") == "stale"
+
     window.set_process_state("READY")
+    assert window.state_label.text() == "State: READY"
+    assert not window.connect_button.isEnabled()
+    assert window.disconnect_button.isEnabled()
+    assert not window.stop_button.isEnabled()
     QTest.mouseClick(window.start_button, Qt.MouseButton.LeftButton)
     assert window._start_pending
     assert not window.start_button.isEnabled()
     window.set_start_pending(False)
     assert window.start_button.isEnabled()
+    window.close()
+
+
+def test_light_ui_preserves_operator_diagnostics_and_controls() -> None:
+    app = application()
+    window = ProcessControlWindow()
+    window.show()
+    app.processEvents()
+
+    visible_labels = [label.text() for label in window.findChildren(QLabel)]
+    assert all("AQUA" not in text.upper() for text in visible_labels)
+    assert "LIVE" not in visible_labels
+    assert window.led_on_button.objectName() == "ledOnButton"
+    assert window.led_off_button.objectName() == "ledOffButton"
+    assert window.start_button.text() == "Start draining"
+    assert window.stop_button.text() == "STOP"
+
+    led_requests: list[bool] = []
+    stop_requests: list[bool] = []
+    window.led_requested.connect(led_requests.append)
+    window.stop_requested.connect(lambda: stop_requests.append(True))
+    window.set_process_state("READY")
+    QTest.mouseClick(window.led_on_button, Qt.MouseButton.LeftButton)
+    QTest.mouseClick(window.led_off_button, Qt.MouseButton.LeftButton)
+    assert led_requests == [True, False]
+
+    window.set_process_state("RUNNING")
+    assert not window.start_button.isEnabled()
+    assert not window.disconnect_button.isEnabled()
+    assert window.stop_button.isEnabled()
+    assert not window.led_on_button.isEnabled()
+    assert not window.led_off_button.isEnabled()
+    QTest.mouseClick(window.stop_button, Qt.MouseButton.LeftButton)
+    assert stop_requests == [True]
+
+    tabs = window.findChild(QTabWidget)
+    assert tabs is not None
+    assert [tabs.tabText(index) for index in range(tabs.count())] == [
+        "Operator Log",
+        "Developer Insights",
+    ]
+    assert window.log_output.document().maximumBlockCount() == 1200
+    assert [
+        window.log_level_filter.itemText(index)
+        for index in range(window.log_level_filter.count())
+    ] == ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+    window.log_level_filter.setCurrentText("DEBUG")
+    window.append_log("diagnostic detail", "DEBUG", source="aqua.test")
+    window.append_log("operator fault", "ERROR", source="aqua.test")
+    assert "diagnostic detail" in window.log_output.toPlainText()
+    assert "operator fault" in window.log_output.toPlainText()
+    window.log_level_filter.setCurrentText("ERROR")
+    assert "diagnostic detail" not in window.log_output.toPlainText()
+    assert "operator fault" in window.log_output.toPlainText()
+
+    window.update_developer_snapshot(
+        {"measurement": {"capacitance_value": 20.0}}
+    )
+    QTest.mouseClick(
+        window.copy_developer_button,
+        Qt.MouseButton.LeftButton,
+    )
+    assert "capacitance_value" in QApplication.clipboard().text()
+    assert window.developer_output.isReadOnly()
     window.close()
 
 
@@ -196,6 +299,7 @@ def test_runtime_logging_is_rotating_bounded_and_not_duplicated() -> None:
 if __name__ == "__main__":
     test_chart_click_history_and_exact_sample_storage()
     test_window_telemetry_focus_and_escape_overview()
+    test_light_ui_preserves_operator_diagnostics_and_controls()
     test_runtime_coalesces_duplicate_start_but_allows_later_run()
     test_runtime_logging_is_rotating_bounded_and_not_duplicated()
     print("GUI chart interactions: OK")

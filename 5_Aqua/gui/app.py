@@ -18,7 +18,7 @@ __all__ = ["ProcessControlWindow", "main"]
 
 def main() -> int:
     application = QApplication(sys.argv)
-    application.setApplicationName("Aqua Process Control")
+    application.setApplicationName("Process Control")
     application.setOrganizationName("Aqua")
     application.setStyle("Fusion")
     application.setStyleSheet(AQUA_STYLESHEET)
