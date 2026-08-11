@@ -295,7 +295,7 @@ class WaterProcessController:
 
             settings = self.empty_detector.settings
             empty_condition = (
-                f"capacitance <= {settings.empty_threshold:g} "
+                f"capacitance <= {settings.empty_threshold:g} V "
                 f"for {settings.consecutive_samples} "
                 "consecutive samples"
             )

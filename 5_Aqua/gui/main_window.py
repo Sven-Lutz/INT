@@ -176,6 +176,7 @@ class ProcessControlWindow(QMainWindow):
         self.empty_threshold.setValue(
             CAPACITANCE_EMPTY_THRESHOLD
         )
+        self.empty_threshold.setSuffix(" V")
 
         self.threshold_hint = QLabel()
         self.threshold_hint.setEnabled(False)
@@ -349,7 +350,7 @@ class ProcessControlWindow(QMainWindow):
 
         self.threshold_hint.setText(
             "Stop when capacitance ≤ "
-            f"{self.empty_threshold.value():g} for "
+            f"{self.empty_threshold.value():g} V for "
             f"{CAPACITANCE_EMPTY_CONSECUTIVE_SAMPLES} consecutive "
             "samples."
         )

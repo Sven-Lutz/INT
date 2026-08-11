@@ -63,22 +63,22 @@ HUMIDITY_CHANNEL = 1
 # SENSOR SCALING
 # =============================================================================
 
-# The capacitance sensor is read as a voltage and converted into the
-# process value the operator sees:
+# The capacitance sensor reports a voltage, and that voltage is the
+# process value: capacitance is measured and displayed in volts.
 #
-#   capacitance_value = voltage * CAPACITANCE_VALUE_PER_VOLT
-#                       + CAPACITANCE_VALUE_OFFSET
+#   capacitance_value [V] = voltage * CAPACITANCE_VALUE_PER_VOLT
+#                           + CAPACITANCE_VALUE_OFFSET
 #
-# The defaults pass the raw voltage through unchanged. Adjust them once
-# the sensor has been calibrated against a known filled/empty vessel.
+# The defaults pass the reading through unchanged. They only need to be
+# touched if a divider or amplifier sits between sensor and AI4 input.
 CAPACITANCE_VALUE_PER_VOLT = 1.0
 CAPACITANCE_VALUE_OFFSET = 0.0
 
-# Observed behaviour of the sensor: roughly 25 while water is present and
-# roughly 0 once the vessel has run empty.
+# Observed behaviour of the sensor: roughly 25 V while water is present
+# and roughly 0 V once the vessel has run empty.
 CAPACITANCE_FULL_VALUE = 25.0
 
-# Above this value the vessel is reported as FILLED, below the empty
+# Above this voltage the vessel is reported as FILLED, below the empty
 # threshold as EMPTY, and in between as DRAINING.
 CAPACITANCE_FILLED_VALUE = 12.5
 
@@ -110,7 +110,7 @@ DEFAULT_FLOW_SETPOINT_ML_MIN = 100.0
 # =============================================================================
 
 # Draining always runs from "full" towards "empty", so the only relevant
-# condition is capacitance <= threshold.
+# condition is capacitance <= threshold. In volts, like the sensor value.
 CAPACITANCE_EMPTY_THRESHOLD = 2.0
 
 # Number of consecutive samples below the threshold before the process is

@@ -94,9 +94,10 @@ METRIC_CONFIG: dict[str, MetricConfig] = {
     "capacitance": MetricConfig(
         key="capacitance",
         label="Capacitance",
-        unit="",
+        unit="V",
         y_minimum=0.0,
-        # Roughly 25 when filled, roughly 0 when empty. Not a percentage.
+        # Roughly 25 V when filled, roughly 0 V when empty.
+        # A voltage, not a percentage — the axis stays in volts.
         y_maximum=CAPACITANCE_FULL_VALUE * 1.2,
         decimals=2,
     ),

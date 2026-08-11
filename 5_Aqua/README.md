@@ -47,17 +47,18 @@ value.
 
 ## Sensor semantics
 
-The capacitance sensor is analog but behaves almost binary:
+The capacitance sensor is read as a voltage — volts are its unit
+throughout — but it behaves almost binary:
 
 ```text
-FILLED  ~ 25
+FILLED  ~ 25 V
    |  draining
    v
-EMPTY   ~ 0
+EMPTY   ~  0 V
 ```
 
-Accordingly the GUI reports a value plus a state (`FILLED`, `DRAINING`,
-`EMPTY`, `UNKNOWN`) and there is only one stop condition:
+Accordingly the GUI reports a value in volts plus a state (`FILLED`,
+`DRAINING`, `EMPTY`, `UNKNOWN`) and there is only one stop condition:
 
 ```text
 capacitance <= empty threshold
@@ -83,7 +84,7 @@ rule:
 | Metric         | Unit   | Y axis                     |
 | -------------- | ------ | -------------------------- |
 | Flow           | ml/min | 0 to 1.15 x observed max   |
-| Capacitance    | —      | 0 to 30 (fixed)            |
+| Capacitance    | V      | 0 to 30 (fixed)            |
 | Humidity       | %      | 0 to 100 (fixed)           |
 | Valve position | %      | 0 to 100 (fixed)           |
 | Drained volume | ml     | 0 to 1.15 x observed max   |
@@ -162,9 +163,12 @@ observed with:
 
 Still open:
 
-- `CAPACITANCE_VALUE_PER_VOLT` / `CAPACITANCE_VALUE_OFFSET` pass the raw
-  voltage through unchanged. Calibrate them against a known filled and a
-  known empty vessel so that "filled" really reads about 25.
+- `CAPACITANCE_EMPTY_THRESHOLD` (2.0 V) and `CAPACITANCE_FILLED_VALUE`
+  (12.5 V) are first estimates from the observed 25 V / 0 V behaviour.
+  Confirm them against a real drain run.
+- `CAPACITANCE_VALUE_PER_VOLT` / `CAPACITANCE_VALUE_OFFSET` pass the
+  reading through unchanged, which is correct as long as the sensor is
+  wired straight to the AI4 input.
 - `HUMIDITY_VOLTAGE_AT_0_PERCENT` / `HUMIDITY_VOLTAGE_AT_100_PERCENT`
   assume a 0–10 V sensor. Confirm against the sensor data sheet.
 - `CRITICAL_HUMIDITY_PERCENT` stays disabled until the humidity sensor

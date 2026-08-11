@@ -19,7 +19,8 @@ class EmptyDetectionSettings:
 
     Draining always runs from full towards empty, so the only relevant
     condition is ``capacitance <= empty_threshold``. There is no
-    "at or above" direction to choose.
+    "at or above" direction to choose. All thresholds are in volts, the
+    unit of the capacitance sensor.
     """
 
     empty_threshold: float = 2.0
@@ -130,5 +131,5 @@ class EmptyDetector:
             f"Capacitance {self._state.value} "
             f"({self._below_threshold_count}/"
             f"{self.settings.consecutive_samples} samples at or "
-            f"below {self.settings.empty_threshold:g})"
+            f"below {self.settings.empty_threshold:g} V)"
         )
